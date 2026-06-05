@@ -976,6 +976,245 @@ function App() {
     printWindow.document.close();
   };
 
+  const printInvoicePDF = (sale) => {
+    const printWindow = window.open('', '_blank');
+    const invoiceNo = `INV-${String(sale.id).padStart(6, '0')}`;
+    const dateStr = sale.sale_date || new Date().toISOString().slice(0, 10);
+    const shopName = sale.shop_name || 'AS Store';
+    
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Invoice - ${invoiceNo}</title>
+          <style>
+            body {
+              font-family: 'Inter', system-ui, -apple-system, sans-serif;
+              color: #1e293b;
+              margin: 0;
+              padding: 40px;
+              line-height: 1.5;
+            }
+            .invoice-box {
+              max-width: 800px;
+              margin: auto;
+              background: #fff;
+            }
+            .header {
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-start;
+              border-bottom: 2px solid #f1f5f9;
+              padding-bottom: 24px;
+              margin-bottom: 30px;
+            }
+            .brand h1 {
+              margin: 0;
+              font-size: 28px;
+              font-weight: 800;
+              letter-spacing: -0.5px;
+              color: #0d9488;
+            }
+            .brand p {
+              margin: 4px 0 0;
+              font-size: 13px;
+              color: #64748b;
+            }
+            .inv-details {
+              text-align: right;
+            }
+            .inv-details h2 {
+              margin: 0;
+              font-size: 20px;
+              font-weight: 800;
+              color: #0f172a;
+            }
+            .inv-details p {
+              margin: 4px 0 0;
+              font-size: 13px;
+              color: #64748b;
+            }
+            .meta-grid {
+              display: grid;
+              grid-template-columns: 1fr 1fr;
+              gap: 40px;
+              margin-bottom: 40px;
+            }
+            .meta-section h3 {
+              margin: 0 0 10px;
+              font-size: 11px;
+              text-transform: uppercase;
+              letter-spacing: 1px;
+              color: #94a3b8;
+              font-weight: 800;
+            }
+            .meta-section p {
+              margin: 0 0 6px;
+              font-size: 14px;
+              color: #334155;
+            }
+            .meta-section strong {
+              color: #0f172a;
+              font-weight: 700;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 30px;
+            }
+            th {
+              background: #f8fafc;
+              color: #475569;
+              font-weight: 700;
+              text-transform: uppercase;
+              font-size: 11px;
+              letter-spacing: 0.5px;
+              padding: 12px 16px;
+              border-bottom: 2px solid #e2e8f0;
+              text-align: left;
+            }
+            td {
+              padding: 16px;
+              border-bottom: 1px solid #f1f5f9;
+              font-size: 14px;
+              color: #334155;
+            }
+            .text-right {
+              text-align: right;
+            }
+            .summary-box {
+              width: 280px;
+              margin-left: auto;
+              margin-top: 20px;
+              padding-top: 20px;
+            }
+            .summary-row {
+              display: flex;
+              justify-content: space-between;
+              padding: 8px 0;
+              font-size: 14px;
+              color: #64748b;
+            }
+            .summary-row.total {
+              border-top: 2px solid #f1f5f9;
+              margin-top: 8px;
+              padding-top: 12px;
+              font-size: 18px;
+              font-weight: 800;
+              color: #0f172a;
+            }
+            .summary-row.paid {
+              color: #16a34a;
+              font-weight: 700;
+            }
+            .summary-row.due {
+              color: #dc2626;
+              font-weight: 700;
+            }
+            .footer {
+              margin-top: 60px;
+              border-top: 1px solid #f1f5f9;
+              padding-top: 24px;
+              text-align: center;
+              font-size: 13px;
+              color: #94a3b8;
+            }
+            @media print {
+              body {
+                padding: 0;
+              }
+              .invoice-box {
+                max-width: 100%;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="invoice-box">
+            <div class="header">
+              <div class="brand">
+                <h1>${shopName}</h1>
+                <p>Premium Mobile & Display Solutions</p>
+              </div>
+              <div class="inv-details">
+                <h2>INVOICE</h2>
+                <p><strong>Invoice No:</strong> ${invoiceNo}</p>
+                <p><strong>Date:</strong> ${dateStr}</p>
+              </div>
+            </div>
+            
+            <div class="meta-grid">
+              <div class="meta-section">
+                <h3>Billed To</h3>
+                <p><strong>${sale.customer_name || 'Walk-in Customer'}</strong></p>
+                <p>${sale.mobile || ''}</p>
+                <p>${sale.address || 'No Address Provided'}</p>
+              </div>
+              <div class="meta-section" style="text-align: right;">
+                <h3>Store Details</h3>
+                <p><strong>${shopName}</strong></p>
+                <p>${sale.shop_area || ''}</p>
+              </div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Item / Description</th>
+                  <th class="text-right" style="width: 100px;">Qty</th>
+                  <th class="text-right" style="width: 150px;">Unit Price</th>
+                  <th class="text-right" style="width: 150px;">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <strong>${sale.product_name || 'Display Replacement'}</strong>
+                    <br/>
+                    <small style="color: #64748b; font-size: 12px;">Official Display replacement panel</small>
+                  </td>
+                  <td class="text-right">${sale.quantity || 1} pcs</td>
+                  <td class="text-right">₹${Number(Number(sale.total_amount) / Number(sale.quantity || 1)).toLocaleString('en-IN')}</td>
+                  <td class="text-right">₹${Number(sale.total_amount).toLocaleString('en-IN')}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="summary-box">
+              <div class="summary-row">
+                <span>Subtotal</span>
+                <span>₹${Number(sale.total_amount).toLocaleString('en-IN')}</span>
+              </div>
+              <div class="summary-row paid">
+                <span>Amount Paid</span>
+                <span>₹${Number(sale.paid_amount || 0).toLocaleString('en-IN')}</span>
+              </div>
+              <div class="summary-row due">
+                <span>Outstanding Balance</span>
+                <span>₹${Number(sale.pending_amount || 0).toLocaleString('en-IN')}</span>
+              </div>
+              <div class="summary-row total">
+                <span>Total Bill</span>
+                <span>₹${Number(sale.total_amount).toLocaleString('en-IN')}</span>
+              </div>
+            </div>
+
+            <div class="footer">
+              <p>Thank you for choosing ${shopName}!</p>
+              <p style="font-size: 11px; margin-top: 8px; color: #cbd5e1;">This is a computer-generated document. No signature required.</p>
+            </div>
+          </div>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function() { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   const modelItems = (role === 'customer' ? data.catalog : data.products).filter((item) => {
     const query = modelSearch.trim().toLowerCase();
     if (!query) return true;
@@ -1568,7 +1807,7 @@ function App() {
                       <div className="actions">
                         <button className="soft" type="button" onClick={() => setExpandedPaymentId(expandedPaymentId === String(item.id) ? '' : String(item.id))}><ReceiptText size={17} /> Ledger</button>
                         <a className="soft" href={whatsappLink(item)} target="_blank" rel="noreferrer"><Send size={17} /> WhatsApp</a>
-                        <button className="soft" onClick={() => window.print()}><ReceiptText size={17} /> Invoice</button>
+                        <button className="soft" onClick={() => printInvoicePDF(item)}><ReceiptText size={17} /> Invoice</button>
                         <button className="primary" onClick={() => recordPayment(item)}><CreditCard size={17} /> Paid</button>
                       </div>
                       <div className="ledger-panel" aria-hidden={expandedPaymentId !== String(item.id)}>
