@@ -1066,7 +1066,9 @@ function App() {
                   onItemClick={role === 'superadmin' ? viewShopDetails : null}
                   render={(shop) => (
                     <>
-                      <Store size={21} />
+                      <div className="card-icon-wrapper">
+                        <Store size={18} />
+                      </div>
                       <h3>{shop.name}</h3>
                       <p>{shop.area}</p>
                       <div className="metrics"><span>{shop.stock} pcs</span><span>{currency(shop.pending)}</span></div>
@@ -1131,7 +1133,9 @@ function App() {
                 )}
                 <CardGrid items={data.products} render={(product) => (
                   <>
-                    <IndianRupee size={21} />
+                    <div className="card-icon-wrapper indigo">
+                      <IndianRupee size={18} />
+                    </div>
                     <h3>{product.name}</h3>
                     <p>{product.brand} · {product.category}</p>
                     <strong>{currency(product.official_price)}</strong>
@@ -1251,7 +1255,9 @@ function App() {
                   const customerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id)).slice(0, 3);
                   return (
                     <>
-                      <Contact size={21} />
+                      <div className="card-icon-wrapper">
+                        <Contact size={18} />
+                      </div>
                       <h3>{customer.name}</h3>
                       <p>{customer.mobile}</p>
                       <div className="metrics"><span>{customer.address || 'No address'}</span><span>{currency(customer.pending)}</span></div>
@@ -1325,7 +1331,9 @@ function App() {
                       key={request.id}
                     >
                       <div className="request-main">
-                        <Send size={20} />
+                        <div className="card-icon-wrapper cyan">
+                          <Send size={18} />
+                        </div>
                         <div>
                           <h3>{request.product_name || request.model_name}</h3>
                           <p>{request.shop_name} · {request.shop_area}</p>
@@ -1425,7 +1433,9 @@ function App() {
                 </div>
                 <CardGrid className="catalog-grid" items={visibleCatalog} render={(product) => (
                   <>
-                    <ShoppingBag size={22} />
+                    <div className="card-icon-wrapper cyan">
+                      <ShoppingBag size={18} />
+                    </div>
                     <h3>{product.name}</h3>
                     <p>{product.brand} · {product.category}</p>
                     <strong>{currency(product.official_price)}</strong>
