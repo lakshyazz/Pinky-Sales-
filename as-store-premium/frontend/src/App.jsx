@@ -76,6 +76,28 @@ const navByRole = {
   ],
 };
 
+const handleFormKeyDown = (e) => {
+  if (e.key === 'Enter') {
+    const target = e.target;
+    if (target.tagName === 'INPUT' || target.tagName === 'SELECT') {
+      const form = target.form;
+      if (!form) return;
+      const elements = Array.from(form.elements).filter(el => 
+        (el.tagName === 'INPUT' || el.tagName === 'SELECT' || (el.tagName === 'BUTTON' && el.type === 'submit')) &&
+        !el.disabled && el.type !== 'hidden'
+      );
+      const index = elements.indexOf(target);
+      if (index > -1 && index < elements.length - 1) {
+        const nextEl = elements[index + 1];
+        if (nextEl.tagName === 'INPUT' || nextEl.tagName === 'SELECT') {
+          e.preventDefault();
+          nextEl.focus();
+        }
+      }
+    }
+  }
+};
+
 const initialForms = {
   shop: { name: '', area: '', address: '', phone: '' },
   shopkeeper: { username: '', password: '', name: '', contact: '', shop_id: '' },
@@ -238,7 +260,7 @@ function Login({ onLogin }) {
           </div>
         </div>
 
-        <form onSubmit={submit} className="form-grid">
+        <form onSubmit={submit} className="form-grid" onKeyDown={handleFormKeyDown}>
           <label>
             Username
             <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
@@ -347,6 +369,8 @@ function App() {
     pending: [],
     reports: null,
   });
+  const [isEditingShop, setIsEditingShop] = useState(false);
+  const [editShopForm, setEditShopForm] = useState({ name: '', area: '', address: '', phone: '' });
 
   const token = session?.token || '';
   const role = session?.role || 'customer';
@@ -436,6 +460,8 @@ function App() {
     if (role !== 'superadmin') return;
     setDetailedShopId(shop.id);
     setDetailsTab('stock');
+    setIsEditingShop(false);
+    setEditShopForm({ name: shop.name || '', area: shop.area || '', address: shop.address || '', phone: shop.phone || '' });
     setDetailedShopData({ loading: true, stock: [], customers: [], sales: [], pending: [], reports: null });
     try {
       const [stock, customers, sales, pending, reports] = await Promise.all([
@@ -456,6 +482,47 @@ function App() {
     } catch (err) {
       showToast(err.message || 'Failed to load shop details.');
       setDetailedShopData((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  const handleSaveShopEdit = async (e) => {
+    if (e) e.preventDefault();
+    if (!editShopForm.name || !editShopForm.area) {
+      showToast('Name and area are required');
+      return;
+    }
+    try {
+      setSaving(true);
+      await authedFetch(`/shops/${detailedShopId}`, {
+        method: 'PUT',
+        body: JSON.stringify(editShopForm),
+      });
+      showToast('Shop details updated');
+      setIsEditingShop(false);
+      await loadCore();
+    } catch (err) {
+      showToast(err.message || 'Failed to update shop details');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDeleteShop = async () => {
+    if (!window.confirm('Are you sure you want to delete this shop? This will delete all associated stock, transactions, and customers.')) {
+      return;
+    }
+    try {
+      setSaving(true);
+      await authedFetch(`/shops/${detailedShopId}`, {
+        method: 'DELETE',
+      });
+      showToast('Shop deleted successfully');
+      setDetailedShopId(null);
+      await loadCore();
+    } catch (err) {
+      showToast(err.message || 'Failed to delete shop');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1405,7 +1472,7 @@ function App() {
                   <i />
                   <span>{data.shops.find((shop) => String(shop.id) === String(forms.transfer.to_shop_id))?.name || 'Destination branch'}</span>
                 </div>
-                <form className="drawer-form" onSubmit={(event) => { event.preventDefault(); submitTransfer(); }}>
+                <form className="drawer-form" onSubmit={(event) => { event.preventDefault(); submitTransfer(); }} onKeyDown={handleFormKeyDown}>
                   <Select label="From shop" value={forms.transfer.from_shop_id} onChange={(v) => setForms({ ...forms, transfer: { ...forms.transfer, from_shop_id: v } })} options={data.shops.map((s) => [s.id, s.name])} />
                   <Select label="To shop" value={forms.transfer.to_shop_id} onChange={(v) => setForms({ ...forms, transfer: { ...forms.transfer, to_shop_id: v } })} options={data.shops.map((s) => [s.id, s.name])} />
                   <Select label="Product" value={forms.transfer.product_id} onChange={(v) => setForms({ ...forms, transfer: { ...forms.transfer, product_id: v } })} options={data.products.map((p) => [p.id, p.name])} />
@@ -1442,18 +1509,72 @@ function App() {
                 aria-labelledby="details-title"
                 style={{ width: 'min(820px, 100%)', overflowY: 'auto' }}
               >
-                <div className="drawer-head flex items-center gap-4 pb-5 border-b border-slate-100 mb-6">
-                  <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center shadow-lg shadow-slate-900/10 shrink-0">
+                <div className="drawer-head flex items-start gap-4 pb-5 border-b border-slate-100 mb-6">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center shadow-lg shadow-slate-900/10 shrink-0 mt-1">
                     <Store className="w-6 h-6 text-teal" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-[10px] uppercase font-black text-brand-accent tracking-widest leading-none block">Shop Performance Analytics</span>
-                    <h2 id="details-title" className="text-2xl font-black tracking-tight text-slate-800 mt-1">{data.shops.find(s => String(s.id) === String(detailedShopId))?.name || 'Branch Progress'}</h2>
-                    <p className="text-slate-500 text-xs mt-1 truncate">
-                      📍 {data.shops.find(s => String(s.id) === String(detailedShopId))?.area} · {data.shops.find(s => String(s.id) === String(detailedShopId))?.address || 'No Address Listed'}
-                    </p>
+                    {isEditingShop ? (
+                      <form onSubmit={handleSaveShopEdit} className="space-y-3 mt-3" onKeyDown={handleFormKeyDown}>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="text-xs font-bold text-slate-500">
+                            Shop Name
+                            <input 
+                              className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                              value={editShopForm.name} 
+                              onChange={(e) => setEditShopForm({ ...editShopForm, name: e.target.value })} 
+                            />
+                          </label>
+                          <label className="text-xs font-bold text-slate-500">
+                            Area
+                            <input 
+                              className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                              value={editShopForm.area} 
+                              onChange={(e) => setEditShopForm({ ...editShopForm, area: e.target.value })} 
+                            />
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <label className="text-xs font-bold text-slate-500">
+                            Address
+                            <input 
+                              className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                              value={editShopForm.address} 
+                              onChange={(e) => setEditShopForm({ ...editShopForm, address: e.target.value })} 
+                            />
+                          </label>
+                          <label className="text-xs font-bold text-slate-500">
+                            Phone
+                            <input 
+                              className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                              value={editShopForm.phone} 
+                              onChange={(e) => setEditShopForm({ ...editShopForm, phone: e.target.value })} 
+                            />
+                          </label>
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <button type="submit" className="primary !px-4 !py-1.5 !min-h-[32px] text-xs font-bold">Save</button>
+                          <button type="button" className="soft !px-4 !py-1.5 !min-h-[32px] text-xs font-bold" onClick={() => setIsEditingShop(false)}>Cancel</button>
+                        </div>
+                      </form>
+                    ) : (
+                      <>
+                        <h2 id="details-title" className="text-2xl font-black tracking-tight text-slate-800 mt-1">
+                          {data.shops.find(s => String(s.id) === String(detailedShopId))?.name || 'Branch Progress'}
+                        </h2>
+                        <p className="text-slate-500 text-xs mt-1 truncate">
+                          📍 {data.shops.find(s => String(s.id) === String(detailedShopId))?.area} · {data.shops.find(s => String(s.id) === String(detailedShopId))?.address || 'No Address Listed'}
+                          {data.shops.find(s => String(s.id) === String(detailedShopId))?.phone && ` · 📞 ${data.shops.find(s => String(s.id) === String(detailedShopId))?.phone}`}
+                        </p>
+                        <div className="flex gap-2 mt-3">
+                          <button type="button" className="soft !px-3 !py-1.5 !min-h-[30px] text-xs font-bold" onClick={() => setIsEditingShop(true)}>Edit Shop</button>
+                          <button type="button" className="soft !px-3 !py-1.5 !min-h-[30px] text-xs font-bold !text-rose-600 hover:!bg-rose-50 hover:!border-rose-200" onClick={handleDeleteShop}>Delete Shop</button>
+                        </div>
+                      </>
+                    )}
                   </div>
-                  <button type="button" className="icon shrink-0 hover:bg-slate-50" onClick={() => setDetailedShopId(null)}><X size={18} /></button>
+                  <button type="button" className="icon shrink-0 hover:bg-slate-50 mt-1" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDetailedShopId(null); }}><X size={18} /></button>
                 </div>
 
                 <div className="flex flex-wrap gap-1.5 border-b border-slate-100 pb-4 mb-6">
@@ -1690,7 +1811,7 @@ function App() {
 
 function FormPanel({ title, action, onSubmit, children, disabled = false }) {
   return (
-    <form className="panel form-panel" onSubmit={(event) => { event.preventDefault(); onSubmit(); }}>
+    <form className="panel form-panel" onSubmit={(event) => { event.preventDefault(); onSubmit(); }} onKeyDown={handleFormKeyDown}>
       <h2>{title}</h2>
       <div className="form-grid compact">{children}</div>
       <button className="primary" type="submit" disabled={disabled}><Plus size={17} /> {action}</button>

@@ -222,6 +222,13 @@ app.put('/api/shops/:id', authenticateToken, requireSuperAdmin, async (req, res)
   res.json({ success: true });
 });
 
+app.delete('/api/shops/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  await runQuery('DELETE FROM users WHERE shop_id = ?', [req.params.id]);
+  await runQuery('DELETE FROM shops WHERE id = ?', [req.params.id]);
+  await audit(req, 'Deleted shop', 'shop', req.params.id, `Shop ID ${req.params.id}`);
+  res.json({ success: true });
+});
+
 app.get('/api/shopkeepers', authenticateToken, requireSuperAdmin, async (req, res) => {
   const rows = await allRecords(`
     SELECT u.id, u.username, u.name, u.contact, u.shop_id, s.name AS shop_name
