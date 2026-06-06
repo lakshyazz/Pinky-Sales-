@@ -1530,21 +1530,25 @@ function App() {
                     </div>
                   )}
                 </FormPanel>
-                <motion.div 
-                  variants={listVariants}
-                  initial="hidden"
-                  whileInView="visible"
-                  viewport={{ once: true, margin: "-10px" }}
-                  className="table panel"
-                >
-                  {data.shopkeepers.map((user) => (
-                    <motion.div variants={itemVariants} className="row" key={user.id}>
-                      <span><b>{user.name}</b><small>@{user.username}</small></span>
-                      <span>{user.contact}</span>
-                      <strong>{user.shop_name}</strong>
-                    </motion.div>
-                  ))}
-                </motion.div>
+                {data.shopkeepers.length ? (
+                  <motion.div 
+                    variants={listVariants}
+                    initial="hidden"
+                    whileInView="visible"
+                    viewport={{ once: true, margin: "-10px" }}
+                    className="table panel"
+                  >
+                    {data.shopkeepers.map((user) => (
+                      <motion.div variants={itemVariants} className="row" key={user.id}>
+                        <span><b>{user.name}</b><small>@{user.username}</small></span>
+                        <span>{user.contact}</span>
+                        <strong>{user.shop_name}</strong>
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                ) : (
+                  <Empty title="No shopkeepers registered yet" />
+                )}
               </section>
             </PageWrapper>
           )}
@@ -1651,21 +1655,25 @@ function App() {
                     <button className="primary" type="button" onClick={() => setTransferDrawerOpen(true)}><Send size={17} /> Transfer stock</button>
                   </section>
                 )}
-                <motion.div 
-                  variants={listVariants}
-                  initial="hidden"
-                  whileInView="visible"
-                  viewport={{ once: true, margin: "-10px" }}
-                  className="table panel"
-                >
-                  {data.stock.map((item) => (
-                    <motion.div variants={itemVariants} className="row" key={item.id}>
-                      <span><b>{item.name}</b><small>{item.brand}</small></span>
-                      <span>{currency(item.official_price)}</span>
-                      <strong className={`status-badge ${item.quantity <= 3 ? 'low-stock' : 'stock-ok'}`}>{item.quantity} pcs</strong>
-                    </motion.div>
-                  ))}
-                </motion.div>
+                {data.stock.length ? (
+                  <motion.div 
+                    variants={listVariants}
+                    initial="hidden"
+                    whileInView="visible"
+                    viewport={{ once: true, margin: "-10px" }}
+                    className="table panel"
+                  >
+                    {data.stock.map((item) => (
+                      <motion.div variants={itemVariants} className="row" key={item.id}>
+                        <span><b>{item.name}</b><small>{item.brand}</small></span>
+                        <span>{currency(item.official_price)}</span>
+                        <strong className={`status-badge ${item.quantity <= 3 ? 'low-stock' : 'stock-ok'}`}>{item.quantity} pcs</strong>
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                ) : (
+                  <Empty title="No stock records found" />
+                )}
               </section>
             </PageWrapper>
           )}
@@ -1805,22 +1813,26 @@ function App() {
                   <Input label="Paid amount" type="number" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Input label="Due date" type="date" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                 </FormPanel>
-                <motion.div 
-                  variants={listVariants}
-                  initial="hidden"
-                  whileInView="visible"
-                  viewport={{ once: true, margin: "-10px" }}
-                  className="table panel"
-                >
-                  {data.sales.map((sale) => (
-                    <motion.div variants={itemVariants} className="row" key={sale.id}>
-                      <span><b>{sale.customer_name}</b><small>{sale.product_name}</small></span>
-                      <span>{currency(sale.total_amount)}</span>
-                      <span>{currency(sale.paid_amount)}</span>
-                      <strong className={`status-badge ${sale.pending_amount > 0 ? 'pending' : 'paid'}`}>{currency(sale.pending_amount)}</strong>
-                    </motion.div>
-                  ))}
-                </motion.div>
+                {data.sales.length ? (
+                  <motion.div 
+                    variants={listVariants}
+                    initial="hidden"
+                    whileInView="visible"
+                    viewport={{ once: true, margin: "-10px" }}
+                    className="table panel"
+                  >
+                    {data.sales.map((sale) => (
+                      <motion.div variants={itemVariants} className="row" key={sale.id}>
+                        <span><b>{sale.customer_name}</b><small>{sale.product_name}</small></span>
+                        <span>{currency(sale.total_amount)}</span>
+                        <span>{currency(sale.paid_amount)}</span>
+                        <strong className={`status-badge ${sale.pending_amount > 0 ? 'pending' : 'paid'}`}>{currency(sale.pending_amount)}</strong>
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                ) : (
+                  <Empty title="No sales records found" />
+                )}
               </section>
             </PageWrapper>
           )}
