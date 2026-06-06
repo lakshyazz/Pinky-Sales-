@@ -1,5 +1,5 @@
-import React, { useDeferredValue, useEffect, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useDeferredValue, useEffect, useState, useRef } from 'react';
+import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import {
   AlertTriangle,
   BarChart3,
@@ -136,6 +136,74 @@ const itemVariants = {
     transition: { type: 'spring', stiffness: 280, damping: 22 }
   }
 };
+
+function Magnetic({ children, className = 'inline-block' }) {
+  const ref = useRef(null);
+  const [isHovered, setIsHovered] = useState(false);
+
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+
+  const springConfig = { damping: 15, stiffness: 150, mass: 0.6 };
+  const springX = useSpring(x, springConfig);
+  const springY = useSpring(y, springConfig);
+
+  useEffect(() => {
+    const isMobile = !window.matchMedia('(hover: hover)').matches;
+    if (isMobile) return;
+
+    const handleMouseMove = (e) => {
+      if (!ref.current) return;
+      const { clientX, clientY } = e;
+      const { left, top, width, height } = ref.current.getBoundingClientRect();
+      const centerX = left + width / 2;
+      const centerY = top + height / 2;
+
+      const distanceX = clientX - centerX;
+      const distanceY = clientY - centerY;
+
+      const radius = 60;
+      const distance = Math.hypot(distanceX, distanceY);
+
+      if (distance < radius) {
+        setIsHovered(true);
+        const pull = 0.35;
+        x.set(distanceX * pull);
+        y.set(distanceY * pull);
+      } else {
+        setIsHovered(false);
+        x.set(0);
+        y.set(0);
+      }
+    };
+
+    const handleMouseLeave = () => {
+      setIsHovered(false);
+      x.set(0);
+      y.set(0);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    ref.current?.addEventListener('mouseleave', handleMouseLeave);
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      ref.current?.removeEventListener('mouseleave', handleMouseLeave);
+    };
+  }, [x, y]);
+
+  return (
+    <motion.div
+      ref={ref}
+      style={{ x: springX, y: springY }}
+      animate={{ scale: isHovered ? 1.04 : 1 }}
+      transition={{ type: 'spring', stiffness: 200, damping: 15 }}
+      className={className}
+    >
+      {children}
+    </motion.div>
+  );
+}
 
 function Sparkline({ data = [], tone = 'teal' }) {
   const values = data.length > 1 ? data.map((item) => Number(item || 0)) : [0, 0, 0, 0, 0, 0, 0];
@@ -394,6 +462,20 @@ function App() {
     const message = error?.message || fallback;
     setLoadError(message);
     showToast(message);
+  };
+
+  const clearAuditLogs = async () => {
+    if (!window.confirm('Are you sure you want to permanently clear all audit history?')) return;
+    try {
+      setSaving(true);
+      await authedFetch('/reports/audit', { method: 'DELETE' });
+      showToast('Audit history cleared');
+      await loadTab(active, shopId);
+    } catch (error) {
+      showToast(error.message || 'Failed to clear audit history');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const loadCore = async () => {
@@ -1272,7 +1354,9 @@ function App() {
             );
           })}
         </nav>
-        <button type="button" className="logout" onClick={(event) => { event.preventDefault(); logout(); }}><LogOut size={18} /> Sign out</button>
+        <Magnetic className="w-full mt-auto">
+          <button type="button" className="logout" onClick={(event) => { event.preventDefault(); logout(); }}><LogOut size={18} /> Sign out</button>
+        </Magnetic>
       </aside>
 
       <main className="workspace">
@@ -1288,10 +1372,12 @@ function App() {
               <ShieldCheck size={16} />
               <span>{session.name}</span>
             </div>
-            <button type="button" className="topbar-signout" onClick={(event) => { event.preventDefault(); logout(); }}>
-              <LogOut size={16} />
-              <span>Sign out</span>
-            </button>
+            <Magnetic>
+              <button type="button" className="topbar-signout" onClick={(event) => { event.preventDefault(); logout(); }}>
+                <LogOut size={16} />
+                <span>Sign out</span>
+              </button>
+            </Magnetic>
             {role === 'superadmin' && !['shops', 'shopkeepers', 'catalog'].includes(active) && (
               <select value={selectedShop} onChange={(e) => setSelectedShop(e.target.value)}>
                 <option value="">All shops</option>
@@ -1348,7 +1434,8 @@ function App() {
                     <motion.div 
                       variants={listVariants}
                       initial="hidden"
-                      animate="visible"
+                      whileInView="visible"
+                      viewport={{ once: true, margin: "-10px" }}
                       className="table"
                     >
                       {data.dashboard.shopWise.map((shop) => (
@@ -1366,7 +1453,8 @@ function App() {
                     <motion.div 
                       variants={listVariants}
                       initial="hidden"
-                      animate="visible"
+                      whileInView="visible"
+                      viewport={{ once: true, margin: "-10px" }}
                       className="table"
                     >
                       {data.dashboard.lowStock.length ? data.dashboard.lowStock.map((item) => (
@@ -1445,7 +1533,8 @@ function App() {
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
-                  animate="visible"
+                  whileInView="visible"
+                  viewport={{ once: true, margin: "-10px" }}
                   className="table panel"
                 >
                   {data.shopkeepers.map((user) => (
@@ -1509,10 +1598,17 @@ function App() {
                 <div className="card-grid models-grid">
                   {modelItems.map((product, index) => (
                     <motion.article 
-                      initial={{ opacity: 0, y: 12 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      whileHover={{ y: -3, scale: 1.01 }}
-                      transition={{ duration: 0.2, delay: Math.min(index * 0.03, 0.3) }}
+                      initial={{ opacity: 0, y: 15 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: "-30px" }}
+                      whileHover={{ y: -4, scale: 1.012 }}
+                      whileTap={{ scale: 0.995 }}
+                      transition={{ 
+                        type: 'spring', 
+                        stiffness: 260, 
+                        damping: 24, 
+                        delay: Math.min(index * 0.02, 0.2) 
+                      }}
                       className="panel card model-card" 
                       key={product.id}
                     >
@@ -1558,7 +1654,8 @@ function App() {
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
-                  animate="visible"
+                  whileInView="visible"
+                  viewport={{ once: true, margin: "-10px" }}
                   className="table panel"
                 >
                   {data.stock.map((item) => (
@@ -1711,7 +1808,8 @@ function App() {
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
-                  animate="visible"
+                  whileInView="visible"
+                  viewport={{ once: true, margin: "-10px" }}
                   className="table panel"
                 >
                   {data.sales.map((sale) => (
@@ -1741,7 +1839,8 @@ function App() {
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
-                  animate="visible"
+                  whileInView="visible"
+                  viewport={{ once: true, margin: "-10px" }}
                   className="request-list"
                 >
                   {data.requests.map((request) => (
@@ -1788,7 +1887,8 @@ function App() {
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
-                  animate="visible"
+                  whileInView="visible"
+                  viewport={{ once: true, margin: "-10px" }}
                   className="payment-list"
                 >
                   {data.pending.map((item) => (
@@ -2004,7 +2104,7 @@ function App() {
                       </>
                     )}
                   </div>
-                  <button type="button" className="icon shrink-0 hover:bg-slate-50 mt-1" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setDetailedShopId(null); }}><X size={18} /></button>
+                  <button type="button" className="icon shrink-0 hover:bg-slate-50 mt-1" onClick={() => setDetailedShopId(null)}><X size={18} /></button>
                 </div>
 
                 <div className="flex flex-wrap gap-1.5 border-b border-slate-100 pb-4 mb-6">
@@ -2055,18 +2155,18 @@ function App() {
                     {detailsTab === 'stock' && (
                       <div className="space-y-6">
                         {/* Metrics Grid */}
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Total Units</span>
-                            <strong className="text-2xl font-black text-slate-800 mt-1 block">{getStockMetrics().totalQty} pcs</strong>
+                            <strong className="text-lg sm:text-2xl font-black text-slate-800 mt-1 block truncate">{getStockMetrics().totalQty} pcs</strong>
                           </div>
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Inventory Value</span>
-                            <strong className="text-2xl font-black text-slate-800 mt-1 block">{currency(getStockMetrics().totalValue)}</strong>
+                            <strong className="text-lg sm:text-2xl font-black text-slate-800 mt-1 block truncate">{currency(getStockMetrics().totalValue)}</strong>
                           </div>
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Low Stock Alert</span>
-                            <strong className={`text-2xl font-black mt-1 block ${getStockMetrics().lowStockCount > 0 ? 'text-brand-rose' : 'text-slate-800'}`}>
+                            <strong className={`text-lg sm:text-2xl font-black mt-1 block truncate ${getStockMetrics().lowStockCount > 0 ? 'text-brand-rose' : 'text-slate-800'}`}>
                               {getStockMetrics().lowStockCount} models
                             </strong>
                           </div>
@@ -2109,20 +2209,20 @@ function App() {
                     {detailsTab === 'customers' && (
                       <div className="space-y-6">
                         {/* Metrics Grid */}
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Total Customers</span>
-                            <strong className="text-2xl font-black text-slate-800 mt-1 block">{getCustomerMetrics().totalCust} active</strong>
+                            <strong className="text-lg sm:text-2xl font-black text-slate-800 mt-1 block truncate">{getCustomerMetrics().totalCust} active</strong>
                           </div>
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Unpaid Accounts</span>
-                            <strong className={`text-2xl font-black mt-1 block ${getCustomerMetrics().pendingCust > 0 ? 'text-brand-rose' : 'text-slate-800'}`}>
+                            <strong className={`text-lg sm:text-2xl font-black mt-1 block truncate ${getCustomerMetrics().pendingCust > 0 ? 'text-brand-rose' : 'text-slate-800'}`}>
                               {getCustomerMetrics().pendingCust} branches
                             </strong>
                           </div>
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Outstanding Balance</span>
-                            <strong className="text-2xl font-black text-brand-rose mt-1 block">{currency(getCustomerMetrics().totalPending)}</strong>
+                            <strong className="text-lg sm:text-2xl font-black text-brand-rose mt-1 block truncate">{currency(getCustomerMetrics().totalPending)}</strong>
                           </div>
                         </div>
 
@@ -2153,22 +2253,22 @@ function App() {
                     {detailsTab === 'sales' && (
                       <div className="space-y-6">
                         {/* Metrics Grid */}
-                        <div className="grid grid-cols-4 gap-3">
-                          <div className="p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <div className="p-2.5 sm:p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[9px] uppercase font-black tracking-wider text-slate-400 block">Total Invoices</span>
-                            <strong className="text-xl font-black text-slate-800 mt-1 block">{getSalesMetrics().totalOrders} sales</strong>
+                            <strong className="text-sm sm:text-xl font-black text-slate-800 mt-1 block truncate">{getSalesMetrics().totalOrders} sales</strong>
                           </div>
-                          <div className="p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
+                          <div className="p-2.5 sm:p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[9px] uppercase font-black tracking-wider text-slate-400 block">Total Revenue</span>
-                            <strong className="text-xl font-black text-slate-800 mt-1 block">{currency(getSalesMetrics().totalRev)}</strong>
+                            <strong className="text-sm sm:text-xl font-black text-slate-800 mt-1 block truncate">{currency(getSalesMetrics().totalRev)}</strong>
                           </div>
-                          <div className="p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
+                          <div className="p-2.5 sm:p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[9px] uppercase font-black tracking-wider text-slate-400 block">Total Collected</span>
-                            <strong className="text-xl font-black text-brand-emerald mt-1 block">{currency(getSalesMetrics().totalPaid)}</strong>
+                            <strong className="text-sm sm:text-xl font-black text-brand-emerald mt-1 block truncate">{currency(getSalesMetrics().totalPaid)}</strong>
                           </div>
-                          <div className="p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
+                          <div className="p-2.5 sm:p-3 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[9px] uppercase font-black tracking-wider text-slate-400 block">To Collect</span>
-                            <strong className="text-xl font-black text-brand-rose mt-1 block">{currency(getSalesMetrics().totalPending)}</strong>
+                            <strong className="text-sm sm:text-xl font-black text-brand-rose mt-1 block truncate">{currency(getSalesMetrics().totalPending)}</strong>
                           </div>
                         </div>
 
@@ -2199,14 +2299,14 @@ function App() {
                     {detailsTab === 'reports' && (
                       <div className="space-y-6">
                         {/* Metrics Grid */}
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Audit Entries</span>
-                            <strong className="text-2xl font-black text-slate-800 mt-1 block">{getAuditMetrics().totalLogs} events</strong>
+                            <strong className="text-lg sm:text-2xl font-black text-slate-800 mt-1 block truncate">{getAuditMetrics().totalLogs} events</strong>
                           </div>
                           <div className="p-4 bg-slate-50 border border-slate-200/50 rounded-2xl">
                             <span className="text-[10px] uppercase font-black tracking-wider text-slate-400 block">Operator Count</span>
-                            <strong className="text-2xl font-black text-slate-800 mt-1 block">{getAuditMetrics().uniqueActors} active</strong>
+                            <strong className="text-lg sm:text-2xl font-black text-slate-800 mt-1 block truncate">{getAuditMetrics().uniqueActors} active</strong>
                           </div>
                         </div>
 
@@ -2270,10 +2370,17 @@ function CardGrid({ items, render, className = '', onItemClick }) {
     <div className={`card-grid ${className}`}>
       {items.map((item, index) => (
         <motion.article 
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          whileHover={{ y: -3, scale: 1.008 }}
-          transition={{ duration: 0.25, delay: Math.min(index * 0.03, 0.3) }}
+          initial={{ opacity: 0, y: 15 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, margin: "-30px" }}
+          whileHover={{ y: -4, scale: 1.012 }}
+          whileTap={{ scale: 0.995 }}
+          transition={{ 
+            type: 'spring', 
+            stiffness: 260, 
+            damping: 24, 
+            delay: Math.min(index * 0.02, 0.2) 
+          }}
           className={`panel card ${onItemClick ? 'cursor-pointer hover:border-brand-accent/40' : ''}`}
           key={item.id}
           onClick={() => onItemClick && onItemClick(item)}

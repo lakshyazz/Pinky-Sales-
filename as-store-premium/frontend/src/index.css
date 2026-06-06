@@ -90,14 +90,21 @@ button {
 button,
 a,
 input,
-select,
-.panel {
+select {
   transition:
     border-color 0.2s var(--ease-premium),
     box-shadow 0.2s var(--ease-premium),
     background-color 0.2s var(--ease-premium),
     color 0.2s var(--ease-premium),
     transform 0.2s var(--ease-premium);
+}
+
+.panel {
+  transition:
+    border-color 0.2s var(--ease-premium),
+    box-shadow 0.2s var(--ease-premium),
+    background-color 0.2s var(--ease-premium),
+    color 0.2s var(--ease-premium);
 }
 
 button:active,
@@ -722,22 +729,23 @@ button:disabled {
   overflow: hidden;
   animation: fade-up 0.2s var(--ease-premium) both;
   transition:
-    opacity 0.2s var(--ease-premium),
-    transform 0.3s var(--ease-premium),
     border-color 0.15s var(--ease-premium),
     box-shadow 0.15s var(--ease-premium);
 }
 
 .catalog-grid .card {
   transition:
-    opacity 0.2s var(--ease-premium),
-    transform 0.3s var(--ease-premium),
     border-color 0.15s var(--ease-premium),
     box-shadow 0.15s var(--ease-premium);
 }
 
-.card:hover {
-  transform: translateY(-3px) scale(1.005);
+.card,
+.stat,
+.sidebar,
+.transfer-drawer,
+.drawer-mask {
+  will-change: transform, opacity;
+  backface-visibility: hidden;
 }
 
 .card::before {
@@ -952,7 +960,10 @@ button:disabled {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 12px;
-  transition: all 0.3s var(--ease-premium);
+  transition:
+    border-color 0.15s var(--ease-premium),
+    box-shadow 0.15s var(--ease-premium),
+    background-color 0.15s var(--ease-premium);
 }
 
 .request-card:hover {
@@ -1112,7 +1123,6 @@ button:disabled {
   padding: 0;
   background: rgba(15, 23, 42, 0.34);
   backdrop-filter: blur(2px);
-  animation: fade-up 0.2s var(--ease-premium) both;
 }
 
 .transfer-drawer {
@@ -1130,20 +1140,8 @@ button:disabled {
   box-shadow:
     -24px 0 70px rgba(15, 23, 42, 0.16),
     inset 1px 0 0 rgba(255, 255, 255, 0.8);
-  animation: drawer-in 0.3s var(--ease-premium) both;
 }
 
-@keyframes drawer-in {
-  from {
-    transform: translateX(28px);
-    opacity: 0;
-  }
-
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
 
 .drawer-head {
   display: flex;
@@ -1619,6 +1617,40 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
+  .topbar,
+  .sidebar,
+  .panel,
+  .login-panel,
+  .transfer-drawer,
+  .drawer-mask {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  .topbar {
+    background: rgba(255, 255, 255, 0.98) !important;
+  }
+
+  .sidebar {
+    background: linear-gradient(180deg, #0b0f19 0%, #0f172a 100%) !important;
+  }
+
+  .panel {
+    background: #ffffff !important;
+  }
+
+  .login-panel {
+    background: #ffffff !important;
+  }
+
+  .transfer-drawer {
+    background: #ffffff !important;
+  }
+
+  .drawer-mask {
+    background: rgba(15, 23, 42, 0.5) !important;
+  }
+
   .mobile-only {
     display: grid;
   }
@@ -1673,7 +1705,64 @@ button:disabled {
   }
 
   .row {
-    grid-template-columns: 1fr;
+    grid-template-columns: 1fr !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: flex-start !important;
+    gap: 8px !important;
+    padding: 16px !important;
+    background: var(--panel-solid) !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 14px !important;
+    margin-bottom: 12px !important;
+    min-height: auto !important;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03) !important;
+  }
+
+  .table .row:hover {
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    background: var(--panel-solid) !important;
+  }
+
+  .table {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+  }
+
+  .row.font-bold {
+    display: none !important;
+  }
+
+  .row > span {
+    width: 100% !important;
+    text-align: left !important;
+  }
+
+  .row > span:first-child b {
+    font-size: 15px !important;
+    display: block !important;
+  }
+
+  .row > span:first-child small {
+    font-size: 12px !important;
+    color: var(--muted) !important;
+  }
+
+  .row > span:not(:first-child) {
+    font-size: 13px !important;
+    color: var(--ink-soft) !important;
+    display: inline-flex !important;
+    align-items: center !important;
+  }
+
+  .row > strong {
+    font-size: 14px !important;
+    align-self: flex-start !important;
   }
 
   .skeleton-row {
