@@ -96,8 +96,8 @@ const compactModelName = (value) => {
   const firstModel = name.split('/')[0].trim();
   return firstModel.length <= 60 ? firstModel : `${firstModel.slice(0, 57)}...`;
 };
-const productName = (item) => compactModelName(item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name);
-const fullModelList = (item) => item?.full_model_list || item?.name || item?.product_name || '';
+const productName = (item) => compactModelName(item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name || item?.model_name);
+const fullModelList = (item) => item?.full_model_list || item?.name || item?.product_name || item?.model_name || '';
 const priceLabel = (value) => Number(value) > 0 ? currency(value) : 'Price not set';
 const groupPendingPayments = (rows = []) => {
   if (rows.every((row) => Array.isArray(row.items))) return rows;
@@ -1172,7 +1172,7 @@ function App() {
     const printWindow = window.open('', '_blank');
     const rows = stockData.map(item => `
       <tr>
-        <td><strong>${item.name}</strong><br><small style="color: #64748b;">${item.brand} · ${item.category || 'Mobile'}</small></td>
+        <td><strong>${productName(item)}</strong><br><small style="color: #64748b;">${item.brand} · ${item.category || 'Mobile'}</small></td>
         <td style="text-align: right;">₹${Number(item.official_price).toLocaleString('en-IN')}</td>
         <td style="text-align: center; font-weight: bold; ${item.quantity <= 3 ? 'color: #dc2626;' : ''}">${item.quantity} pcs</td>
         <td style="text-align: right; font-weight: bold;">₹${(Number(item.quantity) * Number(item.official_price)).toLocaleString('en-IN')}</td>
@@ -1435,7 +1435,7 @@ function App() {
               <tbody>
                 <tr>
                   <td>
-                    <strong>${sale.product_name || 'Display Replacement'}</strong>
+                    <strong>${productName(sale)}</strong>
                     <br/>
                     <small style="color: #64748b; font-size: 12px;">Official Display replacement panel</small>
                   </td>
@@ -1589,7 +1589,7 @@ function App() {
               <thead><tr><th class="number">#</th><th>Item &amp; Description</th><th class="qty">Qty</th><th class="money">Rate</th><th class="money">Amount</th></tr></thead>
               <tbody><tr>
                 <td class="number">1</td>
-                <td class="item">${safe(sale.product_name || 'Product')}${productDetails ? `<small>${productDetails}</small>` : ''}</td>
+                <td class="item">${safe(productName(sale))}${productDetails ? `<small>${productDetails}</small>` : ''}</td>
                 <td class="qty">${quantity}<br/>PCS</td>
                 <td class="money">${formatAmount(unitPrice)}</td>
                 <td class="money">${formatAmount(total)}</td>
@@ -1825,7 +1825,7 @@ function App() {
                               <AlertTriangle size={17} />
                             </div>
                             <div className="alert-item-details">
-                              <b className="clamp-title" title={item.product_name}>{item.product_short_name || item.product_name}</b>
+                              <b className="clamp-title" title={item.product_name}>{productName(item)}</b>
                               <small>{item.shop_name} · {item.brand || 'No Brand'}</small>
                             </div>
                           </div>
@@ -2312,7 +2312,7 @@ function App() {
                           <Send size={18} />
                         </div>
                         <div>
-                          <h3 title={request.product_name || request.model_name}>{request.product_short_name || request.product_name || request.model_name}</h3>
+                          <h3 title={request.product_name || request.model_name}>{productName(request)}</h3>
                           <p>{request.shop_name} · {request.shop_area}</p>
                           {request.message && <small>{request.message}</small>}
                         </div>
