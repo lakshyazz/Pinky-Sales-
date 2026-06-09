@@ -159,8 +159,8 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
         (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} sale_date = ?) AS today_sales,
         (SELECT COALESCE(SUM(pending_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} pending_amount > 0) AS pending_payments
     `, shopId ? [shopId, shopId, shopId, today(), shopId] : [today()]),
-    allRecords(`
-      SELECT st.id, sh.name AS shop_name, p.name AS product_name, p.short_name AS product_short_name, p.brand, st.quantity, sh.low_stock_threshold
+        allRecords(`
+      SELECT st.id, sh.name AS shop_name, p.id AS product_id, p.name AS product_name, p.short_name AS product_short_name, p.brand, st.quantity, sh.low_stock_threshold
       FROM stock st
       JOIN shops sh ON sh.id = st.shop_id
       JOIN products p ON p.id = st.product_id
@@ -301,20 +301,33 @@ app.post('/api/products', authenticateToken, requireSuperAdmin, async (req, res)
     name, short_name, full_model_list, brand, category, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours,
   } = req.body;
-  const compatibilityModels = String(full_model_list || name || '').trim();
+    const compatibilityModels = String(full_model_list || name || '').trim();
   const displayName = String(short_name || compatibilityModels).trim();
-  if (!compatibilityModels || !displayName || !brand || !category || !official_price) {
-    return res.status(400).json({ error: 'Short name, compatible models, brand, category and official price are required.' });
+  
+  const parsePrice = (val, fallback = null) => {
+    if (val === '' || val === null || val === undefined) return fallback;
+    const num = Number(val);
+    return isNaN(num) ? fallback : num;
+  };
+  
+  const officialPriceNum = Number(official_price);
+  if (!compatibilityModels || !displayName || !brand || !category || isNaN(officialPriceNum) || officialPriceNum <= 0) {
+    return res.status(400).json({ error: 'Short name, compatible models, brand, category and a valid official price are required.' });
   }
+
+  const purchasePriceNum = parsePrice(purchase_price, null);
+  const salePriceNum = parsePrice(sale_price, officialPriceNum);
+  const wholesalePriceNum = parsePrice(wholesale_price, null);
+  const retailPriceNum = parsePrice(retail_price, officialPriceNum);
+
   const result = await runQuery(
     `INSERT INTO products (
       name, short_name, full_model_list, brand, category, official_price,
       purchase_price, sale_price, wholesale_price, retail_price, description, colours
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      compatibilityModels, displayName, compatibilityModels, brand, category, official_price,
-      purchase_price || null, sale_price || official_price, wholesale_price || null,
-      retail_price || official_price, description || '', normalizeColours(colours),
+      compatibilityModels, displayName, compatibilityModels, brand, category, officialPriceNum,
+      purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', normalizeColours(colours),
     ]
   );
   const shops = await allRecords('SELECT id FROM shops');
@@ -332,11 +345,25 @@ app.put('/api/products/:id', authenticateToken, requireSuperAdmin, async (req, r
     name, short_name, full_model_list, brand, category, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
   } = req.body;
-  const compatibilityModels = String(full_model_list || name || '').trim();
+    const compatibilityModels = String(full_model_list || name || '').trim();
   const displayName = String(short_name || compatibilityModels).trim();
-  if (!compatibilityModels || !displayName || !brand || !category || !official_price) {
-    return res.status(400).json({ error: 'Short name, compatible models, brand, category and official price are required.' });
+
+  const parsePrice = (val, fallback = null) => {
+    if (val === '' || val === null || val === undefined) return fallback;
+    const num = Number(val);
+    return isNaN(num) ? fallback : num;
+  };
+  
+  const officialPriceNum = Number(official_price);
+  if (!compatibilityModels || !displayName || !brand || !category || isNaN(officialPriceNum) || officialPriceNum <= 0) {
+    return res.status(400).json({ error: 'Short name, compatible models, brand, category and a valid official price are required.' });
   }
+
+  const purchasePriceNum = parsePrice(purchase_price, null);
+  const salePriceNum = parsePrice(sale_price, officialPriceNum);
+  const wholesalePriceNum = parsePrice(wholesale_price, null);
+  const retailPriceNum = parsePrice(retail_price, officialPriceNum);
+
   await runQuery(
     `UPDATE products SET
       name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, official_price = ?,
@@ -344,9 +371,8 @@ app.put('/api/products/:id', authenticateToken, requireSuperAdmin, async (req, r
       description = ?, colours = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
     [
-      compatibilityModels, displayName, compatibilityModels, brand, category, official_price,
-      purchase_price || null, sale_price || official_price, wholesale_price || null,
-      retail_price || official_price, description || '', normalizeColours(colours), is_active, req.params.id,
+      compatibilityModels, displayName, compatibilityModels, brand, category, officialPriceNum,
+      purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', normalizeColours(colours), is_active, req.params.id,
     ]
   );
   await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${official_price}`);
@@ -403,10 +429,14 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
 });
 
 app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res) => {
-  try {
+    try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
     const { name, mobile, address, notes } = req.body;
     if (!name || !mobile) return res.status(400).json({ error: 'Customer name and mobile are required.' });
+    const existing = await getRecord('SELECT * FROM customers WHERE shop_id = ? AND mobile = ?', [shopId, mobile]);
+    if (existing) {
+      return res.status(200).json(existing);
+    }
     const result = await runQuery(
       'INSERT INTO customers (shop_id, name, mobile, address, notes) VALUES (?, ?, ?, ?, ?)',
       [shopId, name, mobile, address || '', notes || '']
@@ -536,9 +566,9 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     WHERE sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ?' : ''}
     ORDER BY sa.due_date ASC, sa.id DESC
   `, shopId ? [shopId] : []);
-  const grouped = new Map();
+    const grouped = new Map();
   rows.forEach((sale) => {
-    const key = `${sale.shop_id}:${sale.customer_id}`;
+    const key = String(sale.mobile || sale.customer_id);
     const current = grouped.get(key) || {
       id: `customer-${key}`,
       customer_id: sale.customer_id,
@@ -572,14 +602,25 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
   const paymentAmount = money(amount);
   if (paymentAmount <= 0) return res.status(400).json({ error: 'Payment amount must be greater than zero.' });
 
-  if (customer_id) {
+    if (customer_id) {
     try {
-      const scopedShopId = requireScopedShopId(req, shop_id);
+      const userShopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : (shop_id ? Number(shop_id) : null);
       const result = await runTransaction(async (tx) => {
-        const sales = await tx.allRecords(
-          'SELECT * FROM sales WHERE customer_id = ? AND shop_id = ? AND pending_amount > 0 ORDER BY due_date ASC, id ASC',
-          [customer_id, scopedShopId]
-        );
+        let query = `
+          SELECT s.*
+          FROM sales s
+          JOIN customers c ON c.id = s.customer_id
+          WHERE c.mobile = (SELECT mobile FROM customers WHERE id = ?)
+            AND s.pending_amount > 0
+        `;
+        const params = [customer_id];
+        if (userShopId) {
+          query += ' AND s.shop_id = ?';
+          params.push(userShopId);
+        }
+        query += ' ORDER BY s.due_date ASC, s.id ASC';
+
+        const sales = await tx.allRecords(query, params);
         const totalPending = sales.reduce((sum, sale) => sum + money(sale.pending_amount), 0);
         if (!sales.length) {
           const error = new Error('No pending sales found for this customer.');

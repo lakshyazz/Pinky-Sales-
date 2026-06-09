@@ -103,7 +103,7 @@ const groupPendingPayments = (rows = []) => {
   if (rows.every((row) => Array.isArray(row.items))) return rows;
   const groups = new Map();
   rows.forEach((sale) => {
-    const key = `${sale.shop_id}:${sale.customer_id}`;
+    const key = String(sale.mobile || sale.customer_id);
     const group = groups.get(key) || {
       id: `customer-${key}`,
       customer_id: sale.customer_id,
@@ -488,6 +488,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const [selectedProductDetails, setSelectedProductDetails] = useState(null);
   const [data, setData] = useState({
     dashboard: null,
     shops: [],
@@ -1827,6 +1828,10 @@ function App() {
                             <div className="alert-item-details">
                               <b className="clamp-title" title={item.product_name}>{productName(item)}</b>
                               <small>{item.shop_name} · {item.brand || 'No Brand'}</small>
+                              <button className="soft text-[10px] !min-h-[22px] !py-0.5 !px-2 mt-1 self-start font-bold" type="button" onClick={() => {
+                                const prod = data.products.find(p => Number(p.id) === Number(item.product_id));
+                                setSelectedProductDetails(prod || { ...item, id: item.product_id, name: item.product_name });
+                              }}>View Details</button>
                             </div>
                           </div>
                           <span className={`alert-badge ${item.quantity <= 1 ? 'critical' : 'warning'}`}>
@@ -1982,7 +1987,9 @@ function App() {
                       <span className="status-badge stock-ok">{product.category}</span>
                     </div>
                     <h3 className="product-title" title={fullModelList(product)}>{productName(product)}</h3>
-                    <p className="product-description" title={fullModelList(product)}>{fullModelList(product)}</p>
+                    <p className="product-description" title={product.description || 'No description provided.'}>
+                      {product.description || 'No description provided.'}
+                    </p>
                     <p className="text-xs text-slate-500">{product.brand}{product.colours?.length ? ` · ${product.colours.join(', ')}` : ''}</p>
                     <div className="price-stack">
                       <span><small>Official</small><strong>{priceLabel(product.official_price)}</strong></span>
@@ -1991,7 +1998,10 @@ function App() {
                       {role === 'superadmin' && <span><small>Purchase</small><strong>{priceLabel(product.purchase_price)}</strong></span>}
                       {role === 'superadmin' && <span><small>Wholesale</small><strong>{priceLabel(product.wholesale_price)}</strong></span>}
                     </div>
-                    {role === 'superadmin' && <button className="soft product-edit-button" type="button" onClick={() => editProduct(product)}>Edit details & prices</button>}
+                    <div className="flex gap-2 w-full mt-3">
+                      <button className="soft flex-1 !min-h-[38px] text-xs font-bold" type="button" onClick={() => setSelectedProductDetails(product)}>View Details</button>
+                      {role === 'superadmin' && <button className="soft flex-1 !min-h-[38px] text-xs font-bold" type="button" onClick={() => editProduct(product)}>Edit</button>}
+                    </div>
                   </>
                 )} />
               </section>
@@ -2043,11 +2053,12 @@ function App() {
                       <h3 className="product-title" title={fullModelList(product)}>{productName(product)}</h3>
                       <p className="text-xs text-slate-500 mb-3">{product.brand}</p>
                       
-                      <p className="product-description" title={fullModelList(product)}>{fullModelList(product)}</p>
-                      <p className="model-description">{product.description || 'Official model entry in the catalog.'}</p>
+                      <p className="product-description" title={product.description || 'Official model entry in the catalog.'}>
+                        {product.description || 'Official model entry in the catalog.'}
+                      </p>
                       {product.colours?.length ? <div className="colour-list">{product.colours.map((colour) => <span key={colour}>{colour}</span>)}</div> : null}
                       
-                      <div className="w-full pt-3 border-t border-slate-100 flex flex-col gap-2">
+                      <div className="w-full pt-3 border-t border-slate-100 flex flex-col gap-2 mt-auto">
                         <div className="flex justify-between items-center">
                           <span className="text-[10px] text-slate-400 uppercase font-black">Official Price</span>
                           <strong className="text-teal font-extrabold text-base">{priceLabel(product.official_price)}</strong>
@@ -2058,6 +2069,7 @@ function App() {
                             {product.available_shops || 'Currently unavailable'}
                           </div>
                         )}
+                        <button className="soft w-full !min-h-[38px] text-xs font-bold mt-2" type="button" onClick={() => setSelectedProductDetails(product)}>View compatibility details</button>
                       </div>
                     </motion.article>
                   ))}
@@ -2376,7 +2388,20 @@ function App() {
                         <div className="ledger-items">
                           {(item.items || [item]).map((sale) => (
                             <div className="ledger-item" key={sale.id}>
-                              <span><b title={sale.product_name}>{productName(sale)}</b><small>{sale.quantity || 1} pcs · Due {sale.due_date || 'not set'}</small></span>
+                              <span>
+                                <b 
+                                  title="Click to view details" 
+                                  className="cursor-pointer hover:text-teal transition-colors"
+                                  style={{ cursor: 'pointer' }}
+                                  onClick={() => {
+                                    const prod = data.products.find(p => Number(p.id) === Number(sale.product_id));
+                                    setSelectedProductDetails(prod || { ...sale, id: sale.product_id, name: sale.product_name });
+                                  }}
+                                >
+                                  {productName(sale)}
+                                </b>
+                                <small>{sale.quantity || 1} pcs · Due {sale.due_date || 'not set'}</small>
+                              </span>
                               <strong>{currency(sale.pending_amount)}</strong>
                               <button className="soft" type="button" onClick={() => printTaxInvoicePDF(sale)}><ReceiptText size={16} /> Invoice</button>
                             </div>
@@ -2446,9 +2471,12 @@ function App() {
                     </div>
                     <h3 className="product-title" title={fullModelList(product)}>{productName(product)}</h3>
                     <p>{product.brand} · {product.category}</p>
-                    <p className="product-description" title={fullModelList(product)}>{fullModelList(product)}</p>
+                    <p className="product-description" title={product.description || 'No description provided.'}>
+                      {product.description || 'No description provided.'}
+                    </p>
                     <strong>{priceLabel(product.retail_price || product.sale_price || product.official_price)}</strong>
-                    <small>{product.available_shops || 'Currently unavailable'}</small>
+                    <small className="mb-2">{product.available_shops || 'Currently unavailable'}</small>
+                    <button className="soft w-full !min-h-[38px] text-xs font-bold mt-2" type="button" onClick={() => setSelectedProductDetails(product)}>View details</button>
                   </>
                 )} />
               </section>
@@ -2822,6 +2850,112 @@ function App() {
                     )}
                   </motion.div>
                 )}
+              </motion.aside>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {selectedProductDetails && (
+            <div className="drawer-layer" role="presentation">
+              <motion.button 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="drawer-mask" 
+                type="button" 
+                aria-label="Close details drawer" 
+                onClick={() => setSelectedProductDetails(null)} 
+              />
+              <motion.aside 
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="transfer-drawer" 
+                role="dialog" 
+                aria-modal="true" 
+                aria-labelledby="product-details-title"
+                style={{ width: 'min(500px, 100%)', overflowY: 'auto' }}
+              >
+                <div className="drawer-head flex items-start gap-4 pb-5 border-b border-slate-100 mb-6">
+                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 text-cyan-600 flex items-center justify-center shrink-0">
+                    <Smartphone className="w-6 h-6" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[10px] uppercase font-black text-cyan-600 tracking-widest leading-none block mb-1">
+                      {selectedProductDetails.brand || 'No Brand'} · {selectedProductDetails.category}
+                    </span>
+                    <h2 id="product-details-title" className="text-xl font-extrabold text-slate-800 truncate">
+                      {productName(selectedProductDetails)}
+                    </h2>
+                  </div>
+                  <button type="button" className="icon" onClick={() => setSelectedProductDetails(null)}>
+                    <X size={20} />
+                  </button>
+                </div>
+                
+                <div className="space-y-6">
+                  <div>
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Compatible Models</span>
+                    <div className="p-4 bg-slate-50 border border-slate-100 rounded-xl text-slate-700 text-sm font-semibold whitespace-pre-wrap leading-relaxed">
+                      {fullModelList(selectedProductDetails)}
+                    </div>
+                  </div>
+
+                  {selectedProductDetails.description && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Description</span>
+                      <p className="text-slate-600 text-sm leading-relaxed whitespace-pre-wrap font-medium">
+                        {selectedProductDetails.description}
+                      </p>
+                    </div>
+                  )}
+
+                  {selectedProductDetails.colours?.length > 0 && (
+                    <div>
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Available Colours</span>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedProductDetails.colours.map((colour) => (
+                          <span key={colour} className="px-3 py-1 bg-slate-100 text-slate-700 border border-slate-200 rounded-full text-xs font-extrabold shadow-sm">
+                            {colour}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Pricing details</span>
+                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 divide-y divide-slate-100">
+                      <div className="flex justify-between items-center py-2.5">
+                        <span className="text-sm font-bold text-slate-500">Official Price</span>
+                        <strong className="text-slate-800 font-extrabold text-base">{priceLabel(selectedProductDetails.official_price)}</strong>
+                      </div>
+                      <div className="flex justify-between items-center py-2.5">
+                        <span className="text-sm font-bold text-slate-500">Sale Price</span>
+                        <strong className="text-slate-800 font-extrabold text-base">{priceLabel(selectedProductDetails.sale_price)}</strong>
+                      </div>
+                      <div className="flex justify-between items-center py-2.5">
+                        <span className="text-sm font-bold text-slate-500">Retail Price</span>
+                        <strong className="text-slate-800 font-extrabold text-base">{priceLabel(selectedProductDetails.retail_price)}</strong>
+                      </div>
+                      {role === 'superadmin' && selectedProductDetails.purchase_price !== undefined && selectedProductDetails.purchase_price !== null && (
+                        <div className="flex justify-between items-center py-2.5">
+                          <span className="text-sm font-bold text-slate-500">Purchase Price</span>
+                          <strong className="text-rose-600 font-extrabold text-base">{priceLabel(selectedProductDetails.purchase_price)}</strong>
+                        </div>
+                      )}
+                      {role === 'superadmin' && selectedProductDetails.wholesale_price !== undefined && selectedProductDetails.wholesale_price !== null && (
+                        <div className="flex justify-between items-center py-2.5">
+                          <span className="text-sm font-bold text-slate-500">Wholesale Price</span>
+                          <strong className="text-indigo-600 font-extrabold text-base">{priceLabel(selectedProductDetails.wholesale_price)}</strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </motion.aside>
             </div>
           )}
