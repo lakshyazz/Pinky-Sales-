@@ -31,6 +31,14 @@ const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
   return date.toISOString().slice(0, 10);
 });
 const money = (value) => Number(value || 0);
+const productDisplayName = (row) => row.short_name || row.name;
+const normalizeColours = (value) => {
+  const colours = Array.isArray(value) ? value : String(value || '').split(',');
+  return [...new Set(colours.map((colour) => String(colour).trim()).filter(Boolean))];
+};
+const productColumnsForRole = (role) => role === 'superadmin'
+  ? 'id, name, short_name, full_model_list, brand, category, official_price, purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active, updated_at'
+  : 'id, name, short_name, full_model_list, brand, category, official_price, sale_price, retail_price, description, colours, is_active, updated_at';
 const createToken = (user) => jwt.sign({
   id: user.id,
   username: user.username,
@@ -152,7 +160,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
         (SELECT COALESCE(SUM(pending_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} pending_amount > 0) AS pending_payments
     `, shopId ? [shopId, shopId, shopId, today(), shopId] : [today()]),
     allRecords(`
-      SELECT st.id, sh.name AS shop_name, p.name AS product_name, p.brand, st.quantity, sh.low_stock_threshold
+      SELECT st.id, sh.name AS shop_name, p.name AS product_name, p.short_name AS product_short_name, p.brand, st.quantity, sh.low_stock_threshold
       FROM stock st
       JOIN shops sh ON sh.id = st.shop_id
       JOIN products p ON p.id = st.product_id
@@ -170,7 +178,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       ORDER BY sales_today DESC, pending DESC
     `, shopId ? [today(), shopId] : [today()]),
     allRecords(`
-      SELECT p.name, p.brand, COALESCE(SUM(sa.quantity), 0) AS sold
+      SELECT p.name, p.short_name, p.brand, COALESCE(SUM(sa.quantity), 0) AS sold
       FROM products p
       LEFT JOIN sales sa ON sa.product_id = p.id ${shopId ? 'AND sa.shop_id = ?' : ''}
       GROUP BY p.id
@@ -284,31 +292,62 @@ app.post('/api/shopkeepers', authenticateToken, requireSuperAdmin, async (req, r
 });
 
 app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
-  const rows = await allRecords('SELECT * FROM products WHERE is_active = 1 AND name IS NOT NULL ORDER BY brand, name');
+  const rows = await allRecords(`SELECT ${productColumnsForRole(req.user.role)} FROM products WHERE is_active = 1 AND name IS NOT NULL ORDER BY brand, COALESCE(short_name, name)`);
   res.json(rows);
 });
 
 app.post('/api/products', authenticateToken, requireSuperAdmin, async (req, res) => {
-  const { name, brand, category, official_price, description } = req.body;
-  if (!name || !brand || !category || !official_price) return res.status(400).json({ error: 'Product details and price are required.' });
+  const {
+    name, short_name, full_model_list, brand, category, official_price,
+    purchase_price, sale_price, wholesale_price, retail_price, description, colours,
+  } = req.body;
+  const compatibilityModels = String(full_model_list || name || '').trim();
+  const displayName = String(short_name || compatibilityModels).trim();
+  if (!compatibilityModels || !displayName || !brand || !category || !official_price) {
+    return res.status(400).json({ error: 'Short name, compatible models, brand, category and official price are required.' });
+  }
   const result = await runQuery(
-    'INSERT INTO products (name, brand, category, official_price, description) VALUES (?, ?, ?, ?, ?)',
-    [name, brand, category, official_price, description || '']
+    `INSERT INTO products (
+      name, short_name, full_model_list, brand, category, official_price,
+      purchase_price, sale_price, wholesale_price, retail_price, description, colours
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      compatibilityModels, displayName, compatibilityModels, brand, category, official_price,
+      purchase_price || null, sale_price || official_price, wholesale_price || null,
+      retail_price || official_price, description || '', normalizeColours(colours),
+    ]
   );
   const shops = await allRecords('SELECT id FROM shops');
   for (const shop of shops) {
     await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, 0) ON CONFLICT(shop_id, product_id) DO NOTHING', [shop.id, result.id]);
   }
-  await audit(req, 'Created product and official price', 'product', result.id, `${name} at ${official_price}`);
-  res.status(201).json({ id: result.id, name, brand, category, official_price, description });
+  await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${official_price}`);
+  res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
 });
 
 app.put('/api/products/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [req.params.id]);
-  const { name, brand, category, official_price, description, is_active = 1 } = req.body;
+  if (!oldProduct) return res.status(404).json({ error: 'Product not found.' });
+  const {
+    name, short_name, full_model_list, brand, category, official_price,
+    purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
+  } = req.body;
+  const compatibilityModels = String(full_model_list || name || '').trim();
+  const displayName = String(short_name || compatibilityModels).trim();
+  if (!compatibilityModels || !displayName || !brand || !category || !official_price) {
+    return res.status(400).json({ error: 'Short name, compatible models, brand, category and official price are required.' });
+  }
   await runQuery(
-    'UPDATE products SET name = ?, brand = ?, category = ?, official_price = ?, description = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-    [name, brand, category, official_price, description || '', is_active, req.params.id]
+    `UPDATE products SET
+      name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, official_price = ?,
+      purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
+      description = ?, colours = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?`,
+    [
+      compatibilityModels, displayName, compatibilityModels, brand, category, official_price,
+      purchase_price || null, sale_price || official_price, wholesale_price || null,
+      retail_price || official_price, description || '', normalizeColours(colours), is_active, req.params.id,
+    ]
   );
   await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${official_price}`);
   res.json({ success: true });
@@ -318,12 +357,13 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, scopeShopId(req));
     const rows = await allRecords(`
-      SELECT st.id, st.shop_id, sh.name AS shop_name, p.id AS product_id, p.name, p.brand, p.category, p.official_price, st.quantity
+      SELECT st.id, st.shop_id, sh.name AS shop_name, p.id AS product_id, p.name, p.short_name, p.full_model_list,
+        p.brand, p.category, p.official_price, p.sale_price, p.retail_price, p.description, p.colours, st.quantity
       FROM stock st
       JOIN products p ON p.id = st.product_id
       JOIN shops sh ON sh.id = st.shop_id
       WHERE st.shop_id = ?
-      ORDER BY p.brand, p.name
+      ORDER BY p.brand, COALESCE(p.short_name, p.name)
     `, [shopId]);
     res.json(rows);
   } catch (error) {
@@ -381,7 +421,7 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
 app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = assertShopAccess(req, scopeShopId(req));
   const rows = await allRecords(`
-    SELECT sa.*, p.name AS product_name, p.brand, p.category, p.description,
+    SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
     FROM sales sa
@@ -434,7 +474,7 @@ app.get('/api/stock-requests', authenticateToken, requireShopStaff, async (req, 
   try {
     const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
     const rows = await allRecords(`
-      SELECT sr.*, sh.name AS shop_name, sh.area AS shop_area, p.name AS product_name, p.brand, p.official_price,
+      SELECT sr.*, sh.name AS shop_name, sh.area AS shop_area, p.name AS product_name, p.short_name AS product_short_name, p.brand, p.official_price,
         u.name AS created_by_name,
         COALESCE(st.quantity, 0) AS shop_quantity,
         COALESCE((SELECT SUM(quantity) FROM stock WHERE product_id = sr.product_id), 0) AS total_available
@@ -486,7 +526,7 @@ app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (
 app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
   const rows = await allRecords(`
-    SELECT sa.*, p.name AS product_name, p.brand, p.category, p.description,
+    SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
     FROM sales sa
@@ -496,23 +536,92 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     WHERE sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ?' : ''}
     ORDER BY sa.due_date ASC, sa.id DESC
   `, shopId ? [shopId] : []);
-  res.json(rows);
+  const grouped = new Map();
+  rows.forEach((sale) => {
+    const key = `${sale.shop_id}:${sale.customer_id}`;
+    const current = grouped.get(key) || {
+      id: `customer-${key}`,
+      customer_id: sale.customer_id,
+      shop_id: sale.shop_id,
+      customer_name: sale.customer_name,
+      mobile: sale.mobile,
+      address: sale.address,
+      shop_name: sale.shop_name,
+      shop_area: sale.shop_area,
+      shop_address: sale.shop_address,
+      shop_phone: sale.shop_phone,
+      total_amount: 0,
+      paid_amount: 0,
+      pending_amount: 0,
+      due_date: sale.due_date,
+      items: [],
+    };
+    current.total_amount += money(sale.total_amount);
+    current.paid_amount += money(sale.paid_amount);
+    current.pending_amount += money(sale.pending_amount);
+    if (sale.due_date && (!current.due_date || sale.due_date < current.due_date)) current.due_date = sale.due_date;
+    current.items.push({ ...sale, display_name: productDisplayName({ name: sale.product_name, short_name: sale.product_short_name }) });
+    grouped.set(key, current);
+  });
+  res.json([...grouped.values()]);
 });
 
 app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) => {
-  const { sale_id, amount, note } = req.body;
-  if (!sale_id || !amount) return res.status(400).json({ error: 'Sale and amount are required.' });
+  const { sale_id, customer_id, shop_id, amount, note } = req.body;
+  if ((!sale_id && !customer_id) || !amount) return res.status(400).json({ error: 'Customer or sale and amount are required.' });
+  const paymentAmount = money(amount);
+  if (paymentAmount <= 0) return res.status(400).json({ error: 'Payment amount must be greater than zero.' });
+
+  if (customer_id) {
+    try {
+      const scopedShopId = requireScopedShopId(req, shop_id);
+      const result = await runTransaction(async (tx) => {
+        const sales = await tx.allRecords(
+          'SELECT * FROM sales WHERE customer_id = ? AND shop_id = ? AND pending_amount > 0 ORDER BY due_date ASC, id ASC',
+          [customer_id, scopedShopId]
+        );
+        const totalPending = sales.reduce((sum, sale) => sum + money(sale.pending_amount), 0);
+        if (!sales.length) {
+          const error = new Error('No pending sales found for this customer.');
+          error.status = 404;
+          throw error;
+        }
+        if (paymentAmount > totalPending) {
+          const error = new Error(`Payment cannot exceed the pending balance of ${totalPending}.`);
+          error.status = 400;
+          throw error;
+        }
+        let remainingPayment = paymentAmount;
+        for (const sale of sales) {
+          if (remainingPayment <= 0) break;
+          const allocated = Math.min(remainingPayment, money(sale.pending_amount));
+          const newPaid = money(sale.paid_amount) + allocated;
+          const newPending = Math.max(money(sale.total_amount) - newPaid, 0);
+          await tx.runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [sale.id, allocated, today(), note || 'Customer balance payment']);
+          await tx.runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale.id]);
+          remainingPayment -= allocated;
+        }
+        return { pending_amount: totalPending - paymentAmount };
+      });
+      await audit(req, 'Recorded customer payment', 'customer', customer_id, `Paid ${paymentAmount}, remaining ${result.pending_amount}`);
+      return res.json({ success: true, pending_amount: result.pending_amount });
+    } catch (error) {
+      return res.status(error.status || 500).json({ error: error.message || 'Unable to record customer payment.' });
+    }
+  }
+
   const sale = await getRecord('SELECT * FROM sales WHERE id = ?', [sale_id]);
   if (!sale) return res.status(404).json({ error: 'Sale not found.' });
   if (isShopStaffRole(req.user.role) && Number(req.user.shop_id) !== Number(sale.shop_id)) {
     return res.status(403).json({ error: 'This sale belongs to another branch.' });
   }
 
-  const newPaid = money(sale.paid_amount) + money(amount);
+  if (paymentAmount > money(sale.pending_amount)) return res.status(400).json({ error: 'Payment cannot exceed the pending balance.' });
+  const newPaid = money(sale.paid_amount) + paymentAmount;
   const newPending = Math.max(money(sale.total_amount) - newPaid, 0);
-  await runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [sale_id, amount, today(), note || 'Payment update']);
+  await runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [sale_id, paymentAmount, today(), note || 'Payment update']);
   await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale_id]);
-  await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${amount}, remaining ${newPending}`);
+  await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${paymentAmount}, remaining ${newPending}`);
   res.json({ success: true, pending_amount: newPending });
 });
 
@@ -552,7 +661,8 @@ app.post('/api/stock-transfer', authenticateToken, requireSuperAdmin, async (req
 app.get('/api/catalog', async (req, res) => {
   const { shopId, search = '', brand = '', min = 0, max = 9999999 } = req.query;
   const rows = await allRecords(`
-    SELECT p.id, p.name, p.brand, p.category, p.official_price, p.description,
+    SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category,
+      p.official_price, p.sale_price, p.retail_price, p.description, p.colours,
       STRING_AGG(CASE WHEN st.quantity > 0 THEN sh.name || ' (' || st.quantity || ')' END, ', ') AS available_shops,
       COALESCE(SUM(st.quantity), 0) AS total_available
     FROM products p
@@ -560,13 +670,15 @@ app.get('/api/catalog', async (req, res) => {
     LEFT JOIN shops sh ON sh.id = st.shop_id
     WHERE p.is_active = 1
       AND p.name IS NOT NULL
-      AND (p.name ILIKE ? OR p.brand ILIKE ?)
+      AND (p.name ILIKE ? OR COALESCE(p.short_name, '') ILIKE ? OR COALESCE(p.full_model_list, '') ILIKE ? OR p.brand ILIKE ?)
       AND (? = '' OR p.brand = ?)
       AND p.official_price BETWEEN ? AND ?
     GROUP BY p.id
-    ORDER BY p.brand, p.name
+    ORDER BY p.brand, COALESCE(p.short_name, p.name)
   `, [
     ...(shopId ? [shopId] : []),
+    `%${search}%`,
+    `%${search}%`,
     `%${search}%`,
     `%${search}%`,
     brand,
@@ -588,7 +700,7 @@ app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) =>
     ORDER BY pending DESC
   `, shopId ? [shopId] : []);
   const availability = await allRecords(`
-    SELECT p.name, p.brand, sh.name AS shop_name, st.quantity
+    SELECT p.name, p.short_name, p.full_model_list, p.brand, sh.name AS shop_name, st.quantity
     FROM stock st
     JOIN products p ON p.id = st.product_id
     JOIN shops sh ON sh.id = st.shop_id

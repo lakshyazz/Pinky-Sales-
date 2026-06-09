@@ -731,6 +731,7 @@ button:disabled {
   transition:
     border-color 0.15s var(--ease-premium),
     box-shadow 0.15s var(--ease-premium);
+  min-width: 0;
 }
 
 .catalog-grid .card {
@@ -769,6 +770,97 @@ button:disabled {
   font-size: 18px;
   line-height: 1.3;
   font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.product-title,
+.clamp-title {
+  min-width: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.product-description {
+  min-width: 0;
+  min-height: 40px;
+  margin: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.model-description {
+  min-height: 42px;
+  margin: 0 0 8px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.price-stack {
+  width: 100%;
+  display: grid;
+  gap: 7px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.price-stack span {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.price-stack small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.price-stack strong {
+  color: var(--teal-dark);
+  font-size: 13px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.product-edit-button {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.colour-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.colour-list span {
+  padding: 4px 8px;
+  color: var(--ink-soft);
+  background: rgba(241, 245, 249, 0.88);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .card p,
@@ -927,6 +1019,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
 
 .alert-item-icon {
@@ -947,12 +1040,14 @@ button:disabled {
 .alert-item-details {
   display: grid;
   gap: 2px;
+  min-width: 0;
 }
 
 .alert-item-details b {
   font-size: 15px;
   font-weight: 700;
   color: var(--ink);
+  overflow-wrap: anywhere;
 }
 
 .alert-item-details small {
@@ -967,6 +1062,7 @@ button:disabled {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  flex: 0 0 auto;
 }
 
 .alert-badge.warning {
@@ -1407,6 +1503,7 @@ button:disabled {
   box-shadow:
     0 1px 1px rgba(146, 64, 14, 0.03),
     0 18px 42px rgba(146, 64, 14, 0.09);
+  min-width: 0;
 }
 
 .payment-card.expanded {
@@ -1417,7 +1514,7 @@ button:disabled {
   grid-column: 1 / -1;
   max-height: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1fr;
   gap: 10px;
   overflow: hidden;
   opacity: 0;
@@ -1430,13 +1527,19 @@ button:disabled {
 }
 
 .payment-card.expanded .ledger-panel {
-  max-height: 120px;
+  max-height: 900px;
   margin-top: 8px;
   opacity: 1;
   transform: translateY(0);
 }
 
-.ledger-panel span {
+.ledger-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ledger-summary > span {
   min-height: 64px;
   display: grid;
   align-content: center;
@@ -1455,6 +1558,37 @@ button:disabled {
 .ledger-panel strong {
   color: var(--ink);
   font-size: 16px;
+}
+
+.ledger-items {
+  display: grid;
+  gap: 8px;
+}
+
+.ledger-item {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(253, 230, 138, 0.66);
+  border-radius: 8px;
+}
+
+.ledger-item > span {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.ledger-item b,
+.ledger-item small {
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .actions {
@@ -1985,6 +2119,21 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .ledger-summary,
+  .ledger-item {
+    grid-template-columns: 1fr;
+  }
+
+  .ledger-item > strong,
+  .ledger-item > button {
+    justify-self: start;
+  }
+
+  .alert-item {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
   .branch-connector i {
     width: 2px;
     height: 36px;
@@ -2092,6 +2241,4 @@ button:disabled {
 .password-toggle-btn:active {
   transform: translateY(-50%) scale(0.92) !important;
 }
-
-
 
