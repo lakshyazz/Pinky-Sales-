@@ -280,7 +280,7 @@ const initialForms = {
     assigned_user_id: '', notes: '',
   },
   customer: { name: '', mobile: '', address: '', notes: '' },
-  sale: { product_id: '', customer_id: '', quantity: 1, total_amount: '', paid_amount: '', payment_mode: 'cash', due_date: '2026-06-15', notes: '', items: [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }] },
+  sale: { product_id: '', customer_id: '', quantity: 1, total_amount: '', paid_amount: '', payment_mode: 'cash', due_date: '2026-06-15', notes: '', items: [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }] },
   payment: { sale_id: '', amount: '', note: '' },
   request: { product_id: '', model_name: '', quantity: 1, message: '' },
   transfer: { from_shop_id: '', to_shop_id: '', product_id: '', quantity: '', note: '' },
@@ -1226,22 +1226,33 @@ function App() {
     }
   };
 
-  const salePriceFor = (productId) => {
+  const sellingPriceFor = (productId, priceType) => {
     const stockItem = data.stock.find((item) => String(item.product_id) === String(productId));
     const product = data.products.find((item) => String(item.id) === String(productId));
-    return Number(stockItem?.sale_price || product?.sale_price || stockItem?.retail_price || product?.retail_price || stockItem?.official_price || product?.official_price || 0);
+    if (priceType === 'wholesale') return Number(stockItem?.wholesale_price || product?.wholesale_price || 0);
+    if (priceType === 'retail') return Number(stockItem?.sale_price || product?.sale_price || 0);
+    return 0;
+  };
+
+  const sellingPriceOptions = (productId) => {
+    const retail = sellingPriceFor(productId, 'retail');
+    const wholesale = sellingPriceFor(productId, 'wholesale');
+    return [
+      ...(retail > 0 ? [['retail', `Retail · ${priceLabel(retail)}`]] : []),
+      ...(wholesale > 0 ? [['wholesale', `Wholesale · ${priceLabel(wholesale)}`]] : []),
+    ];
   };
 
   const updateSaleItemProduct = (index, productId) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }])];
     const qty = Math.max(Number(currentItems[index]?.quantity || 1), 1);
-    const price = salePriceFor(productId);
     
     currentItems[index] = {
       product_id: productId,
       batch_id: '',
+      price_type: '',
       quantity: qty,
-      total_amount: price ? String(price * qty) : (currentItems[index]?.total_amount || ''),
+      total_amount: '',
     };
 
     const totalSum = currentItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
@@ -1259,15 +1270,29 @@ function App() {
   };
 
   const updateSaleItemBatch = (index, batchId) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }])];
     currentItems[index] = { ...currentItems[index], batch_id: batchId };
     setForms({ ...forms, sale: { ...forms.sale, items: currentItems } });
   };
 
+  const updateSaleItemPriceType = (index, priceType) => {
+    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }])];
+    const item = currentItems[index];
+    const unitPrice = sellingPriceFor(item?.product_id, priceType);
+    const quantity = Math.max(Number(item?.quantity || 1), 1);
+    currentItems[index] = {
+      ...item,
+      price_type: priceType,
+      total_amount: unitPrice ? String(unitPrice * quantity) : '',
+    };
+    const totalSum = currentItems.reduce((sum, current) => sum + Number(current.total_amount || 0), 0);
+    setForms({ ...forms, sale: { ...forms.sale, total_amount: String(totalSum), items: currentItems } });
+  };
+
   const updateSaleItemQuantity = (index, quantity) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }])];
     const numericQuantity = Math.max(Number(quantity || 0), 0);
-    const price = salePriceFor(currentItems[index]?.product_id);
+    const price = sellingPriceFor(currentItems[index]?.product_id, currentItems[index]?.price_type);
 
     currentItems[index] = {
       ...currentItems[index],
@@ -1289,7 +1314,7 @@ function App() {
   };
 
   const updateSaleItemPrice = (index, priceVal) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }])];
     currentItems[index] = {
       ...currentItems[index],
       total_amount: priceVal,
@@ -1306,8 +1331,8 @@ function App() {
   };
 
   const addSaleItem = () => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }])];
-    currentItems.push({ product_id: '', batch_id: '', quantity: 1, total_amount: '' });
+    const currentItems = [...(forms.sale.items || [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }])];
+    currentItems.push({ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' });
     setForms({
       ...forms,
       sale: {
@@ -1342,8 +1367,8 @@ function App() {
     const notes = forms.sale.notes;
     const items = forms.sale.items || [{ product_id: forms.sale.product_id, quantity: Number(forms.sale.quantity), total_amount: Number(forms.sale.total_amount) }];
     
-    if (!customerId || !items.length || items.some(i => !i.product_id || !i.quantity || i.quantity <= 0 || !i.total_amount)) {
-      return showToast('Choose customer, items, quantities, and prices');
+    if (!customerId || !items.length || items.some(i => !i.product_id || !i.price_type || !i.quantity || i.quantity <= 0 || !i.total_amount)) {
+      return showToast('Choose customer, items, Retail or Wholesale price, quantities, and totals');
     }
 
     try {
@@ -1369,6 +1394,7 @@ function App() {
             due_date: dueDate,
             notes: notes,
             payment_mode: forms.sale.payment_mode,
+            price_type: item.price_type,
           }),
         });
       }
@@ -1377,7 +1403,7 @@ function App() {
         ...prev,
         sale: {
           ...initialForms.sale,
-          items: [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }],
+          items: [{ product_id: '', batch_id: '', price_type: '', quantity: 1, total_amount: '' }],
         },
       }));
       showToast('Sales created, stock reduced, pending updated');
@@ -1852,7 +1878,7 @@ function App() {
                   <td>
                     <strong>${productName(sale)}</strong>
                     <br/>
-                    <small style="color: #64748b; font-size: 12px;">Official Display replacement panel</small>
+                    <small style="color: #64748b; font-size: 12px;">${sale.price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price</small>
                   </td>
                   <td class="text-right">${sale.quantity || 1} pcs</td>
                   <td class="text-right">₹${Number(Number(sale.total_amount) / Number(sale.quantity || 1)).toLocaleString('en-IN')}</td>
@@ -1957,7 +1983,7 @@ function App() {
       const itemQuantity = Number(item.quantity || 1);
       const itemTotal = Number(item.total_amount || 0);
       const unitPrice = itemQuantity ? itemTotal / itemQuantity : itemTotal;
-      const productDetails = [item.brand, item.description].filter(Boolean).map(safe).join(' - ');
+      const productDetails = [item.price_type === 'wholesale' ? 'Wholesale price' : 'Retail price', item.brand, item.description].filter(Boolean).map(safe).join(' - ');
       return `
         <tr>
           <td class="number">${index + 1}</td>
@@ -2128,7 +2154,7 @@ function App() {
   });
   const visibleSales = data.sales.filter((sale) => {
     const query = salesFilters.search.trim().toLowerCase();
-    const matchesSearch = !query || [sale.customer_name, sale.product_short_name, sale.product_name, sale.brand, sale.category, sale.shop_name, sale.payment_mode]
+    const matchesSearch = !query || [sale.customer_name, sale.product_short_name, sale.product_name, sale.brand, sale.category, sale.shop_name, sale.price_type, sale.payment_mode]
       .filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
     const matchesDate = !salesFilters.date || String(sale.sale_date || '').slice(0, 10) === salesFilters.date;
     return matchesSearch && matchesDate;
@@ -3152,13 +3178,22 @@ function App() {
                     <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
                       {(forms.sale.items || [{ product_id: '', quantity: 1, total_amount: '' }]).map((item, idx) => (
-                        <div key={idx} className="flex items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative">
+                        <div key={idx} className="flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative">
                           <div className="flex-1">
                             <Select 
                               label="Item bought" 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
                               options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.quantity} pcs left`])}
+                            />
+                          </div>
+                          <div style={{ width: '205px' }}>
+                            <Select
+                              label="Selling price"
+                              placeholder="Retail or Wholesale"
+                              value={item.price_type || ''}
+                              onChange={(v) => updateSaleItemPriceType(idx, v)}
+                              options={sellingPriceOptions(item.product_id)}
                             />
                           </div>
                           <div style={{ width: '220px' }}>
@@ -3176,7 +3211,7 @@ function App() {
                             <Input label="Quantity" type="number" value={item.quantity} onChange={(v) => updateSaleItemQuantity(idx, v)} />
                           </div>
                           <div style={{ width: '160px' }}>
-                            <Input label="Total price" type="number" value={item.total_amount} onChange={(v) => updateSaleItemPrice(idx, v)} />
+                            <Input label="Total price" type="number" value={item.total_amount} readOnly onChange={(v) => updateSaleItemPrice(idx, v)} />
                           </div>
                           {(forms.sale.items || []).length > 1 && (
                             <button 
@@ -3199,7 +3234,7 @@ function App() {
                     </div>
                   </div>
 
-                  <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
+                  <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} readOnly onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
                   <Input label="Paid now" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                 </FormPanel>
@@ -3245,13 +3280,22 @@ function App() {
                     <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
                       {(forms.sale.items || [{ product_id: '', quantity: 1, total_amount: '' }]).map((item, idx) => (
-                        <div key={idx} className="flex items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative">
+                        <div key={idx} className="flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative">
                           <div className="flex-1">
                             <Select 
                               label="Item bought" 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
                               options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.quantity} pcs left`])}
+                            />
+                          </div>
+                          <div style={{ width: '205px' }}>
+                            <Select
+                              label="Selling price"
+                              placeholder="Retail or Wholesale"
+                              value={item.price_type || ''}
+                              onChange={(v) => updateSaleItemPriceType(idx, v)}
+                              options={sellingPriceOptions(item.product_id)}
                             />
                           </div>
                           <div style={{ width: '220px' }}>
@@ -3269,7 +3313,7 @@ function App() {
                             <Input label="Quantity" type="number" value={item.quantity} onChange={(v) => updateSaleItemQuantity(idx, v)} />
                           </div>
                           <div style={{ width: '160px' }}>
-                            <Input label="Total price" type="number" value={item.total_amount} onChange={(v) => updateSaleItemPrice(idx, v)} />
+                            <Input label="Total price" type="number" value={item.total_amount} readOnly onChange={(v) => updateSaleItemPrice(idx, v)} />
                           </div>
                           {(forms.sale.items || []).length > 1 && (
                             <button 
@@ -3292,7 +3336,7 @@ function App() {
                     </div>
                   </div>
 
-                  <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
+                  <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} readOnly onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
                   <Input label="Paid amount" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Select label="Payment mode" className="md:col-span-1" value={forms.sale.payment_mode} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} />
                   <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
@@ -3312,7 +3356,7 @@ function App() {
                   >
                     {visibleSales.map((sale) => (
                       <motion.div variants={itemVariants} className="row" key={sale.id}>
-                        <span><b>{sale.customer_name}</b><small title={sale.product_name}>{productName(sale)} · {sale.shop_name} · {sale.payment_mode || 'cash'}</small></span>
+                        <span><b>{sale.customer_name}</b><small title={sale.product_name}>{productName(sale)} · {sale.shop_name} · {sale.price_type || 'retail'} · {sale.payment_mode || 'cash'}</small></span>
                         <span>{currency(sale.total_amount)}</span>
                         <span>{currency(sale.paid_amount)}</span>
                         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>

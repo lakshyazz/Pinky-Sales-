@@ -1021,12 +1021,27 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
 app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { product_id, customer_id, quantity = 1, total_amount, paid_amount, due_date, notes, batch_id, payment_mode = 'cash' } = req.body;
-    if (!product_id || !customer_id || !total_amount) return res.status(400).json({ error: 'Product, customer and total amount are required.' });
+    const { product_id, customer_id, quantity = 1, paid_amount, due_date, notes, batch_id, payment_mode = 'cash', price_type } = req.body;
+    if (!product_id || !customer_id || !['retail', 'wholesale'].includes(price_type)) {
+      return res.status(400).json({ error: 'Product, customer and selling price type are required.' });
+    }
     const saleQuantity = Number(quantity);
     if (!Number.isInteger(saleQuantity) || saleQuantity <= 0) return res.status(400).json({ error: 'Quantity must be at least 1.' });
 
     const result = await runTransaction(async (tx) => {
+      const product = await tx.getRecord('SELECT sale_price, wholesale_price FROM products WHERE id = ?', [product_id]);
+      const unitPrice = money(price_type === 'wholesale' ? product?.wholesale_price : product?.sale_price);
+      if (!product || unitPrice <= 0) {
+        const error = new Error(`${price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price is not set for this product.`);
+        error.status = 400;
+        throw error;
+      }
+      const saleTotal = unitPrice * saleQuantity;
+      if (money(paid_amount) > saleTotal) {
+        const error = new Error('Paid amount cannot exceed the sale total.');
+        error.status = 400;
+        throw error;
+      }
       const batches = await tx.allRecords(
         `SELECT id, purchase_price, quantity_remaining FROM inventory_batches ib
          WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0
@@ -1040,10 +1055,10 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         error.status = 400;
         throw error;
       }
-      const pending = Math.max(money(total_amount) - money(paid_amount), 0);
+      const pending = Math.max(saleTotal - money(paid_amount), 0);
       const insertResult = await tx.runQuery(
-        'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [shopId, product_id, customer_id, saleQuantity, total_amount, paid_amount || 0, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id, payment_mode]
+        'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [shopId, product_id, customer_id, saleQuantity, saleTotal, paid_amount || 0, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id, payment_mode, price_type]
       );
       let remaining = saleQuantity;
       for (const batch of batches) {
