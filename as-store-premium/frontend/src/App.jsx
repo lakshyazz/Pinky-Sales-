@@ -866,11 +866,12 @@ function App() {
       }
       if (tab === 'sales') {
         const saleLocation = currentShop || (role === 'shopkeeper' ? session.shop_id : '');
+        const salesHistoryScope = role === 'superadmin' ? '' : (saleLocation ? `?shopId=${saleLocation}` : '');
         const [stockGroups, batchGroups, customers, sales] = await Promise.all([
           saleLocation ? Promise.all([authedFetch(`/stock?shopId=${saleLocation}`)]) : Promise.all(data.shops.map((shop) => authedFetch(`/stock?shopId=${shop.id}`))),
           saleLocation ? Promise.all([authedFetch(`/inventory-batches?shopId=${saleLocation}`)]) : Promise.all(data.shops.map((shop) => authedFetch(`/inventory-batches?shopId=${shop.id}`))),
           authedFetch(`/customers${saleLocation ? `?shopId=${saleLocation}` : ''}`),
-          authedFetch(`/sales${saleLocation ? `?shopId=${saleLocation}` : ''}`),
+          authedFetch(`/sales${salesHistoryScope}`),
         ]);
         setData((prev) => ({ ...prev, stock: stockGroups.flat(), batches: batchGroups.flat(), customers, sales }));
       }
@@ -3373,6 +3374,7 @@ function App() {
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox"><Search size={18} /><input placeholder="Filter by customer, model, category, shop, or payment mode" value={salesFilters.search} onChange={(event) => setSalesFilters({ ...salesFilters, search: event.target.value })} /></div>
                   <input type="date" value={salesFilters.date} onChange={(event) => setSalesFilters({ ...salesFilters, date: event.target.value })} />
+                  {role === 'superadmin' && <span className="status-badge">All-location history</span>}
                   <span className="status-badge stock-ok">{visibleSales.length} sales</span>
                 </div>
                 {visibleSales.length ? (
