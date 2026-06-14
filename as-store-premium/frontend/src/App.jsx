@@ -1238,8 +1238,8 @@ function App() {
     const retail = sellingPriceFor(productId, 'retail');
     const wholesale = sellingPriceFor(productId, 'wholesale');
     return [
-      ...(retail > 0 ? [['retail', `Retail · ${priceLabel(retail)}`]] : []),
-      ...(wholesale > 0 ? [['wholesale', `Wholesale · ${priceLabel(wholesale)}`]] : []),
+      ...(retail > 0 ? [['retail', `Retail - ${priceLabel(retail)}`]] : []),
+      ...(wholesale > 0 ? [['wholesale', `Wholesale - ${priceLabel(wholesale)}`]] : []),
     ];
   };
 
@@ -3190,10 +3190,11 @@ function App() {
                           <div style={{ width: '205px' }}>
                             <Select
                               label="Selling price"
-                              placeholder="Retail or Wholesale"
+                              placeholder={item.product_id ? 'Select price type' : 'Choose item first'}
                               value={item.price_type || ''}
                               onChange={(v) => updateSaleItemPriceType(idx, v)}
                               options={sellingPriceOptions(item.product_id)}
+                              disabled={!item.product_id}
                             />
                           </div>
                           <div style={{ width: '220px' }}>
@@ -3292,10 +3293,11 @@ function App() {
                           <div style={{ width: '205px' }}>
                             <Select
                               label="Selling price"
-                              placeholder="Retail or Wholesale"
+                              placeholder={item.product_id ? 'Select price type' : 'Choose item first'}
                               value={item.price_type || ''}
                               onChange={(v) => updateSaleItemPriceType(idx, v)}
                               options={sellingPriceOptions(item.product_id)}
+                              disabled={!item.product_id}
                             />
                           </div>
                           <div style={{ width: '220px' }}>
@@ -4058,11 +4060,11 @@ function Input({ label, value, onChange, type = 'text', className = '', ...input
   return <label className={className}>{label}<input {...inputProps} type={type} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
 }
 
-function Select({ label, value, onChange, options, placeholder = 'Select', className = '' }) {
+function Select({ label, value, onChange, options, placeholder = 'Select', className = '', ...selectProps }) {
   return (
     <label className={className}>
       {label}
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
+      <select {...selectProps} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder}</option>
         {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
       </select>
