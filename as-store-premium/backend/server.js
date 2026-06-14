@@ -127,10 +127,11 @@ const getProductsForRole = async (role) => {
   const columns = await productColumnsForRole(role);
   return allRecords(`SELECT ${columns} FROM products WHERE is_active = 1 AND name IS NOT NULL ORDER BY brand, COALESCE(short_name, name)`);
 };
+const getWarehouse = () => getRecord("SELECT id, name, area FROM shops WHERE location_type = 'warehouse' ORDER BY id LIMIT 1");
 const getShopsForUser = async (user) => {
   if (isCustomerRole(user.role)) {
     return allRecords(`
-      SELECT id, name, area
+      SELECT id, name, area, location_type
       FROM shops
       WHERE status = 'active'
       ORDER BY id ASC
@@ -142,8 +143,8 @@ const getShopsForUser = async (user) => {
       COALESCE((SELECT SUM(st.quantity) FROM stock st WHERE st.shop_id = sh.id), 0) AS stock,
       COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) AS pending
     FROM shops sh
-    ${shopId ? 'WHERE sh.id = ?' : ''}
-    ORDER BY sh.id ASC
+    ${shopId ? "WHERE sh.id = ? OR sh.location_type = 'warehouse'" : ''}
+    ORDER BY CASE WHEN sh.location_type = 'warehouse' THEN 0 ELSE 1 END, sh.id ASC
   `, shopId ? [shopId] : []);
 };
 const batchAccessSql = (user, alias = 'ib') => isShopStaffRole(user.role)
@@ -215,10 +216,27 @@ const scopeShopId = (req) => {
   if (isShopStaffRole(req.user.role)) return Number(req.user.shop_id);
   return req.query.shopId || req.body.shop_id || req.params.shopId || null;
 };
+const scopeReadableShopId = (req) => req.query.shopId || scopeShopId(req);
 
 const assertShopAccess = (req, requestedShopId) => {
   if (req.user.role === 'superadmin') return Number(requestedShopId);
-  return Number(req.user.shop_id);
+  const ownShopId = Number(req.user.shop_id);
+  if (requestedShopId && Number(requestedShopId) !== ownShopId) {
+    const error = new Error('You can only change data in your assigned shop.');
+    error.status = 403;
+    throw error;
+  }
+  return ownShopId;
+};
+
+const assertShopReadAccess = async (req, requestedShopId) => {
+  const shopId = Number(requestedShopId);
+  if (req.user.role === 'superadmin' || shopId === Number(req.user.shop_id)) return shopId;
+  const warehouse = await getRecord("SELECT id FROM shops WHERE id = ? AND location_type = 'warehouse'", [shopId]);
+  if (warehouse) return shopId;
+  const error = new Error('You cannot view inventory from this location.');
+  error.status = 403;
+  throw error;
 };
 
 const requireScopedShopId = (req, requestedShopId) => {
@@ -283,13 +301,14 @@ app.get('/api/me', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/bootstrap', authenticateToken, requireShopStaff, async (req, res) => {
-  const [shops, products, reference, priceVisibility] = await Promise.all([
+  const [shops, products, reference, priceVisibility, warehouse] = await Promise.all([
     getShopsForUser(req.user),
     getProductsForRole(req.user.role),
     getReferenceData(),
     getPriceVisibility(),
+    getWarehouse(),
   ]);
-  res.json({ shops, products, reference, priceVisibility });
+  res.json({ shops, products, reference, priceVisibility, warehouse });
 });
 
 app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) => {
@@ -300,7 +319,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
   const visibleBatchShopScope = shopId ? `AND ib.shop_id = ${Number(shopId)}` : '';
   const visibleStockSql = `COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = st.shop_id AND ib.product_id = st.product_id ${visibleBatchAccess}), 0)`;
 
-  const [totals, lowStock, shopWise, topProducts, salesTrendRows, pendingTrendRows] = await Promise.all([
+  const [totals, lowStock, shopWise, topProducts, salesTrendRows, pendingTrendRows, modelAvailability] = await Promise.all([
     getRecord(`
       SELECT
         (SELECT COUNT(*) FROM shops WHERE status = 'active' ${shopId ? 'AND id = ?' : ''}) AS total_shops,
@@ -319,7 +338,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       LIMIT 12
     `, shopId ? [shopId] : []),
     allRecords(`
-      SELECT sh.id, sh.name, sh.area,
+      SELECT sh.id, sh.name, sh.area, sh.location_type,
         COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = sh.id ${visibleBatchAccess}), 0) AS stock,
         COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) AS pending,
         COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND sa.sale_date = ?), 0) AS sales_today
@@ -347,6 +366,18 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       WHERE pending_amount > 0 AND due_date IN (${trendPlaceholders}) ${shopId ? 'AND shop_id = ?' : ''}
       GROUP BY due_date
     `, shopId ? [...trendDays, shopId] : trendDays),
+    allRecords(`
+      SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category, p.official_price, p.sale_price,
+        COALESCE(SUM(ib.quantity_remaining), 0) AS available_stock,
+        COALESCE(SUM(ib.quantity_remaining) FILTER (WHERE sh.location_type = 'warehouse'), 0) AS warehouse_stock,
+        STRING_AGG(DISTINCT CASE WHEN ib.quantity_remaining > 0 THEN sh.name END, ', ') AS available_locations
+      FROM products p
+      LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${shopId ? 'AND ib.shop_id = ?' : ''}
+      LEFT JOIN shops sh ON sh.id = ib.shop_id
+      WHERE p.is_active = 1
+      GROUP BY p.id
+      ORDER BY COALESCE(p.short_name, p.name)
+    `, shopId ? [shopId] : []),
   ]);
 
   const trendValues = (rows) => {
@@ -359,6 +390,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     lowStock,
     shopWise,
     topProducts,
+    modelAvailability,
     trends: {
       sales: trendValues(salesTrendRows),
       pending: trendValues(pendingTrendRows),
@@ -373,7 +405,7 @@ app.get('/api/shops', authenticateToken, async (req, res) => {
 app.post('/api/shops', authenticateToken, requireSuperAdmin, async (req, res) => {
   const { name, area, address, phone } = req.body;
   if (!name || !area) return res.status(400).json({ error: 'Shop name and area are required.' });
-  const result = await runQuery('INSERT INTO shops (name, area, address, phone) VALUES (?, ?, ?, ?)', [name, area, address || '', phone || '']);
+  const result = await runQuery("INSERT INTO shops (name, area, address, phone, location_type) VALUES (?, ?, ?, ?, 'shop')", [name, area, address || '', phone || '']);
   const products = await allRecords('SELECT id FROM products');
   for (const product of products) {
     await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, 0) ON CONFLICT(shop_id, product_id) DO NOTHING', [result.id, product.id]);
@@ -393,6 +425,8 @@ app.put('/api/shops/:id', authenticateToken, requireSuperAdmin, async (req, res)
 });
 
 app.delete('/api/shops/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  const shop = await getRecord('SELECT location_type FROM shops WHERE id = ?', [req.params.id]);
+  if (shop?.location_type === 'warehouse') return res.status(409).json({ error: 'Warehouse cannot be deleted.' });
   await runQuery('DELETE FROM users WHERE shop_id = ?', [req.params.id]);
   await runQuery('DELETE FROM shops WHERE id = ?', [req.params.id]);
   sessionUserCache.clear();
@@ -699,7 +733,7 @@ app.delete('/api/products/:id', authenticateToken, requireSuperAdmin, async (req
 
 app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const shopId = requireScopedShopId(req, scopeShopId(req));
+    const shopId = await assertShopReadAccess(req, scopeReadableShopId(req));
     const visibility = await getPriceVisibility();
     const extraPrices = req.user.role === 'superadmin'
       ? ', p.purchase_price, p.wholesale_price'
@@ -707,7 +741,7 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     const officialPrice = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
     const accessSql = batchAccessSql(req.user);
     const rows = await allRecords(`
-      SELECT st.id, st.shop_id, sh.name AS shop_name, p.id AS product_id, p.name, p.short_name, p.full_model_list,
+      SELECT st.id, st.shop_id, sh.name AS shop_name, sh.location_type, p.id AS product_id, p.name, p.short_name, p.full_model_list,
         p.brand, p.category, p.sale_price, p.retail_price, p.description, p.colours
         ${officialPrice}${extraPrices},
         COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = st.shop_id AND ib.product_id = st.product_id ${accessSql}), 0) AS quantity,
@@ -785,7 +819,7 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
 
 app.get('/api/inventory-batches', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const shopId = requireScopedShopId(req, scopeShopId(req));
+    const shopId = await assertShopReadAccess(req, scopeReadableShopId(req));
     const visibility = await getPriceVisibility();
     const costs = req.user.role === 'superadmin'
       ? 'ib.purchase_price, ib.wholesale_price,'
@@ -794,7 +828,7 @@ app.get('/api/inventory-batches', authenticateToken, requireShopStaff, async (re
     const rows = await allRecords(`
       SELECT ib.id, ib.shop_id, ib.product_id, ib.assigned_user_id, ${costs}${official}
         ib.retail_price, ib.colour, ib.quantity_received, ib.quantity_remaining, ib.received_date, ib.notes, ib.created_at,
-        p.name, p.short_name, p.full_model_list, p.brand, p.category, sh.name AS shop_name, u.name AS assigned_user_name
+        p.name, p.short_name, p.full_model_list, p.brand, p.category, sh.name AS shop_name, sh.location_type, u.name AS assigned_user_name
       FROM inventory_batches ib
       JOIN products p ON p.id = ib.product_id
       JOIN shops sh ON sh.id = ib.shop_id
@@ -853,13 +887,14 @@ app.post('/api/inventory-batches', authenticateToken, requireShopStaff, async (r
 });
 
 app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) => {
-  const shopId = assertShopAccess(req, scopeShopId(req));
-  const params = [shopId];
+  const requestedShopId = scopeShopId(req);
+  const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
+  const params = shopId ? [shopId] : [];
   let query = `
     SELECT c.*, COALESCE(SUM(s.pending_amount), 0) AS pending
     FROM customers c
     LEFT JOIN sales s ON s.customer_id = c.id
-    WHERE c.shop_id = ?
+    WHERE 1 = 1 ${shopId ? 'AND c.shop_id = ?' : ''}
   `;
   if (isShopStaffRole(req.user.role)) {
     query += ' AND (c.created_by IS NULL OR c.created_by = ?)';
@@ -894,8 +929,9 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
 });
 
 app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
-  const shopId = assertShopAccess(req, scopeShopId(req));
-  const params = [shopId];
+  const requestedShopId = scopeShopId(req);
+  const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
+  const params = shopId ? [shopId] : [];
   let query = `
     SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address,
@@ -904,7 +940,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     JOIN products p ON p.id = sa.product_id
     JOIN shops sh ON sh.id = sa.shop_id
     LEFT JOIN customers c ON c.id = sa.customer_id
-    WHERE sa.shop_id = ?
+    WHERE 1 = 1 ${shopId ? 'AND sa.shop_id = ?' : ''}
   `;
   if (isShopStaffRole(req.user.role)) {
     query += ' AND (sa.created_by IS NULL OR sa.created_by = ?)';
@@ -985,7 +1021,7 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
 app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { product_id, customer_id, quantity = 1, total_amount, paid_amount, due_date, notes, batch_id } = req.body;
+    const { product_id, customer_id, quantity = 1, total_amount, paid_amount, due_date, notes, batch_id, payment_mode = 'cash' } = req.body;
     if (!product_id || !customer_id || !total_amount) return res.status(400).json({ error: 'Product, customer and total amount are required.' });
     const saleQuantity = Number(quantity);
     if (!Number.isInteger(saleQuantity) || saleQuantity <= 0) return res.status(400).json({ error: 'Quantity must be at least 1.' });
@@ -1006,8 +1042,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       }
       const pending = Math.max(money(total_amount) - money(paid_amount), 0);
       const insertResult = await tx.runQuery(
-        'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [shopId, product_id, customer_id, saleQuantity, total_amount, paid_amount || 0, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id]
+        'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [shopId, product_id, customer_id, saleQuantity, total_amount, paid_amount || 0, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id, payment_mode]
       );
       let remaining = saleQuantity;
       for (const batch of batches) {

@@ -218,6 +218,7 @@ const navByRole = {
     ['stock', 'Stock', Package],
     ['stock-categories', 'Stock Categories', LayoutGrid],
     ['customers', 'Customers', Users],
+    ['sales', 'Sales', ReceiptText],
     ['requests', 'Requests', Send],
     ['payments', 'Pending', CreditCard],
     ['reports', 'Reports', FileText],
@@ -279,7 +280,7 @@ const initialForms = {
     assigned_user_id: '', notes: '',
   },
   customer: { name: '', mobile: '', address: '', notes: '' },
-  sale: { product_id: '', customer_id: '', quantity: 1, total_amount: '', paid_amount: '', due_date: '2026-06-15', notes: '', items: [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }] },
+  sale: { product_id: '', customer_id: '', quantity: 1, total_amount: '', paid_amount: '', payment_mode: 'cash', due_date: '2026-06-15', notes: '', items: [{ product_id: '', batch_id: '', quantity: 1, total_amount: '' }] },
   payment: { sale_id: '', amount: '', note: '' },
   request: { product_id: '', model_name: '', quantity: 1, message: '' },
   transfer: { from_shop_id: '', to_shop_id: '', product_id: '', quantity: '', note: '' },
@@ -640,6 +641,7 @@ function App() {
       show_wholesale_price_shopkeeper: false,
       show_purchase_price_shopkeeper: false,
     },
+    warehouse: null,
   });
   const [selectedShop, setSelectedShop] = useState('');
   const [forms, setForms] = useState(initialForms);
@@ -651,6 +653,9 @@ function App() {
   const [categoryFiltersOpen, setCategoryFiltersOpen] = useState(false);
   const [newReference, setNewReference] = useState({ type: '', name: '' });
   const [modelSearch, setModelSearch] = useState('');
+  const [priceSearch, setPriceSearch] = useState('');
+  const [dashboardSearch, setDashboardSearch] = useState('');
+  const [salesFilters, setSalesFilters] = useState({ search: '', date: '' });
   const [transferDrawerOpen, setTransferDrawerOpen] = useState(false);
   const [expandedPaymentId, setExpandedPaymentId] = useState('');
   const [editingProductId, setEditingProductId] = useState('');
@@ -789,6 +794,7 @@ function App() {
       let products;
       let reference;
       let priceVisibility;
+      let warehouse = data.warehouse;
       if (role === 'customer') {
         [shops, products, reference] = await Promise.all([
           authedFetch('/shops'),
@@ -797,7 +803,7 @@ function App() {
         ]);
         priceVisibility = data.priceVisibility;
       } else {
-        ({ shops, products, reference, priceVisibility } = await authedFetch('/bootstrap'));
+        ({ shops, products, reference, priceVisibility, warehouse } = await authedFetch('/bootstrap'));
       }
       setData((prev) => ({
         ...prev,
@@ -805,6 +811,7 @@ function App() {
         products,
         reference: cleanReferenceData(reference),
         priceVisibility,
+        warehouse: warehouse || prev.warehouse,
         catalog: role === 'customer' ? products : prev.catalog,
       }));
     } catch (error) {
@@ -836,11 +843,11 @@ function App() {
         else set('products', await authedFetch('/products'));
       }
       if (tab === 'stock' || tab === 'stock-categories') {
-        const targetShopIds = currentShop
-          ? [currentShop]
-          : role === 'superadmin'
-            ? data.shops.map((shop) => shop.id)
-            : [];
+        const targetShopIds = role === 'shopkeeper'
+          ? data.shops.filter((shop) => shop.location_type === 'warehouse' || String(shop.id) === String(session.shop_id)).map((shop) => shop.id)
+          : currentShop
+            ? [currentShop]
+            : data.shops.map((shop) => shop.id);
         const [stockGroups, batchGroups, shopkeepers] = await Promise.all([
           Promise.all(targetShopIds.map((id) => authedFetch(`/stock?shopId=${id}`))),
           Promise.all(targetShopIds.map((id) => authedFetch(`/inventory-batches?shopId=${id}`))),
@@ -857,14 +864,15 @@ function App() {
         ]);
         setData((prev) => ({ ...prev, stock, batches, customers, sales }));
       }
-      if (tab === 'sales' && currentShop) {
-        const [stock, batches, customers, sales] = await Promise.all([
-          authedFetch(`/stock?shopId=${currentShop}`),
-          authedFetch(`/inventory-batches?shopId=${currentShop}`),
-          authedFetch(`/customers?shopId=${currentShop}`),
-          authedFetch(`/sales?shopId=${currentShop}`),
+      if (tab === 'sales') {
+        const saleLocation = currentShop || (role === 'shopkeeper' ? session.shop_id : '');
+        const [stockGroups, batchGroups, customers, sales] = await Promise.all([
+          saleLocation ? Promise.all([authedFetch(`/stock?shopId=${saleLocation}`)]) : Promise.all(data.shops.map((shop) => authedFetch(`/stock?shopId=${shop.id}`))),
+          saleLocation ? Promise.all([authedFetch(`/inventory-batches?shopId=${saleLocation}`)]) : Promise.all(data.shops.map((shop) => authedFetch(`/inventory-batches?shopId=${shop.id}`))),
+          authedFetch(`/customers${saleLocation ? `?shopId=${saleLocation}` : ''}`),
+          authedFetch(`/sales${saleLocation ? `?shopId=${saleLocation}` : ''}`),
         ]);
-        setData((prev) => ({ ...prev, stock, batches, customers, sales }));
+        setData((prev) => ({ ...prev, stock: stockGroups.flat(), batches: batchGroups.flat(), customers, sales }));
       }
       if (tab === 'requests') set('requests', await authedFetch(`/stock-requests${scoped}`));
       if (tab === 'payments') set('pending', groupPendingPayments(await authedFetch(`/pending-payments${scoped}`)));
@@ -1370,6 +1378,7 @@ function App() {
             paid_amount: String(itemPaid),
             due_date: dueDate,
             notes: notes,
+            payment_mode: forms.sale.payment_mode,
           }),
         });
       }
@@ -1480,6 +1489,7 @@ function App() {
 
   const submitProduct = async () => {
     const openingStock = forms.product.opening_stock === '' ? 0 : Number(forms.product.opening_stock);
+    const openingStockLocationId = shopId || data.warehouse?.id;
     const numericPrice = (value) => value === '' ? null : Number(value);
     const payload = {
       short_name: forms.product.short_name.trim(),
@@ -1504,9 +1514,7 @@ function App() {
     if (!Number.isInteger(openingStock) || openingStock < 0) {
       return showToast('Opening stock must be 0 or more');
     }
-    if (openingStock > 0 && !requireShopSelection('Select a shop before adding opening stock')) {
-      return;
-    }
+    if (openingStock > 0 && !openingStockLocationId) return showToast('Warehouse is not configured yet');
 
     try {
       setSaving(true);
@@ -1516,7 +1524,7 @@ function App() {
       if (!editingProductId && openingStock > 0) {
         await authedFetch('/stock', {
           method: 'PUT',
-          body: JSON.stringify({ shop_id: shopId, product_id: created.id, quantity: openingStock }),
+          body: JSON.stringify({ shop_id: openingStockLocationId, product_id: created.id, quantity: openingStock }),
         });
       }
       setForms((prev) => ({ ...prev, product: initialForms.product }));
@@ -2115,6 +2123,26 @@ function App() {
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
   });
+  const priceItems = data.products.filter((item) => {
+    const query = priceSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [
+      item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description,
+      ...(item.colours || []), item.official_price, item.sale_price, item.retail_price, item.purchase_price, item.wholesale_price,
+    ].filter((value) => value !== null && value !== undefined).some((value) => String(value).toLowerCase().includes(query));
+  });
+  const dashboardModelItems = (data.dashboard?.modelAvailability || []).filter((item) => {
+    const query = dashboardSearch.trim().toLowerCase();
+    return query && [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.available_locations]
+      .filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+  });
+  const visibleSales = data.sales.filter((sale) => {
+    const query = salesFilters.search.trim().toLowerCase();
+    const matchesSearch = !query || [sale.customer_name, sale.product_short_name, sale.product_name, sale.brand, sale.category, sale.shop_name, sale.payment_mode]
+      .filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
+    const matchesDate = !salesFilters.date || String(sale.sale_date || '').slice(0, 10) === salesFilters.date;
+    return matchesSearch && matchesDate;
+  });
 
   const visibleCatalog = data.catalog.filter((product) => {
     const query = deferredCatalogFilters.search.trim().toLowerCase();
@@ -2294,7 +2322,7 @@ function App() {
             </Magnetic>
             {role === 'superadmin' && !['shops', 'shopkeepers', 'catalog'].includes(active) && (
               <select value={selectedShop} onChange={(e) => setSelectedShop(e.target.value)}>
-                <option value="">All shops</option>
+                <option value="">All locations</option>
                 {data.shops.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}
               </select>
             )}
@@ -2345,6 +2373,28 @@ function App() {
                     trend={data.dashboard.trends?.pending || trendFromValue(data.dashboard.totals.pending_payments, 'pending')}
                   />
                 </div>
+                <section className="panel dashboard-model-search">
+                  <div className="dashboard-search-heading">
+                    <div><span className="eyebrow">Inventory lookup</span><h2>Find stock across Warehouse and shops</h2></div>
+                    {dashboardSearch && <span className="status-badge stock-ok">{dashboardModelItems.length} matches</span>}
+                  </div>
+                  <div className="searchbox"><Search size={18} /><input placeholder="Search model, brand, category, shop, or Warehouse" value={dashboardSearch} onChange={(event) => setDashboardSearch(event.target.value)} /></div>
+                  {dashboardSearch && (
+                    <div className="dashboard-search-results">
+                      {dashboardModelItems.map((product) => (
+                        <div className="dashboard-search-result" key={product.id}>
+                          <div className="inventory-primary"><div className="w-10 h-10 rounded-lg bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0"><Smartphone size={18} /></div><span><b>{productName(product)}</b><small>{product.brand || 'No brand'} · {product.category || 'Uncategorized'}</small></span></div>
+                          <span className="inventory-metric"><small>Warehouse</small><strong>{product.warehouse_stock} pcs</strong></span>
+                          <span className="inventory-metric"><small>All stock</small><strong>{product.available_stock} pcs</strong></span>
+                          <span className="inventory-metric"><small>Available at</small><strong title={product.available_locations}>{product.available_locations || 'Out of stock'}</strong></span>
+                          <span className="inventory-metric"><small>Official / Sale</small><strong>{priceLabel(product.official_price)} / {priceLabel(product.sale_price)}</strong></span>
+                          <button className="soft" type="button" onClick={() => setSelectedProductDetails(product)}>View details</button>
+                        </div>
+                      ))}
+                      {!dashboardModelItems.length && <Empty title="No matching model or stock found." />}
+                    </div>
+                  )}
+                </section>
                 <div className="two-col">
                   <section className="panel performance-panel">
                     <h2>Shop performance</h2>
@@ -2615,7 +2665,11 @@ function App() {
                   </div>
                   <button className="soft" type="button" onClick={() => exportCsv('products')}><Download size={17} /> Export products/models CSV</button>
                 </section>
-                <CardGrid className="product-grid" items={data.products} render={(product) => (
+                <div className="catalog-toolbar panel models-toolbar">
+                  <div className="searchbox"><Search size={18} /><input placeholder="Search model, brand, category, compatible models, colour, or price" value={priceSearch} onChange={(event) => setPriceSearch(event.target.value)} /></div>
+                  <div className="models-summary"><span className="status-badge stock-ok">{priceItems.length} prices</span></div>
+                </div>
+                <CardGrid className="product-grid compact-price-grid" items={priceItems} emptyTitle="No matching model or price found." render={(product) => (
                   <>
                     <div className="flex items-start justify-between w-full mb-3">
                       <div className="card-icon-wrapper indigo !mb-0">
@@ -3197,7 +3251,8 @@ function App() {
           {active === 'sales' && (
             <PageWrapper activeKey="sales" key="sales">
               <section className="space">
-                <FormPanel title="Create sale" action="Create sale" onSubmit={() => submitSale('sales')}>
+                {role === 'superadmin' && !shopId && <div className="loading">Select Warehouse or a branch from the location filter to create a sale. All-location sales remain visible below.</div>}
+                <FormPanel title={data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'} action="Create sale" onSubmit={() => submitSale('sales')} disabled={saving || needsSpecificShop}>
                   <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '16px' }}>
                     <Select label="Customer" value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
                     
@@ -3253,9 +3308,15 @@ function App() {
 
                   <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
                   <Input label="Paid amount" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
+                  <Select label="Payment mode" className="md:col-span-1" value={forms.sale.payment_mode} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} />
                   <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                 </FormPanel>
-                {data.sales.length ? (
+                <div className="catalog-toolbar panel sales-toolbar">
+                  <div className="searchbox"><Search size={18} /><input placeholder="Filter by customer, model, category, shop, or payment mode" value={salesFilters.search} onChange={(event) => setSalesFilters({ ...salesFilters, search: event.target.value })} /></div>
+                  <input type="date" value={salesFilters.date} onChange={(event) => setSalesFilters({ ...salesFilters, date: event.target.value })} />
+                  <span className="status-badge stock-ok">{visibleSales.length} sales</span>
+                </div>
+                {visibleSales.length ? (
                   <motion.div 
                     variants={listVariants}
                     initial="hidden"
@@ -3263,9 +3324,9 @@ function App() {
                     viewport={{ once: true, margin: "-10px" }}
                     className="table panel"
                   >
-                    {data.sales.map((sale) => (
+                    {visibleSales.map((sale) => (
                       <motion.div variants={itemVariants} className="row" key={sale.id}>
-                        <span><b>{sale.customer_name}</b><small title={sale.product_name}>{productName(sale)}</small></span>
+                        <span><b>{sale.customer_name}</b><small title={sale.product_name}>{productName(sale)} · {sale.shop_name} · {sale.payment_mode || 'cash'}</small></span>
                         <span>{currency(sale.total_amount)}</span>
                         <span>{currency(sale.paid_amount)}</span>
                         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
@@ -3987,7 +4048,7 @@ function Select({ label, value, onChange, options, placeholder = 'Select', class
   );
 }
 
-function CardGrid({ items, render, className = '', onItemClick }) {
+function CardGrid({ items, render, className = '', onItemClick, emptyTitle = 'No records yet' }) {
   return (
     <div className={`card-grid ${className}`}>
       {items.map((item, index) => (
@@ -4010,7 +4071,7 @@ function CardGrid({ items, render, className = '', onItemClick }) {
           {render(item)}
         </motion.article>
       ))}
-      {!items.length && <Empty title="No records yet" />}
+      {!items.length && <Empty title={emptyTitle} />}
     </div>
   );
 }
