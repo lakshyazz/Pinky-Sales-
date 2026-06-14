@@ -35,9 +35,12 @@ import {
 } from 'lucide-react';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
+const productionApiBase = configuredApiBase?.startsWith('http')
+  ? configuredApiBase
+  : 'https://pinkysales.onrender.com/api';
 const API_BASE = (
-  import.meta.env.PROD && (!configuredApiBase || configuredApiBase.includes('pinkysales.onrender.com'))
-    ? '/api'
+  import.meta.env.PROD
+    ? productionApiBase
     : configuredApiBase || 'http://localhost:5000/api'
 ).replace(/\/$/, '');
 

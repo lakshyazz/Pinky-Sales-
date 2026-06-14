@@ -1,8 +1,0 @@
-{
-  "rewrites": [
-    {
-      "source": "/api/:path*",
-      "destination": "https://pinkysales.onrender.com/api/:path*"
-    }
-  ]
-}
