@@ -1238,8 +1238,8 @@ function App() {
     const retail = sellingPriceFor(productId, 'retail');
     const wholesale = sellingPriceFor(productId, 'wholesale');
     return [
-      ...(retail > 0 ? [['retail', `Retail - ${priceLabel(retail)}`]] : []),
-      ...(wholesale > 0 ? [['wholesale', `Wholesale - ${priceLabel(wholesale)}`]] : []),
+      ['retail', `Retail - ${retail > 0 ? priceLabel(retail) : 'Price not set'}`],
+      ['wholesale', `Wholesale - ${wholesale > 0 ? priceLabel(wholesale) : 'Price not set'}`],
     ];
   };
 
@@ -1280,6 +1280,12 @@ function App() {
     const item = currentItems[index];
     const unitPrice = sellingPriceFor(item?.product_id, priceType);
     const quantity = Math.max(Number(item?.quantity || 1), 1);
+    if (priceType && unitPrice <= 0) {
+      currentItems[index] = { ...item, price_type: '', total_amount: '' };
+      const totalSum = currentItems.reduce((sum, current) => sum + Number(current.total_amount || 0), 0);
+      setForms({ ...forms, sale: { ...forms.sale, total_amount: String(totalSum), items: currentItems } });
+      return showToast(`${priceType === 'wholesale' ? 'Wholesale' : 'Retail'} price is not set for this item. Add it from Prices first.`);
+    }
     currentItems[index] = {
       ...item,
       price_type: priceType,
@@ -3184,7 +3190,7 @@ function App() {
                               label="Item bought" 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.quantity} pcs left`])}
+                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.description || p.brand || 'No variant'} · ${p.quantity} pcs left`])}
                             />
                           </div>
                           <div style={{ width: '205px' }}>
@@ -3287,7 +3293,7 @@ function App() {
                               label="Item bought" 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.quantity} pcs left`])}
+                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.description || p.brand || 'No variant'} · ${p.quantity} pcs left`])}
                             />
                           </div>
                           <div style={{ width: '205px' }}>
