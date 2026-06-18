@@ -44,6 +44,62 @@ const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
 });
 const money = (value) => Number(value || 0);
 const productDisplayName = (row) => row.short_name || row.name;
+const DEFAULT_PAGE_LIMIT = 50;
+const MAX_PAGE_LIMIT = 100;
+const clampInteger = (value, fallback, min, max) => {
+  const number = Number(value);
+  if (!Number.isInteger(number)) return fallback;
+  return Math.min(Math.max(number, min), max);
+};
+const cleanQueryText = (value, maxLength = 120) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
+const hasQueryValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
+const parsePagination = (query, options = {}) => {
+  const limit = clampInteger(query.limit, options.defaultLimit || DEFAULT_PAGE_LIMIT, 1, options.maxLimit || MAX_PAGE_LIMIT);
+  const page = clampInteger(query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+  return {
+    page,
+    limit,
+    offset: (page - 1) * limit,
+    isPaginated: options.force || hasQueryValue(query.page) || hasQueryValue(query.limit),
+  };
+};
+const appendSearchFilter = (where, params, search, columns) => {
+  const query = cleanQueryText(search);
+  if (!query) return;
+  where.push(`(${columns.map((column) => `${column} ILIKE ?`).join(' OR ')})`);
+  columns.forEach(() => params.push(`%${query}%`));
+};
+const appendExactFilter = (where, params, value, sql) => {
+  if (!hasQueryValue(value)) return;
+  where.push(sql);
+  params.push(String(value).trim());
+};
+const appendDateRangeFilter = (where, params, fromValue, toValue, column) => {
+  if (hasQueryValue(fromValue)) {
+    where.push(`${column} >= ?`);
+    params.push(String(fromValue).slice(0, 10));
+  }
+  if (hasQueryValue(toValue)) {
+    where.push(`${column} <= ?`);
+    params.push(String(toValue).slice(0, 10));
+  }
+};
+const runPaginatedList = async ({ dataSql, countSql, params = [], pagination, totalKey = 'totalItems' }) => {
+  if (!pagination.isPaginated) return allRecords(dataSql, params);
+  const [rows, totalRow] = await Promise.all([
+    allRecords(`${dataSql} LIMIT ? OFFSET ?`, [...params, pagination.limit, pagination.offset]),
+    getRecord(countSql, params),
+  ]);
+  const total = Number(totalRow?.total || 0);
+  return {
+    data: rows,
+    page: pagination.page,
+    limit: pagination.limit,
+    total,
+    [totalKey]: total,
+    totalPages: Math.max(Math.ceil(total / pagination.limit), 1),
+  };
+};
 const responseCache = new Map();
 const sessionUserCache = new Map();
 const getCached = async (key, ttlMs, loader) => {
@@ -123,9 +179,46 @@ const getReferenceData = () => getCached('reference-data', 300_000, async () => 
   ]);
   return { categories, colours, brands };
 });
-const getProductsForRole = async (role) => {
+const getProductsForRole = async (role, query = {}) => {
   const columns = await productColumnsForRole(role);
-  return allRecords(`SELECT ${columns} FROM products WHERE is_active = 1 AND name IS NOT NULL ORDER BY brand, COALESCE(short_name, name)`);
+  const pagination = parsePagination(query);
+  const params = [];
+  const where = ['is_active = 1', 'name IS NOT NULL'];
+  appendSearchFilter(where, params, query.search, [
+    'name',
+    "COALESCE(short_name, '')",
+    "COALESCE(full_model_list, '')",
+    "COALESCE(brand, '')",
+    "COALESCE(category, '')",
+    "COALESCE(description, '')",
+  ]);
+  appendExactFilter(where, params, query.brand, 'brand = ?');
+  appendExactFilter(where, params, query.category, 'LOWER(TRIM(category)) = LOWER(TRIM(?))');
+  if (hasQueryValue(query.colour)) {
+    where.push(`EXISTS (
+      SELECT 1 FROM UNNEST(colours) AS product_colour
+      WHERE LOWER(TRIM(product_colour)) = LOWER(TRIM(?))
+    )`);
+    params.push(String(query.colour).trim());
+  }
+  const minPrice = hasQueryValue(query.min) ? Number(query.min) : hasQueryValue(query.minPrice) ? Number(query.minPrice) : null;
+  const maxPrice = hasQueryValue(query.max) ? Number(query.max) : hasQueryValue(query.maxPrice) ? Number(query.maxPrice) : null;
+  if (Number.isFinite(minPrice)) {
+    where.push('COALESCE(retail_price, sale_price, official_price, 0) >= ?');
+    params.push(minPrice);
+  }
+  if (Number.isFinite(maxPrice)) {
+    where.push('COALESCE(retail_price, sale_price, official_price, 0) <= ?');
+    params.push(maxPrice);
+  }
+  const whereSql = where.join(' AND ');
+  return runPaginatedList({
+    dataSql: `SELECT ${columns} FROM products WHERE ${whereSql} ORDER BY brand, COALESCE(short_name, name)`,
+    countSql: `SELECT COUNT(*) AS total FROM products WHERE ${whereSql}`,
+    params,
+    pagination,
+    totalKey: 'totalProducts',
+  });
 };
 const getWarehouse = () => getRecord("SELECT id, name, area FROM shops WHERE location_type = 'warehouse' ORDER BY id LIMIT 1");
 const getShopsForUser = async (user) => {
@@ -607,7 +700,7 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
 });
 
 app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
-  res.json(await getProductsForRole(req.user.role));
+  res.json(await getProductsForRole(req.user.role, req.query));
 });
 
 app.post('/api/products', authenticateToken, requireSuperAdmin, async (req, res) => {
@@ -737,25 +830,85 @@ app.delete('/api/products/:id', authenticateToken, requireSuperAdmin, async (req
 
 app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const shopId = await assertShopReadAccess(req, scopeReadableShopId(req));
+    const requestedShopId = scopeReadableShopId(req);
+    const shopId = requestedShopId
+      ? await assertShopReadAccess(req, requestedShopId)
+      : (isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : null);
+    const pagination = parsePagination(req.query);
     const visibility = await getPriceVisibility();
     const extraPrices = req.user.role === 'superadmin'
       ? ', p.purchase_price, p.wholesale_price'
       : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}${visibility.show_wholesale_price_shopkeeper ? ', p.wholesale_price' : ''}`;
     const officialPrice = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
-    const accessSql = batchAccessSql(req.user);
-    const rows = await allRecords(`
-      SELECT st.id, st.shop_id, sh.name AS shop_name, sh.location_type, p.id AS product_id, p.name, p.short_name, p.full_model_list,
-        p.brand, p.category, p.sale_price, p.retail_price, p.description, p.colours
-        ${officialPrice}${extraPrices},
-        COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = st.shop_id AND ib.product_id = st.product_id ${accessSql}), 0) AS quantity,
-        COALESCE((SELECT COUNT(*) FROM inventory_batches ib WHERE ib.shop_id = st.shop_id AND ib.product_id = st.product_id AND ib.quantity_remaining > 0 ${accessSql}), 0) AS batch_count
+    const batchJoin = [
+      'ib.shop_id = st.shop_id',
+      'ib.product_id = st.product_id',
+    ];
+    const batchParams = [];
+    if (hasQueryValue(req.query.colour)) {
+      batchJoin.push('LOWER(TRIM(ib.colour)) = LOWER(TRIM(?))');
+      batchParams.push(String(req.query.colour).trim());
+    }
+    if (hasQueryValue(req.query.batch) || hasQueryValue(req.query.batchId)) {
+      batchJoin.push('ib.id = ?');
+      batchParams.push(Number(req.query.batch || req.query.batchId));
+    }
+    if (req.user.role === 'superadmin' && hasQueryValue(req.query.shopkeeperId)) {
+      batchJoin.push('ib.assigned_user_id = ?');
+      batchParams.push(Number(req.query.shopkeeperId));
+    }
+    if (req.query.ownership === 'owner') batchJoin.push('ib.assigned_user_id IS NULL');
+    if (req.query.ownership === 'shopkeeper') batchJoin.push('ib.assigned_user_id IS NOT NULL');
+    if (req.query.ownership === 'mine') batchJoin.push(`ib.assigned_user_id = ${Number(req.user.id)}`);
+    const where = [];
+    const whereParams = [];
+    if (shopId) {
+      where.push('st.shop_id = ?');
+      whereParams.push(shopId);
+    }
+    appendSearchFilter(where, whereParams, req.query.search, [
+      'p.name',
+      "COALESCE(p.short_name, '')",
+      "COALESCE(p.full_model_list, '')",
+      "COALESCE(p.brand, '')",
+      "COALESCE(p.category, '')",
+      "COALESCE(p.description, '')",
+      "COALESCE(sh.name, '')",
+    ]);
+    appendExactFilter(where, whereParams, req.query.brand, 'p.brand = ?');
+    appendExactFilter(where, whereParams, req.query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
+    const stockQuantitySql = 'COALESCE(SUM(ib.quantity_remaining), 0)';
+    const having = [];
+    if (req.query.status === 'in_stock') having.push(`${stockQuantitySql} > 0`);
+    if (req.query.status === 'out_of_stock') having.push(`${stockQuantitySql} = 0`);
+    const baseSql = `
       FROM stock st
       JOIN products p ON p.id = st.product_id
       JOIN shops sh ON sh.id = st.shop_id
-      WHERE st.shop_id = ?
+      LEFT JOIN inventory_batches ib ON ${batchJoin.join(' AND ')} ${batchAccessSql(req.user)}
+      WHERE ${where.length ? where.join(' AND ') : '1 = 1'}
+      GROUP BY st.id, sh.id, p.id
+      ${having.length ? `HAVING ${having.join(' AND ')}` : ''}
+    `;
+    const params = [...batchParams, ...whereParams];
+    const rows = await runPaginatedList({
+      dataSql: `
+      SELECT st.id, st.shop_id, sh.name AS shop_name, sh.location_type, p.id AS product_id, p.name, p.short_name, p.full_model_list,
+        p.brand, p.category, p.sale_price, p.retail_price, p.description, p.colours
+        ${officialPrice}${extraPrices},
+        ${stockQuantitySql} AS quantity,
+        COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS owner_quantity,
+        COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NOT NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS shopkeeper_quantity,
+        COALESCE(SUM(CASE WHEN ib.assigned_user_id = ${Number(req.user.id)} THEN ib.quantity_remaining ELSE 0 END), 0) AS my_quantity,
+        COUNT(ib.id) FILTER (WHERE ib.quantity_remaining > 0) AS batch_count
+      ${baseSql}
       ORDER BY p.brand, COALESCE(p.short_name, p.name)
-    `, [shopId]);
+    `,
+      countSql: `SELECT COUNT(*) AS total FROM (SELECT st.id ${baseSql}) counted`,
+      params,
+      pagination,
+      totalKey: 'totalStockItems',
+    });
     res.json(rows);
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to load stock.' });
@@ -823,23 +976,72 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
 
 app.get('/api/inventory-batches', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const shopId = await assertShopReadAccess(req, scopeReadableShopId(req));
+    const requestedShopId = scopeReadableShopId(req);
+    const shopId = requestedShopId
+      ? await assertShopReadAccess(req, requestedShopId)
+      : (isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : null);
+    const pagination = parsePagination(req.query);
     const visibility = await getPriceVisibility();
     const costs = req.user.role === 'superadmin'
       ? 'ib.purchase_price, ib.wholesale_price,'
       : `${visibility.show_purchase_price_shopkeeper ? 'ib.purchase_price,' : ''}${visibility.show_wholesale_price_shopkeeper ? 'ib.wholesale_price,' : ''}`;
     const official = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? 'ib.official_price,' : '';
-    const rows = await allRecords(`
-      SELECT ib.id, ib.shop_id, ib.product_id, ib.assigned_user_id, ${costs}${official}
-        ib.retail_price, ib.colour, ib.quantity_received, ib.quantity_remaining, ib.received_date, ib.notes, ib.created_at,
-        p.name, p.short_name, p.full_model_list, p.brand, p.category, sh.name AS shop_name, sh.location_type, u.name AS assigned_user_name
+    const params = [];
+    const where = [];
+    if (shopId) {
+      where.push('ib.shop_id = ?');
+      params.push(shopId);
+    }
+    if (isShopStaffRole(req.user.role)) {
+      where.push(`(ib.assigned_user_id IS NULL OR ib.assigned_user_id = ${Number(req.user.id)})`);
+    }
+    appendSearchFilter(where, params, req.query.search, [
+      'p.name',
+      "COALESCE(p.short_name, '')",
+      "COALESCE(p.full_model_list, '')",
+      "COALESCE(p.brand, '')",
+      "COALESCE(p.category, '')",
+      "COALESCE(ib.colour, '')",
+      "COALESCE(u.name, '')",
+      "COALESCE(sh.name, '')",
+    ]);
+    appendExactFilter(where, params, req.query.brand, 'p.brand = ?');
+    appendExactFilter(where, params, req.query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
+    appendExactFilter(where, params, req.query.colour, 'LOWER(TRIM(ib.colour)) = LOWER(TRIM(?))');
+    if (hasQueryValue(req.query.batch) || hasQueryValue(req.query.batchId)) {
+      where.push('ib.id = ?');
+      params.push(Number(req.query.batch || req.query.batchId));
+    }
+    if (req.user.role === 'superadmin' && hasQueryValue(req.query.shopkeeperId)) {
+      where.push('ib.assigned_user_id = ?');
+      params.push(Number(req.query.shopkeeperId));
+    }
+    if (req.query.ownership === 'owner') where.push('ib.assigned_user_id IS NULL');
+    if (req.query.ownership === 'shopkeeper') where.push('ib.assigned_user_id IS NOT NULL');
+    if (req.query.ownership === 'mine') where.push(`ib.assigned_user_id = ${Number(req.user.id)}`);
+    if (req.query.status === 'in_stock') where.push('ib.quantity_remaining > 0');
+    if (req.query.status === 'out_of_stock') where.push('ib.quantity_remaining = 0');
+    appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'ib.received_date');
+    const baseSql = `
       FROM inventory_batches ib
       JOIN products p ON p.id = ib.product_id
       JOIN shops sh ON sh.id = ib.shop_id
       LEFT JOIN users u ON u.id = ib.assigned_user_id
-      WHERE ib.shop_id = ? ${batchAccessSql(req.user)}
+      WHERE ${where.length ? where.join(' AND ') : '1 = 1'}
+    `;
+    const rows = await runPaginatedList({
+      dataSql: `
+      SELECT ib.id, ib.shop_id, ib.product_id, ib.assigned_user_id, ${costs}${official}
+        ib.retail_price, ib.colour, ib.quantity_received, ib.quantity_remaining, ib.received_date, ib.notes, ib.created_at,
+        p.name, p.short_name, p.full_model_list, p.brand, p.category, sh.name AS shop_name, sh.location_type, u.name AS assigned_user_name
+      ${baseSql}
       ORDER BY p.brand, COALESCE(p.short_name, p.name), ib.received_date, ib.id
-    `, [shopId]);
+    `,
+      countSql: `SELECT COUNT(*) AS total ${baseSql}`,
+      params,
+      pagination,
+      totalKey: 'totalBatches',
+    });
     res.json(rows);
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to load inventory batches.' });
@@ -893,22 +1095,48 @@ app.post('/api/inventory-batches', authenticateToken, requireShopStaff, async (r
 app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) => {
   const requestedShopId = scopeShopId(req);
   const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
-  const params = shopId ? [shopId] : [];
-  let query = `
-    SELECT c.*, COALESCE(SUM(s.pending_amount), 0) AS pending
-    FROM customers c
-    LEFT JOIN sales s ON s.customer_id = c.id
-    WHERE 1 = 1 ${shopId ? 'AND c.shop_id = ?' : ''}
-  `;
+  const pagination = parsePagination(req.query);
+  const params = [];
+  const where = ['1 = 1'];
+  if (shopId) {
+    where.push('c.shop_id = ?');
+    params.push(shopId);
+  }
+  appendSearchFilter(where, params, req.query.search, [
+    'c.name',
+    "COALESCE(c.mobile, '')",
+    "COALESCE(c.address, '')",
+    "COALESCE(c.notes, '')",
+    "COALESCE(sh.name, '')",
+  ]);
+  appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'c.created_at');
   if (isShopStaffRole(req.user.role)) {
-    query += ' AND (c.created_by IS NULL OR c.created_by = ?)';
+    where.push('(c.created_by IS NULL OR c.created_by = ?)');
     params.push(req.user.id);
   }
-  query += `
-    GROUP BY c.id
-    ORDER BY c.created_at DESC
+  const pendingSql = 'COALESCE(SUM(s.pending_amount), 0)';
+  const having = [];
+  if (req.query.status === 'pending') having.push(`${pendingSql} > 0`);
+  if (req.query.status === 'paid') having.push(`${pendingSql} = 0`);
+  const baseSql = `
+    FROM customers c
+    LEFT JOIN sales s ON s.customer_id = c.id
+    LEFT JOIN shops sh ON sh.id = c.shop_id
+    WHERE ${where.join(' AND ')}
+    GROUP BY c.id, sh.id
+    ${having.length ? `HAVING ${having.join(' AND ')}` : ''}
   `;
-  const rows = await allRecords(query, params);
+  const rows = await runPaginatedList({
+    dataSql: `
+    SELECT c.*, sh.name AS shop_name, COALESCE(SUM(s.pending_amount), 0) AS pending
+    ${baseSql}
+    ORDER BY c.created_at DESC
+  `,
+    countSql: `SELECT COUNT(*) AS total FROM (SELECT c.id ${baseSql}) counted`,
+    params,
+    pagination,
+    totalKey: 'totalCustomers',
+  });
   res.json(rows);
 });
 
@@ -935,23 +1163,66 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
 app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   const requestedShopId = scopeShopId(req);
   const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
-  const params = shopId ? [shopId] : [];
-  let query = `
-    SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
-      c.name AS customer_name, c.mobile, c.address,
-      sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+  const pagination = parsePagination(req.query);
+  const params = [];
+  const where = ['1 = 1'];
+  if (shopId) {
+    where.push('sa.shop_id = ?');
+    params.push(shopId);
+  }
+  appendSearchFilter(where, params, req.query.search, [
+    "COALESCE(c.name, '')",
+    "COALESCE(c.mobile, '')",
+    'p.name',
+    "COALESCE(p.short_name, '')",
+    "COALESCE(p.full_model_list, '')",
+    "COALESCE(p.brand, '')",
+    "COALESCE(p.category, '')",
+    "COALESCE(sh.name, '')",
+    "COALESCE(sa.price_type, '')",
+    "COALESCE(sa.payment_mode, '')",
+  ]);
+  appendExactFilter(where, params, req.query.priceType, 'sa.price_type = ?');
+  appendExactFilter(where, params, req.query.paymentMode, 'sa.payment_mode = ?');
+  appendExactFilter(where, params, req.query.status, 'sa.status = ?');
+  if (hasQueryValue(req.query.customerId)) {
+    where.push('sa.customer_id = ?');
+    params.push(Number(req.query.customerId));
+  }
+  if (hasQueryValue(req.query.productId)) {
+    where.push('sa.product_id = ?');
+    params.push(Number(req.query.productId));
+  }
+  if (hasQueryValue(req.query.date)) {
+    where.push('sa.sale_date = ?');
+    params.push(String(req.query.date).slice(0, 10));
+  } else {
+    appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'sa.sale_date');
+  }
+  if (isShopStaffRole(req.user.role)) {
+    where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
+    params.push(req.user.id);
+  }
+  const baseSql = `
     FROM sales sa
     JOIN products p ON p.id = sa.product_id
     JOIN shops sh ON sh.id = sa.shop_id
     LEFT JOIN customers c ON c.id = sa.customer_id
-    WHERE 1 = 1 ${shopId ? 'AND sa.shop_id = ?' : ''}
+    WHERE ${where.join(' AND ')}
   `;
-  if (isShopStaffRole(req.user.role)) {
-    query += ' AND (sa.created_by IS NULL OR sa.created_by = ?)';
-    params.push(req.user.id);
-  }
-  query += ' ORDER BY sa.id DESC';
-  const rows = await allRecords(query, params);
+  const rows = await runPaginatedList({
+    dataSql: `
+    SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
+      c.name AS customer_name, c.mobile, c.address,
+      sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+    ${baseSql}
+    ORDER BY sa.id DESC
+  `,
+    countSql: `SELECT COUNT(*) AS total ${baseSql}`,
+    params,
+    pagination,
+    totalKey: 'totalSales',
+  });
   res.json(rows);
 });
 
@@ -1231,50 +1502,96 @@ app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (
 
 app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
+  const pagination = parsePagination(req.query);
   const params = [];
   if (shopId) params.push(shopId);
-  if (isShopStaffRole(req.user.role)) params.push(req.user.id);
-
-  const rows = await allRecords(`
-    SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
-      c.name AS customer_name, c.mobile, c.address,
-      sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+  const where = [`sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ?' : ''}`];
+  appendSearchFilter(where, params, req.query.search, [
+    "COALESCE(c.name, '')",
+    "COALESCE(c.mobile, '')",
+    'p.name',
+    "COALESCE(p.short_name, '')",
+    "COALESCE(p.full_model_list, '')",
+    "COALESCE(p.brand, '')",
+    "COALESCE(p.category, '')",
+    "COALESCE(sh.name, '')",
+  ]);
+  if (hasQueryValue(req.query.date)) {
+    where.push('sa.due_date = ?');
+    params.push(String(req.query.date).slice(0, 10));
+  } else {
+    appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'sa.due_date');
+  }
+  if (isShopStaffRole(req.user.role)) {
+    where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
+    params.push(req.user.id);
+  }
+  const groupOrderSql = "NULLIF(sa.due_date, '') ASC NULLS LAST, sa.id ASC";
+  const baseSql = `
     FROM sales sa
     JOIN products p ON p.id = sa.product_id
     JOIN customers c ON c.id = sa.customer_id
     JOIN shops sh ON sh.id = sa.shop_id
-    WHERE sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ?' : ''}
-      ${isShopStaffRole(req.user.role) ? 'AND (sa.created_by IS NULL OR sa.created_by = ?)' : ''}
-    ORDER BY sa.due_date ASC, sa.id DESC
-  `, params);
-    const grouped = new Map();
-  rows.forEach((sale) => {
-    const key = `${sale.shop_id}:${sale.mobile || sale.customer_id}`;
-    const current = grouped.get(key) || {
-      id: `customer-${key}`,
-      customer_id: sale.customer_id,
-      shop_id: sale.shop_id,
-      customer_name: sale.customer_name,
-      mobile: sale.mobile,
-      address: sale.address,
-      shop_name: sale.shop_name,
-      shop_area: sale.shop_area,
-      shop_address: sale.shop_address,
-      shop_phone: sale.shop_phone,
-      total_amount: 0,
-      paid_amount: 0,
-      pending_amount: 0,
-      due_date: sale.due_date,
-      items: [],
-    };
-    current.total_amount += money(sale.total_amount);
-    current.paid_amount += money(sale.paid_amount);
-    current.pending_amount += money(sale.pending_amount);
-    if (sale.due_date && (!current.due_date || sale.due_date < current.due_date)) current.due_date = sale.due_date;
-    current.items.push({ ...sale, display_name: productDisplayName({ name: sale.product_name, short_name: sale.product_short_name }) });
-    grouped.set(key, current);
+    WHERE ${where.join(' AND ')}
+    GROUP BY sa.shop_id, COALESCE(c.mobile, c.id::TEXT)
+  `;
+  const rows = await runPaginatedList({
+    dataSql: `
+    SELECT
+      'customer-' || sa.shop_id || ':' || COALESCE(c.mobile, c.id::TEXT) AS id,
+      (ARRAY_AGG(c.id ORDER BY ${groupOrderSql}))[1] AS customer_id,
+      sa.shop_id,
+      (ARRAY_AGG(c.name ORDER BY ${groupOrderSql}))[1] AS customer_name,
+      (ARRAY_AGG(c.mobile ORDER BY ${groupOrderSql}))[1] AS mobile,
+      (ARRAY_AGG(c.address ORDER BY ${groupOrderSql}))[1] AS address,
+      (ARRAY_AGG(sh.name ORDER BY ${groupOrderSql}))[1] AS shop_name,
+      (ARRAY_AGG(sh.area ORDER BY ${groupOrderSql}))[1] AS shop_area,
+      (ARRAY_AGG(sh.address ORDER BY ${groupOrderSql}))[1] AS shop_address,
+      (ARRAY_AGG(sh.phone ORDER BY ${groupOrderSql}))[1] AS shop_phone,
+      COALESCE(SUM(sa.total_amount), 0) AS total_amount,
+      COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
+      COALESCE(SUM(sa.pending_amount), 0) AS pending_amount,
+      (ARRAY_AGG(NULLIF(sa.due_date, '') ORDER BY ${groupOrderSql}))[1] AS due_date,
+      JSON_AGG(JSON_BUILD_OBJECT(
+        'id', sa.id,
+        'shop_id', sa.shop_id,
+        'product_id', sa.product_id,
+        'customer_id', sa.customer_id,
+        'quantity', sa.quantity,
+        'total_amount', sa.total_amount,
+        'paid_amount', sa.paid_amount,
+        'pending_amount', sa.pending_amount,
+        'due_date', sa.due_date,
+        'sale_date', sa.sale_date,
+        'notes', sa.notes,
+        'status', sa.status,
+        'created_by', sa.created_by,
+        'payment_mode', sa.payment_mode,
+        'price_type', sa.price_type,
+        'product_name', p.name,
+        'product_short_name', p.short_name,
+        'full_model_list', p.full_model_list,
+        'brand', p.brand,
+        'category', p.category,
+        'description', p.description,
+        'customer_name', c.name,
+        'mobile', c.mobile,
+        'address', c.address,
+        'shop_name', sh.name,
+        'shop_area', sh.area,
+        'shop_address', sh.address,
+        'shop_phone', sh.phone,
+        'display_name', COALESCE(p.short_name, p.name)
+      ) ORDER BY ${groupOrderSql}) AS items
+    ${baseSql}
+    ORDER BY due_date ASC NULLS LAST, pending_amount DESC
+  `,
+    countSql: `SELECT COUNT(*) AS total FROM (SELECT 1 ${baseSql}) counted`,
+    params,
+    pagination,
+    totalKey: 'totalPendingCustomers',
   });
-  res.json([...grouped.values()]);
+  res.json(rows);
 });
 
 app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) => {
@@ -1446,6 +1763,7 @@ app.get('/api/catalog', async (req, res) => {
 
 app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
+  const pagination = parsePagination(req.query);
   const pendingByShop = await allRecords(`
     SELECT sh.name AS shop_name, COALESCE(SUM(sa.pending_amount), 0) AS pending
     FROM shops sh
@@ -1454,14 +1772,39 @@ app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) =>
     GROUP BY sh.id
     ORDER BY pending DESC
   `, shopId ? [shopId] : []);
-  const availability = await allRecords(`
-    SELECT p.name, p.short_name, p.full_model_list, p.brand, sh.name AS shop_name, st.quantity
+  const availabilityParams = [];
+  const availabilityWhere = ['st.quantity > 0'];
+  if (shopId) {
+    availabilityWhere.push('st.shop_id = ?');
+    availabilityParams.push(shopId);
+  }
+  appendSearchFilter(availabilityWhere, availabilityParams, req.query.search, [
+    'p.name',
+    "COALESCE(p.short_name, '')",
+    "COALESCE(p.full_model_list, '')",
+    "COALESCE(p.brand, '')",
+    "COALESCE(p.category, '')",
+    "COALESCE(sh.name, '')",
+  ]);
+  appendExactFilter(availabilityWhere, availabilityParams, req.query.brand, 'p.brand = ?');
+  appendExactFilter(availabilityWhere, availabilityParams, req.query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
+  const availabilityBaseSql = `
     FROM stock st
     JOIN products p ON p.id = st.product_id
     JOIN shops sh ON sh.id = st.shop_id
-    WHERE st.quantity > 0 ${shopId ? 'AND st.shop_id = ?' : ''}
+    WHERE ${availabilityWhere.join(' AND ')}
+  `;
+  const availability = await runPaginatedList({
+    dataSql: `
+    SELECT p.name, p.short_name, p.full_model_list, p.brand, sh.name AS shop_name, st.quantity
+    ${availabilityBaseSql}
     ORDER BY p.name, sh.name
-  `, shopId ? [shopId] : []);
+  `,
+    countSql: `SELECT COUNT(*) AS total ${availabilityBaseSql}`,
+    params: availabilityParams,
+    pagination,
+    totalKey: 'totalAvailability',
+  });
   const auditRows = isShopStaffRole(req.user.role)
     ? await allRecords("SELECT * FROM audit_logs WHERE actor_id = ? AND action = 'Created sale' ORDER BY id DESC LIMIT 25", [req.user.id])
     : await allRecords('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 25');

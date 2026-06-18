@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   BarChart3,
   Building2,
+  ChevronLeft,
   ChevronRight,
   Contact,
   CreditCard,
@@ -33,6 +34,9 @@ import {
   Users,
   X,
 } from 'lucide-react';
+import ModelsPage from './components/models/ModelsPage';
+import PricesPage from './components/prices/PricesPage';
+import ProductPagination from './components/shared/ProductPagination';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
 const productionApiBase = configuredApiBase?.startsWith('http')
@@ -422,7 +426,7 @@ function Sparkline({ data = [], tone = 'teal' }) {
   );
 }
 
-function StatCard({ icon: Icon, label, value, tone = 'blue', trend, sparklineTone }) {
+function StatCard({ icon: Icon, label, value, helper, tone = 'blue', trend, sparklineTone }) {
   return (
     <motion.div 
       initial={{ opacity: 0, y: 12 }}
@@ -435,6 +439,7 @@ function StatCard({ icon: Icon, label, value, tone = 'blue', trend, sparklineTon
       <div className="stat-copy">
         <span>{label}</span>
         <strong>{value}</strong>
+        {helper && <small>{helper}</small>}
       </div>
       {trend && <Sparkline data={trend} tone={sparklineTone || tone} />}
     </motion.div>
@@ -445,13 +450,41 @@ function Empty({ title }) {
   return <div className="empty"><Package size={18} /> {title}</div>;
 }
 
+function BillSummary({ sale }) {
+  const items = sale.items || [];
+  const grandTotal = Number(sale.total_amount || 0);
+  const paidAmount = Number(sale.paid_amount || 0);
+  const pendingAmount = Math.max(grandTotal - paidAmount, 0);
+  return (
+    <section className="bill-summary md:col-span-4" aria-label="Bill summary">
+      <span className="bill-summary-kicker">Bill summary</span>
+      <div>
+        <small>Items</small>
+        <strong>{items.length || 1}</strong>
+      </div>
+      <div>
+        <small>Grand total</small>
+        <strong>{currency(grandTotal)}</strong>
+      </div>
+      <div>
+        <small>Paid amount</small>
+        <strong>{currency(paidAmount)}</strong>
+      </div>
+      <div>
+        <small>Pending amount</small>
+        <strong className={pendingAmount > 0 ? 'text-amber-700' : 'text-emerald-700'}>{currency(pendingAmount)}</strong>
+      </div>
+    </section>
+  );
+}
+
 function SkeletonPage({ type = 'list' }) {
   const rows = type === 'dashboard' ? 4 : 6;
   return (
     <section className={`skeleton-page ${type === 'dashboard' ? 'dashboard-skeleton' : ''}`} aria-hidden="true">
       {type === 'dashboard' && (
         <div className="skeleton-stats">
-          {[0, 1, 2, 3].map((item) => <div className="skeleton-card" key={item} />)}
+          {[0, 1, 2, 3, 4, 5].map((item) => <div className="skeleton-card" key={item} />)}
         </div>
       )}
       <div className="skeleton-panel">
@@ -509,6 +542,17 @@ function ConfirmationDialog({ dialog, saving, onCancel, onConfirm }) {
     </AnimatePresence>
   );
 }
+
+const createPager = (limit = 50) => ({ page: 1, limit, total: 0, totalPages: 1, loaded: false });
+
+const getPaginatedRows = (response) => (Array.isArray(response) ? response : (response?.data || []));
+
+const getPaginatedTotal = (response, rows, keys = []) => {
+  for (const key of keys) {
+    if (response?.[key] !== undefined) return Number(response[key] || 0);
+  }
+  return Number(response?.total || rows.length || 0);
+};
 
 function Login({ onLogin }) {
   const [form, setForm] = useState({ username: '', password: '' });
@@ -613,6 +657,7 @@ function App() {
   const [authReady, setAuthReady] = useState(() => !session);
   const [active, setActive] = useState(session?.role === 'customer' ? 'catalog' : 'dashboard');
   const [open, setOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
   const [tabLoading, setTabLoading] = useState(false);
@@ -635,6 +680,7 @@ function App() {
     pending: [],
     reports: null,
     catalog: [],
+    productResults: [],
     reference: { categories: [], colours: [], brands: [] },
     priceVisibility: {
       show_official_price_shopkeeper: true,
@@ -654,12 +700,42 @@ function App() {
   const [newReference, setNewReference] = useState({ type: '', name: '' });
   const [modelSearch, setModelSearch] = useState('');
   const [priceSearch, setPriceSearch] = useState('');
-  const [dashboardSearch, setDashboardSearch] = useState('');
+  const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
+  const [pendingFilters, setPendingFilters] = useState({ search: '', date: '' });
+  const [reportsFilters, setReportsFilters] = useState({ search: '', brand: '', category: '' });
+  const [globalSearch, setGlobalSearch] = useState('');
+  const [globalSearchFocused, setGlobalSearchFocused] = useState(false);
+  const [searchHydrated, setSearchHydrated] = useState(false);
   const [salesFilters, setSalesFilters] = useState({ search: '', date: '' });
   const [transferDrawerOpen, setTransferDrawerOpen] = useState(false);
   const [expandedPaymentId, setExpandedPaymentId] = useState('');
   const [editingProductId, setEditingProductId] = useState('');
   const deferredCatalogFilters = useDeferredValue(catalogFilters);
+  const deferredStockFilters = useDeferredValue(stockFilters);
+  const deferredShopkeeperStockSearch = useDeferredValue(shopkeeperStockSearch);
+  const deferredCustomerFilters = useDeferredValue(customerFilters);
+  const deferredSalesFilters = useDeferredValue(salesFilters);
+  const deferredPendingFilters = useDeferredValue(pendingFilters);
+  const deferredReportsFilters = useDeferredValue(reportsFilters);
+  const deferredPriceSearch = useDeferredValue(priceSearch);
+  const deferredModelSearch = useDeferredValue(modelSearch);
+  const [productPager, setProductPager] = useState(() => createPager(50));
+  const [stockPager, setStockPager] = useState(() => createPager(50));
+  const [batchPager, setBatchPager] = useState(() => createPager(50));
+  const [customerPager, setCustomerPager] = useState(() => createPager(50));
+  const [salesPager, setSalesPager] = useState(() => createPager(50));
+  const [pendingPager, setPendingPager] = useState(() => createPager(50));
+  const [reportsPager, setReportsPager] = useState(() => createPager(50));
+  const [productPageLoading, setProductPageLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState({
+    stock: false,
+    batches: false,
+    customers: false,
+    sales: false,
+    pending: false,
+    reports: false,
+  });
+  const globalSearchBlurRef = useRef(null);
 
   // Reset to Light Mode on mount
   useEffect(() => {
@@ -714,8 +790,10 @@ function App() {
   const role = session?.role || 'customer';
   const shopId = role === 'shopkeeper' ? session.shop_id : selectedShop;
   const nav = navByRole[role] || navByRole.customer;
+  const showGlobalSearch = active === 'dashboard';
   const needsSpecificShop = role === 'superadmin' && !shopId;
   const shopCountDependency = ['stock', 'stock-categories'].includes(active) ? data.shops.length : 0;
+  const activeProductSearch = active === 'prices' ? deferredPriceSearch : active === 'models' ? deferredModelSearch : '';
 
   const authedFetch = (path, options = {}) => api(path, options, token);
   const showToast = (message, tone = inferToastTone(message)) => {
@@ -736,13 +814,97 @@ function App() {
 
   useEffect(() => () => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    if (globalSearchBlurRef.current) clearTimeout(globalSearchBlurRef.current);
   }, []);
+
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      setGlobalSearchFocused(false);
+      setOpen(false);
+      setTransferDrawerOpen(false);
+      setDetailedShopId(null);
+      setSelectedProductDetails(null);
+      if (!saving) setConfirmDialog(null);
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [saving]);
+
+  useEffect(() => {
+    setSearchHydrated(false);
+  }, [shopId, role]);
+
   const requireShopSelection = (message = 'Select a specific shop first') => {
     if (role === 'superadmin' && !shopId) {
       showToast(message);
       return false;
     }
     return true;
+  };
+  const hydrateGlobalSearch = async () => {
+    if (role === 'customer' || searchHydrated || !token) return;
+    setSearchHydrated(true);
+    try {
+      const scoped = shopId ? `?shopId=${shopId}` : '';
+      const [customers, sales] = await Promise.all([
+        authedFetch(`/customers${scoped}`),
+        authedFetch(`/sales${scoped}`),
+      ]);
+      setData((prev) => ({ ...prev, customers, sales }));
+    } catch {
+      setSearchHydrated(false);
+    }
+  };
+  const closeGlobalSearch = () => {
+    if (globalSearchBlurRef.current) clearTimeout(globalSearchBlurRef.current);
+    globalSearchBlurRef.current = setTimeout(() => setGlobalSearchFocused(false), 120);
+  };
+  const handleGlobalSearchSelect = (result) => {
+    if (globalSearchBlurRef.current) clearTimeout(globalSearchBlurRef.current);
+    setGlobalSearch('');
+    setGlobalSearchFocused(false);
+    setOpen(false);
+
+    if (result.kind === 'product') {
+      const nextQuery = productName(result.item);
+      setModelSearch(nextQuery);
+      setPriceSearch(nextQuery);
+      if (role === 'customer') {
+        setCatalogFilters((prev) => ({ ...prev, search: nextQuery }));
+        setActive('catalog');
+      } else {
+        setActive('models');
+      }
+      setSelectedProductDetails(result.item);
+      return;
+    }
+
+    if (result.kind === 'brand') {
+      setStockFilters((prev) => ({ ...prev, brand: result.title, search: '' }));
+      setCatalogFilters((prev) => ({ ...prev, brand: result.title, search: '' }));
+      setActive(role === 'customer' ? 'catalog' : 'stock-categories');
+      if (role !== 'customer') setStockCategoryPage('__all__');
+      return;
+    }
+
+    if (result.kind === 'customer') {
+      if (role === 'superadmin' && result.item?.shop_id) setSelectedShop(String(result.item.shop_id));
+      setActive('customers');
+      return;
+    }
+
+    if (result.kind === 'sale') {
+      if (role === 'superadmin' && result.item?.shop_id) setSelectedShop(String(result.item.shop_id));
+      setSalesFilters({ search: result.title, date: '' });
+      setActive('sales');
+      return;
+    }
+
+    if (result.kind === 'shop') {
+      if (role === 'superadmin') setSelectedShop(String(result.item.id));
+      setActive('dashboard');
+    }
   };
   const openStockCategoriesHub = () => {
     setStockCategoryPage(null);
@@ -763,6 +925,207 @@ function App() {
     const message = error?.message || fallback;
     setLoadError(message);
     showToast(message);
+  };
+
+  const productSearchForTab = (tab = active) => {
+    if (tab === 'prices') return priceSearch;
+    if (tab === 'models') return modelSearch;
+    return '';
+  };
+
+  const updateProductPage = (response, fallbackPage = 1) => {
+    const rows = Array.isArray(response) ? response : (response?.data || []);
+    setData((prev) => ({ ...prev, productResults: rows }));
+    setProductPager((prev) => ({
+      ...prev,
+      page: Number(response?.page || fallbackPage),
+      limit: Number(response?.limit || prev.limit),
+      total: Number(response?.totalProducts ?? response?.total ?? rows.length),
+      totalPages: Math.max(Number(response?.totalPages || 1), 1),
+      loaded: true,
+    }));
+  };
+
+  const updatePagerFromResponse = (setPager, response, fallbackPage, rows, totalKeys = []) => {
+    setPager((prev) => ({
+      ...prev,
+      page: Number(response?.page || fallbackPage || 1),
+      limit: Number(response?.limit || prev.limit),
+      total: getPaginatedTotal(response, rows, totalKeys),
+      totalPages: Math.max(Number(response?.totalPages || 1), 1),
+      loaded: true,
+    }));
+  };
+
+  const scopedParams = (currentShop = shopId) => {
+    const params = new URLSearchParams();
+    const effectiveShopId = currentShop || (role === 'shopkeeper' ? session?.shop_id : '');
+    if (effectiveShopId) params.set('shopId', String(effectiveShopId));
+    return params;
+  };
+
+  const applyStockQueryParams = (params, filters = stockFilters, searchOverride = '') => {
+    const cleanSearch = String(searchOverride || filters.search || '').trim();
+    if (cleanSearch) params.set('search', cleanSearch);
+    ['brand', 'category', 'colour', 'status', 'batch', 'shopkeeperId', 'ownership'].forEach((key) => {
+      if (filters[key]) params.set(key, String(filters[key]));
+    });
+    return params;
+  };
+
+  const loadStockPage = async ({
+    stockPage = stockPager.page,
+    batchPage = batchPager.page,
+    currentShop = shopId,
+    filters = stockFilters,
+    search = '',
+  } = {}) => {
+    if (!token || role === 'customer') return;
+    setPageLoading((prev) => ({ ...prev, stock: true, batches: true }));
+    try {
+      const stockParams = applyStockQueryParams(scopedParams(currentShop), filters, search);
+      stockParams.set('page', String(stockPage));
+      stockParams.set('limit', String(stockPager.limit));
+      const batchParams = applyStockQueryParams(scopedParams(currentShop), filters, search);
+      batchParams.set('page', String(batchPage));
+      batchParams.set('limit', String(batchPager.limit));
+      const [stockResponse, batchResponse, shopkeepers] = await Promise.all([
+        authedFetch(`/stock?${stockParams.toString()}`),
+        authedFetch(`/inventory-batches?${batchParams.toString()}`),
+        role === 'superadmin' && !data.shopkeepers.length ? authedFetch('/shopkeepers') : Promise.resolve(data.shopkeepers),
+      ]);
+      const stockRows = getPaginatedRows(stockResponse);
+      const batchRows = getPaginatedRows(batchResponse);
+      setData((prev) => ({ ...prev, stock: stockRows, batches: batchRows, shopkeepers }));
+      updatePagerFromResponse(setStockPager, stockResponse, stockPage, stockRows, ['totalStockItems']);
+      updatePagerFromResponse(setBatchPager, batchResponse, batchPage, batchRows, ['totalBatches']);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load stock right now.');
+    } finally {
+      setPageLoading((prev) => ({ ...prev, stock: false, batches: false }));
+    }
+  };
+
+  const loadCustomersPage = async ({ page = customerPager.page, currentShop = shopId, filters = customerFilters } = {}) => {
+    if (!token || role === 'customer') return;
+    setPageLoading((prev) => ({ ...prev, customers: true }));
+    try {
+      const params = scopedParams(currentShop);
+      params.set('page', String(page));
+      params.set('limit', String(customerPager.limit));
+      if (filters.search.trim()) params.set('search', filters.search.trim());
+      if (filters.status) params.set('status', filters.status);
+      const response = await authedFetch(`/customers?${params.toString()}`);
+      const rows = getPaginatedRows(response);
+      setData((prev) => ({ ...prev, customers: rows }));
+      updatePagerFromResponse(setCustomerPager, response, page, rows, ['totalCustomers']);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load customers right now.');
+    } finally {
+      setPageLoading((prev) => ({ ...prev, customers: false }));
+    }
+  };
+
+  const loadSalesPage = async ({ page = salesPager.page, currentShop = shopId, filters = salesFilters } = {}) => {
+    if (!token || role === 'customer') return;
+    setPageLoading((prev) => ({ ...prev, sales: true }));
+    try {
+      const saleLocation = currentShop || (role === 'shopkeeper' ? session?.shop_id : '');
+      const params = scopedParams(saleLocation);
+      params.set('page', String(page));
+      params.set('limit', String(salesPager.limit));
+      if (filters.search.trim()) params.set('search', filters.search.trim());
+      if (filters.date) params.set('date', filters.date);
+      const dependencyParams = scopedParams(saleLocation);
+      dependencyParams.set('page', '1');
+      dependencyParams.set('limit', '100');
+      const [stockResponse, batchResponse, customerResponse, salesResponse] = await Promise.all([
+        authedFetch(`/stock?${dependencyParams.toString()}`),
+        authedFetch(`/inventory-batches?${dependencyParams.toString()}`),
+        authedFetch(`/customers?${dependencyParams.toString()}`),
+        authedFetch(`/sales?${params.toString()}`),
+      ]);
+      const salesRows = getPaginatedRows(salesResponse);
+      setData((prev) => ({
+        ...prev,
+        stock: getPaginatedRows(stockResponse),
+        batches: getPaginatedRows(batchResponse),
+        customers: getPaginatedRows(customerResponse),
+        sales: salesRows,
+      }));
+      updatePagerFromResponse(setSalesPager, salesResponse, page, salesRows, ['totalSales']);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load sales right now.');
+    } finally {
+      setPageLoading((prev) => ({ ...prev, sales: false }));
+    }
+  };
+
+  const loadPendingPage = async ({ page = pendingPager.page, currentShop = shopId, filters = pendingFilters } = {}) => {
+    if (!token || role === 'customer') return;
+    setPageLoading((prev) => ({ ...prev, pending: true }));
+    try {
+      const params = scopedParams(currentShop);
+      params.set('page', String(page));
+      params.set('limit', String(pendingPager.limit));
+      if (filters.search.trim()) params.set('search', filters.search.trim());
+      if (filters.date) params.set('date', filters.date);
+      const response = await authedFetch(`/pending-payments?${params.toString()}`);
+      const rows = getPaginatedRows(response);
+      setData((prev) => ({ ...prev, pending: rows }));
+      updatePagerFromResponse(setPendingPager, response, page, rows, ['totalPendingCustomers']);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load pending payments right now.');
+    } finally {
+      setPageLoading((prev) => ({ ...prev, pending: false }));
+    }
+  };
+
+  const loadReportsPage = async ({ page = reportsPager.page, currentShop = shopId, filters = reportsFilters } = {}) => {
+    if (!token || role === 'customer') return;
+    setPageLoading((prev) => ({ ...prev, reports: true }));
+    try {
+      const params = scopedParams(currentShop);
+      params.set('page', String(page));
+      params.set('limit', String(reportsPager.limit));
+      if (filters.search.trim()) params.set('search', filters.search.trim());
+      if (filters.brand) params.set('brand', filters.brand);
+      if (filters.category) params.set('category', filters.category);
+      const response = await authedFetch(`/reports?${params.toString()}`);
+      const availabilityResponse = response?.availability || {};
+      const availabilityRows = getPaginatedRows(availabilityResponse);
+      setData((prev) => ({
+        ...prev,
+        reports: {
+          ...response,
+          availability: availabilityRows,
+        },
+      }));
+      updatePagerFromResponse(setReportsPager, availabilityResponse, page, availabilityRows, ['totalAvailability']);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load reports right now.');
+    } finally {
+      setPageLoading((prev) => ({ ...prev, reports: false }));
+    }
+  };
+
+  const loadProductPage = async ({ tab = active, page = productPager.page, search = productSearchForTab(tab) } = {}) => {
+    if (!token || role === 'customer') return;
+    setProductPageLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(productPager.limit),
+      });
+      const cleanSearch = search.trim();
+      if (cleanSearch) params.set('search', cleanSearch);
+      const response = await authedFetch(`/products?${params.toString()}`);
+      updateProductPage(response, page);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load products right now.');
+    } finally {
+      setProductPageLoading(false);
+    }
   };
 
   const clearAuditLogs = () => {
@@ -823,7 +1186,7 @@ function App() {
 
   const loadTab = async (tab = active, currentShop = shopId) => {
     if (!session) return;
-    if ((tab === 'shops' && data.shops.length) || (['prices', 'models'].includes(tab) && role !== 'customer' && data.products.length)) {
+    if (tab === 'shops' && data.shops.length) {
       tabLoadSequenceRef.current += 1;
       setTabLoading(false);
       return;
@@ -837,47 +1200,45 @@ function App() {
       if (tab === 'dashboard') set('dashboard', await authedFetch(`/dashboard${scoped}`));
       if (tab === 'shops') set('shops', await authedFetch('/shops'));
       if (tab === 'shopkeepers') set('shopkeepers', await authedFetch('/shopkeepers'));
-      if (tab === 'prices') set('products', await authedFetch('/products'));
+      if (tab === 'prices') {
+        if (role !== 'customer') await loadProductPage({ tab, page: productPager.page });
+      }
       if (tab === 'models') {
         if (role === 'customer') set('catalog', await api('/catalog'));
-        else set('products', await authedFetch('/products'));
+        else await loadProductPage({ tab, page: productPager.page });
       }
       if (tab === 'stock' || tab === 'stock-categories') {
-        const targetShopIds = role === 'shopkeeper'
-          ? data.shops.filter((shop) => shop.location_type === 'warehouse' || String(shop.id) === String(session.shop_id)).map((shop) => shop.id)
-          : currentShop
-            ? [currentShop]
-            : data.shops.map((shop) => shop.id);
-        const [stockGroups, batchGroups, shopkeepers] = await Promise.all([
-          Promise.all(targetShopIds.map((id) => authedFetch(`/stock?shopId=${id}`))),
-          Promise.all(targetShopIds.map((id) => authedFetch(`/inventory-batches?shopId=${id}`))),
-          role === 'superadmin' ? authedFetch('/shopkeepers') : Promise.resolve(data.shopkeepers),
-        ]);
-        setData((prev) => ({ ...prev, stock: stockGroups.flat(), batches: batchGroups.flat(), shopkeepers }));
+        await loadStockPage({
+          stockPage: stockPager.page,
+          batchPage: batchPager.page,
+          currentShop,
+          filters: stockFilters,
+          search: role === 'shopkeeper' && tab === 'stock' ? shopkeeperStockSearch : stockFilters.search,
+        });
       }
-      if (tab === 'customers' && currentShop) {
-        const [stock, batches, customers, sales] = await Promise.all([
-          authedFetch(`/stock?shopId=${currentShop}`),
-          authedFetch(`/inventory-batches?shopId=${currentShop}`),
-          authedFetch(`/customers?shopId=${currentShop}`),
-          authedFetch(`/sales?shopId=${currentShop}`),
+      if (tab === 'customers') {
+        const dependencyParams = scopedParams(currentShop);
+        dependencyParams.set('page', '1');
+        dependencyParams.set('limit', '100');
+        const [stockResponse, batchResponse, salesResponse] = await Promise.all([
+          authedFetch(`/stock?${dependencyParams.toString()}`),
+          authedFetch(`/inventory-batches?${dependencyParams.toString()}`),
+          authedFetch(`/sales?${dependencyParams.toString()}`),
         ]);
-        setData((prev) => ({ ...prev, stock, batches, customers, sales }));
+        setData((prev) => ({
+          ...prev,
+          stock: getPaginatedRows(stockResponse),
+          batches: getPaginatedRows(batchResponse),
+          sales: getPaginatedRows(salesResponse),
+        }));
+        await loadCustomersPage({ page: customerPager.page, currentShop, filters: customerFilters });
       }
       if (tab === 'sales') {
-        const saleLocation = currentShop || (role === 'shopkeeper' ? session.shop_id : '');
-        const salesHistoryScope = role === 'superadmin' ? '' : (saleLocation ? `?shopId=${saleLocation}` : '');
-        const [stockGroups, batchGroups, customers, sales] = await Promise.all([
-          saleLocation ? Promise.all([authedFetch(`/stock?shopId=${saleLocation}`)]) : Promise.all(data.shops.map((shop) => authedFetch(`/stock?shopId=${shop.id}`))),
-          saleLocation ? Promise.all([authedFetch(`/inventory-batches?shopId=${saleLocation}`)]) : Promise.all(data.shops.map((shop) => authedFetch(`/inventory-batches?shopId=${shop.id}`))),
-          authedFetch(`/customers${saleLocation ? `?shopId=${saleLocation}` : ''}`),
-          authedFetch(`/sales${salesHistoryScope}`),
-        ]);
-        setData((prev) => ({ ...prev, stock: stockGroups.flat(), batches: batchGroups.flat(), customers, sales }));
+        await loadSalesPage({ page: salesPager.page, currentShop, filters: salesFilters });
       }
       if (tab === 'requests') set('requests', await authedFetch(`/stock-requests${scoped}`));
-      if (tab === 'payments') set('pending', groupPendingPayments(await authedFetch(`/pending-payments${scoped}`)));
-      if (tab === 'reports') set('reports', await authedFetch(`/reports${scoped}`));
+      if (tab === 'payments') await loadPendingPage({ page: pendingPager.page, currentShop, filters: pendingFilters });
+      if (tab === 'reports') await loadReportsPage({ page: reportsPager.page, currentShop, filters: reportsFilters });
       if (tab === 'catalog') set('catalog', await api(`/catalog?${new URLSearchParams(catalogFilters).toString()}`));
     } catch (error) {
       handleLoadError(error, 'Unable to refresh this page right now.');
@@ -997,6 +1358,79 @@ function App() {
   useEffect(() => {
     if (session && authReady) loadTab(active, shopId);
   }, [active, selectedShop, session?.token, authReady, shopCountDependency]);
+
+  useEffect(() => {
+    if (!session || !authReady || role === 'customer' || !['prices', 'models'].includes(active)) return;
+    loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch });
+  }, [active, activeProductSearch, productPager.page, productPager.limit, session?.token, authReady]);
+
+  useEffect(() => {
+    if (!['stock', 'stock-categories'].includes(active)) return;
+    setStockPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+    setBatchPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [deferredStockFilters, deferredShopkeeperStockSearch]);
+
+  useEffect(() => {
+    if (active !== 'customers') return;
+    setCustomerPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [deferredCustomerFilters]);
+
+  useEffect(() => {
+    if (active !== 'sales') return;
+    setSalesPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [deferredSalesFilters]);
+
+  useEffect(() => {
+    if (active !== 'payments') return;
+    setPendingPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [deferredPendingFilters]);
+
+  useEffect(() => {
+    if (active !== 'reports') return;
+    setReportsPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [deferredReportsFilters]);
+
+  useEffect(() => {
+    if (!session || !authReady || role === 'customer' || !['stock', 'stock-categories'].includes(active)) return;
+    const search = role === 'shopkeeper' && active === 'stock' ? deferredShopkeeperStockSearch : deferredStockFilters.search;
+    loadStockPage({
+      stockPage: stockPager.page,
+      batchPage: batchPager.page,
+      filters: deferredStockFilters,
+      search,
+    });
+  }, [
+    active,
+    selectedShop,
+    deferredStockFilters,
+    deferredShopkeeperStockSearch,
+    stockPager.page,
+    stockPager.limit,
+    batchPager.page,
+    batchPager.limit,
+    session?.token,
+    authReady,
+  ]);
+
+  useEffect(() => {
+    if (!session || !authReady || role === 'customer' || active !== 'customers') return;
+    loadCustomersPage({ page: customerPager.page, filters: deferredCustomerFilters });
+  }, [active, selectedShop, deferredCustomerFilters, customerPager.page, customerPager.limit, session?.token, authReady]);
+
+  useEffect(() => {
+    if (!session || !authReady || role === 'customer' || active !== 'sales') return;
+    loadSalesPage({ page: salesPager.page, filters: deferredSalesFilters });
+  }, [active, selectedShop, deferredSalesFilters, salesPager.page, salesPager.limit, session?.token, authReady]);
+
+  useEffect(() => {
+    if (!session || !authReady || role === 'customer' || active !== 'payments') return;
+    loadPendingPage({ page: pendingPager.page, filters: deferredPendingFilters });
+  }, [active, selectedShop, deferredPendingFilters, pendingPager.page, pendingPager.limit, session?.token, authReady]);
+
+  useEffect(() => {
+    if (!session || !authReady || role === 'customer' || active !== 'reports') return;
+    loadReportsPage({ page: reportsPager.page, filters: deferredReportsFilters });
+  }, [active, selectedShop, deferredReportsFilters, reportsPager.page, reportsPager.limit, session?.token, authReady]);
 
   const login = (nextSession) => {
     const normalizedSession = normalizeSession(nextSession);
@@ -2178,33 +2612,20 @@ function App() {
     }
   };
 
-  const modelItems = (role === 'customer' ? data.catalog : data.products).filter((item) => {
+  const productPageItems = role === 'customer'
+    ? data.catalog
+    : productPager.loaded
+      ? data.productResults
+      : data.products;
+  const modelItems = role === 'customer' ? data.catalog.filter((item) => {
     const query = modelSearch.trim().toLowerCase();
     if (!query) return true;
     return [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
-  });
-  const priceItems = data.products.filter((item) => {
-    const query = priceSearch.trim().toLowerCase();
-    if (!query) return true;
-    return [
-      item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description,
-      ...(item.colours || []), item.official_price, item.sale_price, item.retail_price, item.purchase_price, item.wholesale_price,
-    ].filter((value) => value !== null && value !== undefined).some((value) => String(value).toLowerCase().includes(query));
-  });
-  const dashboardModelItems = (data.dashboard?.modelAvailability || []).filter((item) => {
-    const query = dashboardSearch.trim().toLowerCase();
-    return query && [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description, item.available_locations]
-      .filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
-  });
-  const visibleSales = data.sales.filter((sale) => {
-    const query = salesFilters.search.trim().toLowerCase();
-    const matchesSearch = !query || [sale.customer_name, sale.product_short_name, sale.product_name, sale.brand, sale.category, sale.shop_name, sale.price_type, sale.payment_mode]
-      .filter(Boolean).some((value) => String(value).toLowerCase().includes(query));
-    const matchesDate = !salesFilters.date || String(sale.sale_date || '').slice(0, 10) === salesFilters.date;
-    return matchesSearch && matchesDate;
-  });
+  }) : productPageItems;
+  const priceItems = productPageItems;
+  const visibleSales = data.sales;
 
   const visibleCatalog = data.catalog.filter((product) => {
     const query = deferredCatalogFilters.search.trim().toLowerCase();
@@ -2220,24 +2641,7 @@ function App() {
     return matchesSearch && matchesShop && matchesBrand && matchesCategory && matchesColour;
   });
 
-  const visibleBatches = data.batches.filter((batch) => {
-    const query = stockFilters.search.trim().toLowerCase();
-    const matchesSearch = !query || [batch.short_name, batch.full_model_list, batch.name, batch.brand, batch.category, batch.colour, batch.assigned_user_name]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-    const matchesBrand = !stockFilters.brand || sameText(batch.brand, stockFilters.brand);
-    const matchesCategory = !stockFilters.category || sameText(batch.category, stockFilters.category);
-    const matchesColour = !stockFilters.colour || sameText(batch.colour, stockFilters.colour);
-    const matchesStatus = !stockFilters.status
-      || (stockFilters.status === 'in_stock' ? Number(batch.quantity_remaining) > 0 : Number(batch.quantity_remaining) === 0);
-    const matchesBatch = !stockFilters.batch || String(batch.id) === String(stockFilters.batch);
-    const matchesShopkeeper = !stockFilters.shopkeeperId || String(batch.assigned_user_id) === String(stockFilters.shopkeeperId);
-    const matchesOwnership = !stockFilters.ownership
-      || (stockFilters.ownership === 'owner' && !batch.assigned_user_id)
-      || (stockFilters.ownership === 'shopkeeper' && Boolean(batch.assigned_user_id))
-      || (stockFilters.ownership === 'mine' && String(batch.assigned_user_id) === String(session.id));
-    return matchesSearch && matchesBrand && matchesCategory && matchesColour && matchesStatus && matchesBatch && matchesShopkeeper && matchesOwnership;
-  });
+  const visibleBatches = data.batches;
 
   const combinedStock = combineStockRows(data.stock);
   const stockWithOwnership = combinedStock.map((item) => {
@@ -2247,49 +2651,16 @@ function App() {
     const myBatches = shopkeeperBatches.filter((batch) => String(batch.assigned_user_id) === String(session.id));
     return {
       ...item,
-      owner_quantity: sumBatchQuantity(ownerBatches),
-      shopkeeper_quantity: sumBatchQuantity(shopkeeperBatches),
-      my_quantity: sumBatchQuantity(myBatches),
+      owner_quantity: item.owner_quantity !== undefined ? Number(item.owner_quantity || 0) : sumBatchQuantity(ownerBatches),
+      shopkeeper_quantity: item.shopkeeper_quantity !== undefined ? Number(item.shopkeeper_quantity || 0) : sumBatchQuantity(shopkeeperBatches),
+      my_quantity: item.my_quantity !== undefined ? Number(item.my_quantity || 0) : sumBatchQuantity(myBatches),
       owner_batch_count: ownerBatches.filter((batch) => Number(batch.quantity_remaining) > 0).length,
       shopkeeper_batch_count: shopkeeperBatches.filter((batch) => Number(batch.quantity_remaining) > 0).length,
       my_batch_count: myBatches.filter((batch) => Number(batch.quantity_remaining) > 0).length,
     };
   });
-  const shopkeeperStockItems = stockWithOwnership.filter((item) => {
-    const query = shopkeeperStockSearch.trim().toLowerCase();
-    return !query || [productName(item), fullModelList(item), item.brand, item.category]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-  });
-  const hasBatchScopedStockFilter = Boolean(stockFilters.colour || stockFilters.batch || stockFilters.shopkeeperId || stockFilters.ownership);
-  const visibleStock = stockWithOwnership
-    .filter((item) => {
-      const query = stockFilters.search.trim().toLowerCase();
-      const matchesSearch = !query || [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description, item.shop_name]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
-      return matchesSearch
-      && (!stockFilters.brand || sameText(item.brand, stockFilters.brand))
-      && (!stockFilters.category || sameText(item.category, stockFilters.category));
-    })
-    .map((item) => {
-      if (!hasBatchScopedStockFilter) return item;
-      const matchingBatches = visibleBatches.filter((batch) => batchBelongsToStockItem(batch, item));
-      const ownerBatches = matchingBatches.filter((batch) => !batch.assigned_user_id);
-      const shopkeeperBatches = matchingBatches.filter((batch) => Boolean(batch.assigned_user_id));
-      const myBatches = shopkeeperBatches.filter((batch) => String(batch.assigned_user_id) === String(session.id));
-      return {
-        ...item,
-        quantity: sumBatchQuantity(matchingBatches),
-        batch_count: matchingBatches.filter((batch) => Number(batch.quantity_remaining) > 0).length,
-        matching_batch_count: matchingBatches.length,
-        owner_quantity: sumBatchQuantity(ownerBatches),
-        shopkeeper_quantity: sumBatchQuantity(shopkeeperBatches),
-        my_quantity: sumBatchQuantity(myBatches),
-      };
-    })
-    .filter((item) => (!hasBatchScopedStockFilter || item.matching_batch_count > 0)
-      && (!stockFilters.status || (stockFilters.status === 'in_stock' ? Number(item.quantity) > 0 : Number(item.quantity) === 0)));
+  const shopkeeperStockItems = stockWithOwnership;
+  const visibleStock = stockWithOwnership;
   const categoryStats = [
     {
       name: '',
@@ -2314,25 +2685,102 @@ function App() {
     ? categoryStats.find((category) => stockCategoryPage === '__all__' ? !category.name : sameText(category.name, stockCategoryPage))
     : null;
   const activeCategoryFilterCount = ['search', 'brand', 'colour', 'status', 'ownership'].filter((key) => Boolean(stockFilters[key])).length;
-  const ownerInventoryQuantity = sumBatchQuantity(data.batches.filter((batch) => !batch.assigned_user_id));
-  const assignedInventoryQuantity = sumBatchQuantity(data.batches.filter((batch) => Boolean(batch.assigned_user_id)));
-  const myInventoryQuantity = sumBatchQuantity(data.batches.filter((batch) => String(batch.assigned_user_id) === String(session.id)));
-  const warehouseInventoryQuantity = sumBatchQuantity(data.batches.filter((batch) => String(batch.shop_id) === String(data.warehouse?.id)));
-  const accessibleInventoryQuantity = sumBatchQuantity(data.batches);
+  const ownerInventoryQuantity = stockWithOwnership.reduce((sum, item) => sum + Number(item.owner_quantity || 0), 0);
+  const assignedInventoryQuantity = stockWithOwnership.reduce((sum, item) => sum + Number(item.shopkeeper_quantity || 0), 0);
+  const myInventoryQuantity = stockWithOwnership.reduce((sum, item) => sum + Number(item.my_quantity || 0), 0);
+  const warehouseInventoryQuantity = stockWithOwnership
+    .filter((item) => item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id))
+    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const accessibleInventoryQuantity = stockWithOwnership.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   const lowStockAlerts = combineLowStockAlerts(data.dashboard?.lowStock);
+  const dashboardAvailability = data.dashboard?.modelAvailability || [];
+  const dashboardWarehouseStock = dashboardAvailability.reduce((sum, item) => sum + Number(item.warehouse_stock || 0), 0);
+  const dashboardShopCount = data.dashboard?.shopWise?.filter((shop) => shop.location_type !== 'warehouse').length || data.dashboard?.totals?.total_shops || 0;
+  const globalQuery = globalSearch.trim().toLowerCase();
+  const globalSearchResults = (() => {
+    if (!globalQuery) return [];
+    const results = [];
+    const matches = (values) => values
+      .filter((value) => value !== null && value !== undefined)
+      .some((value) => String(value).toLowerCase().includes(globalQuery));
+    const addResult = (result, values) => {
+      if (results.length >= 10 || !matches(values)) return;
+      results.push(result);
+    };
+    const productsById = new Map();
+    [...dashboardAvailability, ...(role === 'customer' ? data.catalog : data.products)].forEach((item) => {
+      if (!item?.id) return;
+      productsById.set(String(item.id), { ...productsById.get(String(item.id)), ...item });
+    });
+    [...productsById.values()].forEach((item) => addResult({
+      kind: 'product',
+      type: 'Product',
+      title: productName(item),
+      meta: joinUniqueText([item.brand, item.category, item.available_locations], 'Model details'),
+      icon: Smartphone,
+      item,
+    }, [productName(item), fullModelList(item), item.brand, item.category, item.description, item.available_locations]));
+    const brandNames = [
+      ...data.reference.brands.map((brand) => brand.name),
+      ...data.products.map((product) => product.brand),
+      ...data.catalog.map((product) => product.brand),
+    ].filter(Boolean);
+    [...new Set(brandNames.map((name) => String(name).trim()).filter(Boolean))].forEach((brand) => addResult({
+      kind: 'brand',
+      type: 'Brand',
+      title: brand,
+      meta: 'Filter inventory and catalog',
+      icon: Package,
+      item: { brand },
+    }, [brand]));
+    data.customers.forEach((customer) => addResult({
+      kind: 'customer',
+      type: 'Customer',
+      title: customer.name,
+      meta: joinUniqueText([customer.mobile, customer.shop_name, currency(customer.pending)], 'Customer account'),
+      icon: Users,
+      item: customer,
+    }, [customer.name, customer.mobile, customer.address, customer.shop_name, customer.pending]));
+    data.sales.forEach((sale) => addResult({
+      kind: 'sale',
+      type: 'Sale',
+      title: sale.customer_name || 'Walk-in customer',
+      meta: joinUniqueText([productName(sale), sale.shop_name, sale.payment_mode, currency(sale.total_amount)], 'Sale record'),
+      icon: ReceiptText,
+      item: sale,
+    }, [sale.customer_name, sale.mobile, productName(sale), sale.product_name, sale.brand, sale.category, sale.shop_name, sale.payment_mode]));
+    data.shops.forEach((shop) => addResult({
+      kind: 'shop',
+      type: shop.location_type === 'warehouse' ? 'Warehouse' : 'Shop',
+      title: shop.name,
+      meta: joinUniqueText([shop.area, shop.phone], 'Location'),
+      icon: Store,
+      item: shop,
+    }, [shop.name, shop.area, shop.address, shop.phone, shop.location_type]));
+    return results;
+  })();
 
   if (!authReady) return <SkeletonPage type="dashboard" />;
   if (!session) return <Login onLogin={login} />;
 
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${open ? 'show' : ''}`}>
+    <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <aside className={`sidebar ${open ? 'show' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-head">
           <div className="brand-mark"><Store size={23} /></div>
-          <div>
+          <div className="sidebar-brand-copy">
             <strong>AS Store</strong>
             <span>{role === 'superadmin' ? 'Owner Control' : role === 'shopkeeper' ? session.shop_name : 'Catalog'}</span>
           </div>
+          <button
+            type="button"
+            className="icon sidebar-collapse desktop-only"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            onClick={() => setSidebarCollapsed((value) => !value)}
+          >
+            <ChevronLeft size={17} />
+          </button>
           <button type="button" className="icon mobile-only" onClick={() => setOpen(false)}><X size={18} /></button>
         </div>
         <nav>
@@ -2345,6 +2793,7 @@ function App() {
                 type="button" 
                 key={id} 
                 className={`relative ${isActive ? 'active' : ''}`} 
+                title={label}
                 onClick={() => { if (id === 'stock-categories') openStockCategoriesHub(); else setActive(id); setOpen(false); }}
               >
                 {isActive && (
@@ -2361,7 +2810,7 @@ function App() {
           })}
         </nav>
         <Magnetic className="w-full mt-auto">
-          <button type="button" className="logout" onClick={(event) => { event.preventDefault(); logout(); }}><LogOut size={18} /> Sign out</button>
+          <button type="button" className="logout" title="Sign out" onClick={(event) => { event.preventDefault(); logout(); }}><LogOut size={18} /> <span>Sign out</span></button>
         </Magnetic>
       </aside>
 
@@ -2373,6 +2822,70 @@ function App() {
             <h1>{active.replace('-', ' ')}</h1>
             <p>{role === 'shopkeeper' ? `${session.name} - ${session.shop_name}` : role === 'superadmin' ? 'All branch controls in one place' : 'Browse prices and availability'}</p>
           </div>
+          {showGlobalSearch && (
+            <div className="global-search" onBlur={closeGlobalSearch}>
+              <div className="searchbox topbar-search">
+                <Search size={18} />
+                <input
+                  aria-label="Global search"
+                  placeholder="Search products, customers, sales, shops"
+                  value={globalSearch}
+                  onFocus={() => {
+                    setGlobalSearchFocused(true);
+                    hydrateGlobalSearch();
+                  }}
+                  onChange={(event) => {
+                    setGlobalSearch(event.target.value);
+                    setGlobalSearchFocused(true);
+                  }}
+                />
+                {globalSearch && (
+                  <button type="button" className="search-clear" aria-label="Clear search" onMouseDown={(event) => event.preventDefault()} onClick={() => setGlobalSearch('')}>
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              <AnimatePresence>
+                {globalSearchFocused && globalSearch && (
+                  <motion.div
+                    className="global-search-popover"
+                    initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    {globalSearchResults.map((result, index) => {
+                      const ResultIcon = result.icon;
+                      return (
+                        <button
+                          type="button"
+                          className="global-search-result"
+                          key={`${result.kind}-${result.item?.id || result.title}-${index}`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            handleGlobalSearchSelect(result);
+                          }}
+                        >
+                          <span className={`global-result-icon ${result.kind}`}><ResultIcon size={16} /></span>
+                          <span>
+                            <b>{result.title}</b>
+                            <small>{result.meta}</small>
+                          </span>
+                          <em>{result.type}</em>
+                        </button>
+                      );
+                    })}
+                    {!globalSearchResults.length && (
+                      <div className="global-search-empty">
+                        <Search size={16} />
+                        <span>No matching product, customer, sale, or shop found.</span>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
           <div className="topbar-actions">
             <div className="user-pill">
               <ShieldCheck size={16} />
@@ -2418,12 +2931,11 @@ function App() {
             <PageWrapper activeKey="dashboard" key="dashboard">
               <section className="space">
                 <div className="stats-grid">
-                  <StatCard icon={Building2} label="Total shops" value={data.dashboard.totals.total_shops} />
-                  <StatCard icon={Package} label="Total stock" value={data.dashboard.totals.total_stock} tone="green" />
                   <StatCard
                     icon={ShoppingBag}
                     label="Today's sales"
                     value={currency(data.dashboard.totals.today_sales)}
+                    helper="Collected across active locations"
                     tone="cyan"
                     sparklineTone="green"
                     trend={data.dashboard.trends?.sales || trendFromValue(data.dashboard.totals.today_sales)}
@@ -2432,44 +2944,40 @@ function App() {
                     icon={CreditCard}
                     label="Pending payments"
                     value={currency(data.dashboard.totals.pending_payments)}
+                    helper="Open customer balances"
                     tone="amber"
                     sparklineTone="amber"
                     trend={data.dashboard.trends?.pending || trendFromValue(data.dashboard.totals.pending_payments, 'pending')}
                   />
+                  <StatCard
+                    icon={Package}
+                    label="Available stock"
+                    value={data.dashboard.totals.total_stock}
+                    helper="Sellable units in scope"
+                    tone="green"
+                  />
+                  <StatCard
+                    icon={Building2}
+                    label="Warehouse stock"
+                    value={dashboardWarehouseStock}
+                    helper="Main warehouse units"
+                    tone="blue"
+                  />
+                  <StatCard
+                    icon={AlertTriangle}
+                    label="Low stock alerts"
+                    value={lowStockAlerts.length}
+                    helper="Needs attention soon"
+                    tone="amber"
+                  />
+                  <StatCard
+                    icon={Store}
+                    label="Shop performance"
+                    value={`${dashboardShopCount} locations`}
+                    helper="Ranked below by sales and dues"
+                    tone="cyan"
+                  />
                 </div>
-                <section className="panel dashboard-model-search">
-                  <div className="dashboard-search-heading">
-                    <div className="dashboard-search-heading-copy">
-                      <span className="dashboard-search-icon"><Package size={21} /></span>
-                      <div><span className="eyebrow">Inventory lookup</span><h2>Find stock across Warehouse and shops</h2><p>Search a model to instantly see its location, quantity, and sale price.</p></div>
-                    </div>
-                    {dashboardSearch && <span className="status-badge stock-ok">{dashboardModelItems.length} matches</span>}
-                  </div>
-                  <div className="searchbox"><Search size={18} /><input placeholder="Search model, brand, category, shop, or Warehouse" value={dashboardSearch} onChange={(event) => setDashboardSearch(event.target.value)} /></div>
-                  {dashboardSearch && (
-                    <div className="dashboard-search-results">
-                      {dashboardModelItems.map((product) => (
-                        <div className="dashboard-search-result" key={product.id}>
-                          <div className="inventory-primary dashboard-product-info">
-                            <div className="w-10 h-10 rounded-lg bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0"><Smartphone size={18} /></div>
-                            <span>
-                              <b>{productName(product)}</b>
-                              <small><strong>Brand:</strong> {product.brand || 'Not set'} · <strong>Category:</strong> {product.category || 'Uncategorized'}</small>
-                              <small><strong>Description:</strong> {product.description || 'No description provided'}</small>
-                              <small title={fullModelList(product)}><strong>Compatible:</strong> {fullModelList(product) || 'Not specified'}</small>
-                            </span>
-                          </div>
-                          <span className="inventory-metric"><small>Warehouse</small><strong>{product.warehouse_stock} pcs</strong></span>
-                          <span className="inventory-metric"><small>All stock</small><strong>{product.available_stock} pcs</strong></span>
-                          <span className="inventory-metric"><small>Available at</small><strong title={product.available_locations}>{product.available_locations || 'Out of stock'}</strong></span>
-                          <span className="inventory-metric"><small>Sale price</small><strong>{priceLabel(product.sale_price)}</strong></span>
-                          <button className="soft" type="button" onClick={() => setSelectedProductDetails(product)}>View details</button>
-                        </div>
-                      ))}
-                      {!dashboardModelItems.length && <Empty title="No matching model or stock found." />}
-                    </div>
-                  )}
-                </section>
                 <div className="two-col">
                   <section className="panel performance-panel">
                     <h2>Shop performance</h2>
@@ -2682,150 +3190,56 @@ function App() {
 
           {active === 'prices' && (
             <PageWrapper activeKey="prices" key="prices">
-              <section className="space">
-                {role === 'superadmin' && (
-                  <FormPanel title={editingProductId ? 'Edit product and prices' : 'Add product and prices'} action={saving ? 'Saving...' : editingProductId ? 'Update product' : 'Add product'} onSubmit={submitProduct} disabled={saving}>
-                    <Input label="Short display name" className="md:col-span-2" value={forms.product.short_name} onChange={(v) => setForms({ ...forms, product: { ...forms.product, short_name: v } })} />
-                    <Input label="Full compatible models" className="md:col-span-2" value={forms.product.full_model_list} onChange={(v) => setForms({ ...forms, product: { ...forms.product, full_model_list: v } })} />
-                    <Input label="Brand" className="md:col-span-1" value={forms.product.brand} onChange={(v) => setForms({ ...forms, product: { ...forms.product, brand: v } })} />
-                    <Select
-                      label="Product Category"
-                      className="md:col-span-1"
-                      value={forms.product.category}
-                      onChange={(v) => v === '__new__' ? setNewReference({ type: 'categories', name: '' }) : setForms({ ...forms, product: { ...forms.product, category: v } })}
-                      options={[...data.reference.categories.map((item) => [item.name, item.name]), ['__new__', '+ Add New Category']]}
-                    />
-                    {newReference.type === 'categories' && (
-                      <div className="inline-reference-control md:col-span-2">
-                        <Input label="New category" value={newReference.name} onChange={(name) => setNewReference({ type: 'categories', name })} />
-                        <button className="soft" type="button" onClick={() => addReferenceOption('categories', newReference.name)}>Add category</button>
-                      </div>
-                    )}
-                    <Input label="Purchase price" type="number" className="md:col-span-1" value={forms.product.purchase_price} onChange={(v) => setForms({ ...forms, product: { ...forms.product, purchase_price: v } })} />
-                    <Input label="Sale price" type="number" className="md:col-span-1" value={forms.product.sale_price} onChange={(v) => setForms({ ...forms, product: { ...forms.product, sale_price: v } })} />
-                    <Input label="Wholesale price" type="number" className="md:col-span-1" value={forms.product.wholesale_price} onChange={(v) => setForms({ ...forms, product: { ...forms.product, wholesale_price: v } })} />
-                    {!editingProductId && <Input label="Opening stock" type="number" className="md:col-span-1" value={forms.product.opening_stock} onChange={(v) => setForms({ ...forms, product: { ...forms.product, opening_stock: v } })} />}
-                    <Input label="Description" className="md:col-span-4" value={forms.product.description} onChange={(v) => setForms({ ...forms, product: { ...forms.product, description: v } })} />
-                    <Select
-                      label="Add Colour"
-                      className="md:col-span-1"
-                      value=""
-                      onChange={(v) => {
-                        if (v === '__new__') return setNewReference({ type: 'colours', name: '' });
-                        const selected = forms.product.colours.split(',').map((item) => item.trim()).filter(Boolean);
-                        if (v && !selected.includes(v)) setForms({ ...forms, product: { ...forms.product, colours: [...selected, v].join(', ') } });
-                      }}
-                      options={[...data.reference.colours.map((item) => [item.name, item.name]), ['__new__', '+ Add New Colour']]}
-                    />
-                    <Input label="Selected colours" className="md:col-span-3" value={forms.product.colours} onChange={(v) => setForms({ ...forms, product: { ...forms.product, colours: v } })} />
-                    {newReference.type === 'colours' && (
-                      <div className="inline-reference-control md:col-span-2">
-                        <Input label="New colour" value={newReference.name} onChange={(name) => setNewReference({ type: 'colours', name })} />
-                        <button className="soft" type="button" onClick={() => addReferenceOption('colours', newReference.name)}>Add colour</button>
-                      </div>
-                    )}
-                    {editingProductId && <button className="soft" type="button" onClick={() => { setEditingProductId(''); setForms((prev) => ({ ...prev, product: initialForms.product })); }}>Cancel edit</button>}
-                  </FormPanel>
-                )}
-                <section className="panel product-data-tools-panel">
-                  <div className="product-data-tools-copy">
-                    <span className="product-data-tools-icon"><Download size={21} /></span>
-                    <div>
-                      <span className="product-data-tools-kicker">Catalog export</span>
-                      <h2>Product data tools</h2>
-                      <p>Download the complete product and model list as a CSV file.</p>
-                    </div>
-                  </div>
-                  <button className="soft" type="button" onClick={() => exportCsv('products')}><Download size={17} /> Export products/models CSV</button>
-                </section>
-                <div className="catalog-toolbar panel models-toolbar">
-                  <div className="searchbox"><Search size={18} /><input placeholder="Search model, brand, category, compatible models, colour, or price" value={priceSearch} onChange={(event) => setPriceSearch(event.target.value)} /></div>
-                  <div className="models-summary"><span className="status-badge stock-ok">{priceItems.length} prices</span></div>
-                </div>
-                <CardGrid className="product-grid compact-price-grid" items={priceItems} emptyTitle="No matching model or price found." render={(product) => (
-                  <>
-                    <div className="flex items-start justify-between w-full mb-3">
-                      <div className="card-icon-wrapper indigo !mb-0">
-                        <IndianRupee size={18} />
-                      </div>
-                      <span className="status-badge stock-ok">{product.category}</span>
-                    </div>
-                    <h3 className="product-title" title={fullModelList(product)}>{productName(product)}</h3>
-                    <p className="product-description" title={product.description || 'No description provided.'}>
-                      {product.description || 'No description provided.'}
-                    </p>
-                    <p className="text-xs text-slate-500">{product.brand}{product.colours?.length ? ` · ${product.colours.join(', ')}` : ''}</p>
-                    <div className="price-stack">
-                      <span><small>Sale</small><strong>{priceLabel(product.sale_price)}</strong></span>
-                      {(role === 'superadmin' || data.priceVisibility.show_purchase_price_shopkeeper) && <span><small>Purchase</small><strong>{priceLabel(product.purchase_price)}</strong></span>}
-                      {(role === 'superadmin' || data.priceVisibility.show_wholesale_price_shopkeeper) && <span><small>Wholesale</small><strong>{priceLabel(product.wholesale_price)}</strong></span>}
-                    </div>
-                    <div className="flex gap-2 w-full mt-3">
-                      <button className="soft flex-1 !min-h-[38px] text-xs font-bold" type="button" onClick={() => setSelectedProductDetails(product)}>View Details</button>
-                      {role === 'superadmin' && <button className="soft flex-1 !min-h-[38px] text-xs font-bold" type="button" onClick={() => editProduct(product)}>Edit</button>}
-                      {role === 'superadmin' && (
-                        <button className="soft product-delete-button flex-1 !min-h-[38px] text-xs font-bold" type="button" disabled={saving} onClick={() => deleteProduct(product)}>
-                          <Trash2 size={14} /> Delete
-                        </button>
-                      )}
-                    </div>
-                  </>
-                )} />
-              </section>
+              <PricesPage
+                role={role}
+                forms={forms}
+                reference={data.reference}
+                priceVisibility={data.priceVisibility}
+                newReference={newReference}
+                editingProductId={editingProductId}
+                saving={saving}
+                items={priceItems}
+                search={priceSearch}
+                pager={productPager}
+                loading={productPageLoading}
+                onSubmitProduct={submitProduct}
+                onProductFieldChange={(field, value) => setForms((prev) => ({ ...prev, product: { ...prev.product, [field]: value } }))}
+                onNewReferenceChange={setNewReference}
+                onAddReferenceOption={addReferenceOption}
+                onCancelEdit={() => { setEditingProductId(''); setForms((prev) => ({ ...prev, product: initialForms.product })); }}
+                onExportProducts={() => exportCsv('products')}
+                onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setPriceSearch(value); }}
+                onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
+                onViewDetails={setSelectedProductDetails}
+                onEditProduct={editProduct}
+                onDeleteProduct={deleteProduct}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+                FormPanel={FormPanel}
+                Input={Input}
+                Select={Select}
+                CardGrid={CardGrid}
+              />
             </PageWrapper>
           )}
 
           {active === 'models' && (
             <PageWrapper activeKey="models" key="models">
-              <section className="space">
-                <div className="catalog-toolbar panel models-toolbar">
-                  <div className="searchbox">
-                    <Search size={18} />
-                    <input
-                      placeholder="Search model, brand, or category"
-                      value={modelSearch}
-                      onChange={(e) => setModelSearch(e.target.value)}
-                    />
-                  </div>
-                  <div className="models-summary">
-                    <span className="status-badge stock-ok">{modelItems.length} models</span>
-                    {role !== 'customer' && <span className="status-badge due">Official inventory view</span>}
-                    {role === 'customer' && <span className="status-badge paid">Browse all added models</span>}
-                  </div>
-                </div>
-
-                <div className="table compact-models-table">
-                  {modelItems.map((product) => (
-                    <div className="row compact-model-row" key={product.id}>
-                      <div className="inventory-primary">
-                        <div className="w-10 h-10 rounded-lg bg-cyan-50 text-cyan-600 flex items-center justify-center shrink-0">
-                          <Smartphone size={18} />
-                        </div>
-                        <span>
-                          <b>{productName(product)}</b>
-                          <small>{product.brand || 'No brand'}</small>
-                          <span className="model-compatible-preview" title={fullModelList(product)}>
-                            <b>Compatible:</b> {fullModelList(product) || 'No compatible models listed'}
-                          </span>
-                        </span>
-                      </div>
-                      <span className="inventory-metric">
-                        <small>Category</small>
-                        <span className="status-badge stock-ok">{product.category || 'Uncategorized'}</span>
-                      </span>
-                      <span className="inventory-metric">
-                        <small>Sale price</small>
-                        <strong>{priceLabel(product.sale_price)}</strong>
-                      </span>
-                      <div className="model-row-actions">
-                        {role === 'customer' && <small>{product.available_shops || 'Currently unavailable'}</small>}
-                        <button className="soft" type="button" onClick={() => setSelectedProductDetails(product)}>View details</button>
-                      </div>
-                    </div>
-                  ))}
-                  {!modelItems.length && <Empty title="No matching models found" />}
-                </div>
-              </section>
+              <ModelsPage
+                items={modelItems}
+                search={modelSearch}
+                onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setModelSearch(value); }}
+                role={role}
+                pager={productPager}
+                loading={productPageLoading}
+                onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
+                onViewDetails={setSelectedProductDetails}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+                Empty={Empty}
+              />
             </PageWrapper>
           )}
 
@@ -2891,17 +3305,18 @@ function App() {
                     {role === 'shopkeeper' && <p>{shopkeeperStockItems.length} matching models</p>}
                   </div>
                   <div className="stock-overview-actions">
-                    {role === 'shopkeeper' && (
-                      <div className="searchbox shopkeeper-stock-search">
-                        <Search size={18} />
-                        <input
-                          aria-label="Search models in stock"
-                          placeholder="Search product or compatible model"
-                          value={shopkeeperStockSearch}
-                          onChange={(event) => setShopkeeperStockSearch(event.target.value)}
-                        />
-                      </div>
-                    )}
+                    <div className="searchbox shopkeeper-stock-search">
+                      <Search size={18} />
+                      <input
+                        aria-label="Search models in stock"
+                        placeholder="Search product, model, brand, or shop"
+                        value={role === 'shopkeeper' ? shopkeeperStockSearch : stockFilters.search}
+                        onChange={(event) => {
+                          if (role === 'shopkeeper') setShopkeeperStockSearch(event.target.value);
+                          else setStockFilters({ ...stockFilters, search: event.target.value });
+                        }}
+                      />
+                    </div>
                     <button className="soft" type="button" onClick={openStockCategoriesHub}><LayoutGrid size={16} /> View categories</button>
                   </div>
                 </div>
@@ -2945,6 +3360,7 @@ function App() {
                 ) : (
                   <Empty title={role === 'shopkeeper' && shopkeeperStockSearch.trim() ? 'No models match your search' : 'No stock records found'} />
                 )}
+                <ProductPagination meta={stockPager} loading={pageLoading.stock} onPageChange={(page) => setStockPager((prev) => ({ ...prev, page }))} />
               </section>
             </PageWrapper>
           )}
@@ -3154,7 +3570,7 @@ function App() {
                       <h2>Matching stock</h2>
                     </div>
                     <div className="category-model-toolbar">
-                      <span className="category-result-count">{visibleStock.length} models</span>
+                      <span className="category-result-count">{stockPager.loaded ? stockPager.total : visibleStock.length} models</span>
                       <div className="category-filter-control">
                         <button
                           className={`category-filter-button ${activeCategoryFilterCount ? 'active' : ''}`}
@@ -3219,6 +3635,7 @@ function App() {
                       ))}
                     </div>
                   ) : <Empty title="No stock matches these filters" />}
+                  <ProductPagination meta={stockPager} loading={pageLoading.stock} onPageChange={(page) => setStockPager((prev) => ({ ...prev, page }))} />
                 </section>
 
                 <section className="stock-section-card batch-browser category-detail-hidden">
@@ -3227,7 +3644,7 @@ function App() {
                       <span className="stock-eyebrow">{selectedCategoryStat?.label || 'Category'} purchase history</span>
                       <h2>Purchase-price batches</h2>
                     </div>
-                    <span className="category-result-count">{visibleBatches.length} batches</span>
+                    <span className="category-result-count">{batchPager.loaded ? batchPager.total : visibleBatches.length} batches</span>
                   </div>
                   <div className={`table batch-table ${role === 'superadmin' || data.priceVisibility.show_purchase_price_shopkeeper ? 'with-price' : 'without-price'}`}>
                     {visibleBatches.length ? visibleBatches.map((batch) => (
@@ -3239,6 +3656,7 @@ function App() {
                       </div>
                     )) : <Empty title="No matching price batches" />}
                   </div>
+                  <ProductPagination meta={batchPager} loading={pageLoading.batches} onPageChange={(page) => setBatchPager((prev) => ({ ...prev, page }))} />
                 </section>
                   </>
                 )}
@@ -3325,9 +3743,29 @@ function App() {
                   <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} readOnly onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
                   <Input label="Paid now" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
+                  <BillSummary sale={forms.sale} />
                 </FormPanel>
+                <div className="catalog-toolbar panel sales-toolbar">
+                  <div className="searchbox">
+                    <Search size={18} />
+                    <input
+                      placeholder="Search customer name, mobile, address, or shop"
+                      value={customerFilters.search}
+                      onChange={(event) => setCustomerFilters({ ...customerFilters, search: event.target.value })}
+                    />
+                  </div>
+                  <select value={customerFilters.status} onChange={(event) => setCustomerFilters({ ...customerFilters, status: event.target.value })}>
+                    <option value="">All balances</option>
+                    <option value="pending">Pending balance</option>
+                    <option value="paid">Paid customers</option>
+                  </select>
+                  {pageLoading.customers && <span className="status-badge due">Loading</span>}
+                  <span className="status-badge stock-ok">{customerPager.loaded ? customerPager.total.toLocaleString('en-IN') : data.customers.length} customers</span>
+                </div>
                 <CardGrid items={data.customers} render={(customer) => {
-                  const customerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id)).slice(0, 3);
+                  const allCustomerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id));
+                  const customerSales = allCustomerSales.slice(0, 3);
+                  const lastPurchase = allCustomerSales[0]?.sale_date ? String(allCustomerSales[0].sale_date).slice(0, 10) : 'No purchases';
                   return (
                     <>
                       <div className="card-icon-wrapper">
@@ -3335,7 +3773,12 @@ function App() {
                       </div>
                       <h3>{customer.name}</h3>
                       <p>{customer.mobile}</p>
-                      <div className="metrics"><span>{customer.address || 'No address'}</span><span>{currency(customer.pending)}</span></div>
+                      <div className="customer-card-metrics">
+                        <span><small>Pending</small><b>{currency(customer.pending)}</b></span>
+                        <span><small>Last purchase</small><b>{lastPurchase}</b></span>
+                        <span><small>Total purchases</small><b>{allCustomerSales.length}</b></span>
+                      </div>
+                      <div className="metrics"><span>{customer.address || 'No address'}</span><span className={`status-badge ${Number(customer.pending) > 0 ? 'pending' : 'paid'}`}>{currency(customer.pending)}</span></div>
                       <div className="mini-list">
                         {customerSales.map((sale) => (
                           <div key={sale.id}>
@@ -3353,6 +3796,7 @@ function App() {
                     </>
                   );
                 }} />
+                <ProductPagination meta={customerPager} loading={pageLoading.customers} onPageChange={(page) => setCustomerPager((prev) => ({ ...prev, page }))} />
               </section>
             </PageWrapper>
           )}
@@ -3429,12 +3873,14 @@ function App() {
                   <Input label="Paid amount" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Select label="Payment mode" className="md:col-span-1" value={forms.sale.payment_mode} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} />
                   <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
+                  <BillSummary sale={forms.sale} />
                 </FormPanel>
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox"><Search size={18} /><input placeholder="Filter by customer, model, category, shop, or payment mode" value={salesFilters.search} onChange={(event) => setSalesFilters({ ...salesFilters, search: event.target.value })} /></div>
                   <input type="date" value={salesFilters.date} onChange={(event) => setSalesFilters({ ...salesFilters, date: event.target.value })} />
                   {role === 'superadmin' && <span className="status-badge">All-location history</span>}
-                  <span className="status-badge stock-ok">{visibleSales.length} sales</span>
+                  {pageLoading.sales && <span className="status-badge due">Loading</span>}
+                  <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
                 </div>
                 {visibleSales.length ? (
                   <motion.div 
@@ -3464,6 +3910,7 @@ function App() {
                 ) : (
                   <Empty title="No sales records found" />
                 )}
+                <ProductPagination meta={salesPager} loading={pageLoading.sales} onPageChange={(page) => setSalesPager((prev) => ({ ...prev, page }))} />
               </section>
             </PageWrapper>
           )}
@@ -3527,6 +3974,19 @@ function App() {
           {active === 'payments' && (
             <PageWrapper activeKey="payments" key="payments">
               <section className="space">
+                <div className="catalog-toolbar panel sales-toolbar">
+                  <div className="searchbox">
+                    <Search size={18} />
+                    <input
+                      placeholder="Search customer, mobile, model, brand, or shop"
+                      value={pendingFilters.search}
+                      onChange={(event) => setPendingFilters({ ...pendingFilters, search: event.target.value })}
+                    />
+                  </div>
+                  <input type="date" value={pendingFilters.date} onChange={(event) => setPendingFilters({ ...pendingFilters, date: event.target.value })} />
+                  {pageLoading.pending && <span className="status-badge due">Loading</span>}
+                  <span className="status-badge stock-ok">{pendingPager.loaded ? pendingPager.total.toLocaleString('en-IN') : data.pending.length} pending</span>
+                </div>
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
@@ -3585,13 +4045,47 @@ function App() {
                   ))}
                   {!data.pending.length && <Empty title="No pending payments" />}
                 </motion.div>
+                <ProductPagination meta={pendingPager} loading={pageLoading.pending} onPageChange={(page) => setPendingPager((prev) => ({ ...prev, page }))} />
               </section>
             </PageWrapper>
           )}
 
           {active === 'reports' && data.reports && (
             <PageWrapper activeKey="reports" key="reports">
-              <section className="two-col">
+              <section className="space">
+                <div className="catalog-toolbar panel sales-toolbar">
+                  <div className="searchbox">
+                    <Search size={18} />
+                    <input
+                      placeholder="Search available model, brand, category, or shop"
+                      value={reportsFilters.search}
+                      onChange={(event) => setReportsFilters({ ...reportsFilters, search: event.target.value })}
+                    />
+                  </div>
+                  <select value={reportsFilters.brand} onChange={(event) => setReportsFilters({ ...reportsFilters, brand: event.target.value })}>
+                    <option value="">All brands</option>
+                    {data.reference.brands.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+                  </select>
+                  <select value={reportsFilters.category} onChange={(event) => setReportsFilters({ ...reportsFilters, category: event.target.value })}>
+                    <option value="">All categories</option>
+                    {data.reference.categories.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+                  </select>
+                  {pageLoading.reports && <span className="status-badge due">Loading</span>}
+                  <span className="status-badge stock-ok">{reportsPager.loaded ? reportsPager.total.toLocaleString('en-IN') : data.reports.availability.length} available</span>
+                </div>
+                <section className="panel">
+                  <h2>Availability report</h2>
+                  <div className="table">
+                    {data.reports.availability.length ? data.reports.availability.map((row, index) => (
+                      <div className="row" key={`${row.shop_name}-${row.short_name || row.name}-${index}`}>
+                        <span><b>{productName(row)}</b><small>{row.brand || 'No brand'} Â· {row.shop_name}</small></span>
+                        <strong>{row.quantity} pcs</strong>
+                      </div>
+                    )) : <Empty title="No availability records found" />}
+                  </div>
+                  <ProductPagination meta={reportsPager} loading={pageLoading.reports} onPageChange={(page) => setReportsPager((prev) => ({ ...prev, page }))} />
+                </section>
+                <section className="two-col">
                 <section className="panel">
                   <h2>Pending by shop</h2>
                   <div className="table">
@@ -3624,6 +4118,7 @@ function App() {
                       </div>
                     )) : <Empty title="No audit logs available" />}
                   </div>
+                </section>
                 </section>
               </section>
             </PageWrapper>
@@ -4149,13 +4644,19 @@ function FormPanel({ title, action, onSubmit, children, disabled = false }) {
 }
 
 function Input({ label, value, onChange, type = 'text', className = '', ...inputProps }) {
-  return <label className={className}>{label}<input {...inputProps} type={type} value={value} onChange={(e) => onChange(e.target.value)} /></label>;
+  const hasValue = value !== null && value !== undefined && String(value).length > 0;
+  return (
+    <label className={`field-label ${hasValue ? 'has-value' : ''} ${className}`}>
+      <span className="field-label-text">{label}</span>
+      <input {...inputProps} placeholder={inputProps.placeholder || ' '} type={type} value={value} onChange={(e) => onChange(e.target.value)} />
+    </label>
+  );
 }
 
 function Select({ label, value, onChange, options, placeholder = 'Select', className = '', ...selectProps }) {
   return (
-    <label className={className}>
-      {label}
+    <label className={`field-label select-field ${value ? 'has-value' : ''} ${className}`}>
+      <span className="field-label-text">{label}</span>
       <select {...selectProps} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder}</option>
         {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
