@@ -11,6 +11,7 @@ export default function ModelsPage({
   pager,
   loading,
   onPageChange,
+  onPageSizeChange,
   onViewDetails,
   productName,
   fullModelList,
@@ -68,7 +69,14 @@ export default function ModelsPage({
         {!items.length && <Empty title="No matching models found" />}
       </div>
 
-      {role !== 'customer' && <Pagination meta={pager} loading={loading} onPageChange={onPageChange} />}
+      {role !== 'customer' && (
+        <Pagination
+          meta={pager}
+          loading={loading}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+        />
+      )}
     </section>
   );
 }

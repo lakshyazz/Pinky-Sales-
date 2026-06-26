@@ -38,6 +38,7 @@ export default function StockPage({
   stockPager,
   pageLoading,
   setStockPager,
+  onStockPageSizeChange,
   setSelectedProductDetails,
   productName,
   fullModelList,
@@ -164,27 +165,12 @@ export default function StockPage({
 
   // Delete reference with confirmation prompt
   const handleDeleteReference = (type, item) => {
-    const isUsed = data.products.some(p => {
-      if (type === 'categories') return String(p.category).toLowerCase() === item.name.toLowerCase();
-      if (type === 'brands') return String(p.brand).toLowerCase() === item.name.toLowerCase();
-      if (type === 'colours') return Array.isArray(p.colours) && p.colours.some(c => c.toLowerCase() === item.name.toLowerCase());
-      return false;
-    });
-
-    const msg = isUsed 
-      ? `WARNING: This ${type.slice(0, -1)} is currently linked to one or more products. Archiving it will hide it from future options but keep it visible on existing products. Do you want to proceed?`
-      : `Are you sure you want to archive this ${type.slice(0, -1)}?`;
-
-    if (window.confirm(msg)) {
-      onDeleteReferenceOption(type, item.id);
-    }
+    onDeleteReferenceOption(type, item.id);
   };
 
   // Delete product with confirmation
   const handleDeleteProductConfirm = (product) => {
-    if (window.confirm(`Are you sure you want to delete "${productName(product)}"? If this product has historical transactions (sales/transfers), it will be archived (soft-deleted) to keep reports intact.`)) {
-      onDeleteProduct(product);
-    }
+    onDeleteProduct(product);
   };
 
   // Extract selected product colours list
@@ -803,7 +789,7 @@ export default function StockPage({
               onChange={(v) => setStockFilters(prev => ({ ...prev, status: v }))}
               options={[
                 ['', 'All Stock status'],
-                ['in_stock', 'In Stock (Quantity > 0)'],
+                ['in_stock', 'In Stock (> Low Stock Threshold)'],
                 ['low_stock', 'Low Stock (<= Threshold)'],
                 ['out_of_stock', 'Out of Stock (Quantity = 0)'],
                 ['recently_added', 'Recently Added (Newest first)']
@@ -966,6 +952,7 @@ export default function StockPage({
         meta={stockPager} 
         loading={pageLoading.stock} 
         onPageChange={(page) => setStockPager((prev) => ({ ...prev, page }))} 
+        onPageSizeChange={onStockPageSizeChange}
       />
 
     </section>

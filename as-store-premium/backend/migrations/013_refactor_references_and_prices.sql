@@ -18,7 +18,7 @@ INSERT INTO categories (name) VALUES
   ('Tools'),
   ('Accessories'),
   ('Consumables')
-ON CONFLICT (LOWER(TRIM(name))) DO UPDATE SET is_active = TRUE;
+ON CONFLICT (name) DO UPDATE SET is_active = TRUE;
 
 -- Archive generic brands and seed the new standard set
 UPDATE brands SET is_active = FALSE;
@@ -51,4 +51,4 @@ INSERT INTO brands (name) VALUES
   ('Black Shark'),
   ('ROG'),
   ('Redmi')
-ON CONFLICT (LOWER(TRIM(name))) DO UPDATE SET is_active = TRUE;
+ON CONFLICT (name) DO UPDATE SET is_active = TRUE;

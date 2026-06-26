@@ -156,7 +156,10 @@ const combineLowStockAlerts = (items = []) => {
     existing.quantity += Number(item.quantity || 0);
     existing.low_stock_threshold = Math.max(Number(existing.low_stock_threshold || 0), Number(item.low_stock_threshold || 0));
   });
-  return [...combined.values()].filter((item) => Number(item.quantity) <= Number(item.low_stock_threshold || 0));
+  return [...combined.values()].filter((item) => {
+    const quantity = Number(item.quantity || 0);
+    return quantity > 0 && quantity <= Number(item.low_stock_threshold || 0);
+  });
 };
 const combineStockRows = (items = []) => {
   const combined = new Map();
@@ -224,9 +227,11 @@ const groupPendingPayments = (rows = []) => {
 const navByRole = {
   superadmin: [
     ['dashboard', 'Dashboard', BarChart3],
+    ['stock', 'Stock', Package],
+    ['models', 'Models', Smartphone],
+    ['prices', 'Prices', IndianRupee],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
-    ['stock', 'Stock', Package],
     ['customers', 'Customers', Users],
     ['sales', 'Sales', ReceiptText],
     ['requests', 'Requests', Send],
@@ -236,6 +241,8 @@ const navByRole = {
   shopkeeper: [
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
+    ['models', 'Models', Smartphone],
+    ['prices', 'Prices', IndianRupee],
     ['customers', 'Customers', Users],
     ['requests', 'Requests', Send],
     ['sales', 'Create Sale', ReceiptText],
@@ -249,6 +256,89 @@ const navByRole = {
 };
 navByRole.admin = navByRole.shopkeeper;
 navByRole.user = navByRole.customer;
+
+const sidebarSectionsByRole = {
+  superadmin: [
+    { title: 'Dashboard', ids: ['dashboard'] },
+    { title: 'Inventory', ids: ['stock', 'models', 'prices'] },
+    { title: 'Operations', ids: ['shops', 'shopkeepers', 'customers', 'sales', 'requests', 'payments'] },
+    { title: 'Reports', ids: ['reports'] },
+  ],
+  shopkeeper: [
+    { title: 'Dashboard', ids: ['dashboard'] },
+    { title: 'Inventory', ids: ['stock', 'models', 'prices'] },
+    { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
+    { title: 'Reports', ids: ['reports'] },
+  ],
+  customer: [
+    { title: 'Catalog', ids: ['catalog', 'models'] },
+  ],
+};
+sidebarSectionsByRole.admin = sidebarSectionsByRole.shopkeeper;
+sidebarSectionsByRole.user = sidebarSectionsByRole.customer;
+
+const pageMetaById = {
+  dashboard: {
+    group: 'Overview',
+    title: 'Dashboard',
+    description: 'Track sales, stock health, pending payments, and branch activity from one clean command center.',
+  },
+  shops: {
+    group: 'Operations',
+    title: 'Branches',
+    description: 'Manage shop locations, branch details, and branch-level performance.',
+  },
+  shopkeepers: {
+    group: 'Operations',
+    title: 'Shopkeepers',
+    description: 'Create and manage branch staff access without changing inventory history.',
+  },
+  stock: {
+    group: 'Inventory',
+    title: 'Consolidated Stock',
+    description: 'View complete stock availability across warehouse, branches, models, colours, and product groups.',
+  },
+  models: {
+    group: 'Inventory',
+    title: 'Models',
+    description: 'Search product models and compatible devices with corrected pagination.',
+  },
+  prices: {
+    group: 'Pricing',
+    title: 'Stock Prices',
+    description: 'Review and edit purchase, selling, and wholesale prices from the product catalog.',
+  },
+  customers: {
+    group: 'Operations',
+    title: 'Customers',
+    description: 'Manage customer accounts, purchases, invoices, and pending balances.',
+  },
+  sales: {
+    group: 'Operations',
+    title: 'Sales',
+    description: 'Create sales, choose price type, and keep FIFO stock allocation intact.',
+  },
+  requests: {
+    group: 'Stock Management',
+    title: 'Requests',
+    description: 'Review branch stock requests and update their current status.',
+  },
+  payments: {
+    group: 'Operations',
+    title: 'Pending Payments',
+    description: 'Follow up customer dues and record payments safely.',
+  },
+  reports: {
+    group: 'Reports',
+    title: 'Reports',
+    description: 'Export inventory, availability, pending, and audit reports.',
+  },
+  catalog: {
+    group: 'Customer View',
+    title: 'Catalog',
+    description: 'Browse available products, models, prices, and shop availability.',
+  },
+};
 
 const validPageIds = new Set(Object.values(navByRole).flatMap((items) => items.map(([id]) => id)));
 const defaultPageForRole = (role) => (role === 'customer' || role === 'user' ? 'catalog' : 'dashboard');
@@ -807,10 +897,26 @@ function App() {
   const role = session?.role || 'customer';
   const shopId = role === 'shopkeeper' ? session.shop_id : selectedShop;
   const nav = navByRole[role] || navByRole.customer;
+  const navItems = new Map(nav.map(([id, label, Icon]) => [id, { id, label, Icon }]));
+  const sidebarSections = (sidebarSectionsByRole[role] || sidebarSectionsByRole.customer)
+    .map((section) => ({
+      ...section,
+      items: section.ids.map((id) => navItems.get(id)).filter(Boolean),
+    }))
+    .filter((section) => section.items.length);
+  const currentPageMeta = pageMetaById[active] || {
+    group: 'Workspace',
+    title: active.replace('-', ' '),
+    description: role === 'shopkeeper' ? `${session.name} - ${session.shop_name}` : 'Manage your workspace.',
+  };
+  const selectedShopName = selectedShop
+    ? data.shops.find((shop) => String(shop.id) === String(selectedShop))?.name || 'Selected branch'
+    : 'All branches';
+  const workspaceScope = role === 'shopkeeper' ? session.shop_name : selectedShopName;
   const showGlobalSearch = active === 'dashboard';
   const needsSpecificShop = role === 'superadmin' && !shopId;
   const shopCountDependency = active === 'stock' ? data.shops.length : 0;
-  const activeProductSearch = active === 'models' ? deferredModelSearch : '';
+  const activeProductSearch = active === 'prices' ? deferredPriceSearch : active === 'models' ? deferredModelSearch : '';
 
   const syncActivePath = (page, mode = 'push') => {
     if (typeof window === 'undefined' || !validPageIds.has(page)) return;
@@ -839,6 +945,12 @@ function App() {
     } finally {
       setConfirmDialog(null);
     }
+  };
+  const updateProductField = (field, value) => {
+    setForms((prev) => ({
+      ...prev,
+      product: { ...prev.product, [field]: value },
+    }));
   };
 
   useEffect(() => () => {
@@ -1243,6 +1355,9 @@ function App() {
         if (role === 'customer') set('catalog', await api('/catalog'));
         else await loadProductPage({ tab, page: productPager.page });
       }
+      if (tab === 'prices') {
+        await loadProductPage({ tab, page: productPager.page });
+      }
       if (tab === 'stock') {
         await loadStockPage({
           stockPage: stockPager.page,
@@ -1398,7 +1513,7 @@ function App() {
   }, [active, selectedShop, session?.token, authReady, shopCountDependency]);
 
   useEffect(() => {
-    if (!session || !authReady || role === 'customer' || active !== 'models') return;
+    if (!session || !authReady || role === 'customer' || !['models', 'prices'].includes(active)) return;
     loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch });
   }, [active, activeProductSearch, productPager.page, productPager.limit, session?.token, authReady]);
 
@@ -1626,18 +1741,26 @@ function App() {
     }
   };
 
-  const deleteReferenceOption = async (type, id) => {
+  const deleteReferenceOption = (type, id) => {
     const referenceLabel = { categories: 'category', colours: 'colour', brands: 'brand' }[type] || type;
-    try {
-      setSaving(true);
-      await authedFetch(`/reference-data/${type}/${id}`, { method: 'DELETE' });
-      await loadCore();
-      showToast(`${referenceLabel} archived successfully`);
-    } catch (error) {
-      showToast(error.message || `Unable to archive ${referenceLabel}`);
-    } finally {
-      setSaving(false);
-    }
+    const item = data.reference?.[type]?.find((entry) => String(entry.id) === String(id));
+    requestConfirmation({
+      title: `Archive ${item?.name || referenceLabel}?`,
+      message: `This hides the ${referenceLabel} from future dropdowns while keeping existing products, stock, and reports safe.`,
+      confirmLabel: 'Archive',
+      onConfirm: async () => {
+        try {
+          setSaving(true);
+          await authedFetch(`/reference-data/${type}/${id}`, { method: 'DELETE' });
+          await loadCore();
+          showToast(`${referenceLabel} archived successfully`);
+        } catch (error) {
+          showToast(error.message || `Unable to archive ${referenceLabel}`);
+        } finally {
+          setSaving(false);
+        }
+      },
+    });
   };
 
   const downloadCsv = (fileName, rows) => {
@@ -2052,6 +2175,7 @@ function App() {
       showToast(editingProductId ? 'Product prices and details updated' : openingStock > 0 ? 'Product added with opening stock' : 'Product price added');
       await loadCore();
       if (active === 'stock') await loadTab('stock', shopId);
+      if (active === 'models' || active === 'prices') await loadProductPage({ tab: active, page: productPager.page });
     } catch (error) {
       showToast(error.message || 'Unable to add product right now');
     } finally {
@@ -2087,8 +2211,8 @@ function App() {
     const name = productName(product);
     requestConfirmation({
       title: `Delete ${name}?`,
-      message: 'This removes the product and all of its inventory. Products with sales, request, or transfer history are protected and cannot be deleted.',
-      confirmLabel: 'Delete product',
+      message: 'If this product has sales, requests, or transfer history, it will be deactivated instead of hard-deleted so reports remain safe.',
+      confirmLabel: 'Delete / Deactivate',
       onConfirm: async () => {
         try {
           setSaving(true);
@@ -2795,7 +2919,7 @@ function App() {
         <div className="sidebar-head">
           <div className="brand-mark"><Store size={23} /></div>
           <div className="sidebar-brand-copy">
-            <strong>AS Store</strong>
+            <strong>Shop Management</strong>
             <span>{role === 'superadmin' ? 'Owner Control' : role === 'shopkeeper' ? session.shop_name : 'Catalog'}</span>
           </div>
           <button
@@ -2809,32 +2933,56 @@ function App() {
           </button>
           <button type="button" className="icon mobile-only" onClick={() => setOpen(false)}><X size={18} /></button>
         </div>
-        <nav>
-          {nav.map(([id, label, Icon]) => {
-            const isActive = active === id;
-            return (
-              <motion.button 
-                whileHover={{ x: 4 }}
-                whileTap={{ scale: 0.98 }}
-                type="button" 
-                key={id} 
-                className={`relative ${isActive ? 'active' : ''}`} 
-                title={label}
-                onClick={() => { setActivePage(id); setOpen(false); }}
-              >
-                {isActive && (
-                  <motion.div 
-                    layoutId="activeSidebarIndicator"
-                    className="absolute inset-0 bg-white/[0.08] border-l-[3px] border-teal rounded-lg pointer-events-none"
-                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                  />
-                )}
-                <Icon size={18} className="relative z-10" /> 
-                <span className="relative z-10">{label}</span>
-              </motion.button>
-            );
-          })}
+        <div className="sidebar-workspace-card">
+          <span>Workspace</span>
+          {role === 'superadmin' ? (
+            <select value={selectedShop} onChange={(e) => setSelectedShop(e.target.value)}>
+              <option value="">All branches</option>
+              {data.shops.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}
+            </select>
+          ) : (
+            <strong>{workspaceScope || 'Current workspace'}</strong>
+          )}
+          <small>{role === 'superadmin' ? 'Branch-aware reporting and stock filters' : 'Your assigned branch scope'}</small>
+        </div>
+        <nav className="sidebar-nav">
+          {sidebarSections.map((section) => (
+            <div className="nav-section" key={section.title}>
+              <span className="nav-section-title">{section.title}</span>
+              {section.items.map(({ id, label, Icon }) => {
+                const isActive = active === id;
+                return (
+                  <motion.button
+                    whileHover={{ x: sidebarCollapsed ? 0 : 4 }}
+                    whileTap={{ scale: 0.98 }}
+                    type="button"
+                    key={id}
+                    className={`relative ${isActive ? 'active' : ''}`}
+                    title={label}
+                    onClick={() => { setActivePage(id); setOpen(false); }}
+                  >
+                    {isActive && (
+                      <motion.div
+                        layoutId="activeSidebarIndicator"
+                        className="sidebar-active-glow"
+                        transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                      />
+                    )}
+                    <Icon size={18} className="relative z-10" />
+                    <span className="relative z-10">{label}</span>
+                  </motion.button>
+                );
+              })}
+            </div>
+          ))}
         </nav>
+        <div className="sidebar-info-card">
+          <span>Manage faster</span>
+          <p>Track stock, prices, branches, and products from one clean dashboard.</p>
+          <button type="button" onClick={() => { setActivePage(role === 'customer' ? 'catalog' : 'reports'); setOpen(false); }}>
+            {role === 'customer' ? 'View catalog' : 'View reports'}
+          </button>
+        </div>
         <Magnetic className="w-full mt-auto">
           <button type="button" className="logout" title="Sign out" onClick={(event) => { event.preventDefault(); logout(); }}><LogOut size={18} /> <span>Sign out</span></button>
         </Magnetic>
@@ -2844,9 +2992,9 @@ function App() {
         <header className="topbar">
           <button type="button" className="icon mobile-only" onClick={() => setOpen(true)}><Menu size={20} /></button>
           <div className="page-title">
-            <span className="eyebrow">{role === 'superadmin' ? 'Owner workspace' : role === 'shopkeeper' ? 'Branch workspace' : 'Customer catalog'}</span>
-            <h1>{active.replace('-', ' ')}</h1>
-            <p>{role === 'shopkeeper' ? `${session.name} - ${session.shop_name}` : role === 'superadmin' ? 'All branch controls in one place' : 'Browse prices and availability'}</p>
+            <span className="eyebrow">{currentPageMeta.group} / {workspaceScope}</span>
+            <h1>{currentPageMeta.title}</h1>
+            <p>{currentPageMeta.description}</p>
           </div>
           {showGlobalSearch && (
             <div className="global-search" onBlur={closeGlobalSearch}>
@@ -2913,22 +3061,16 @@ function App() {
             </div>
           )}
           <div className="topbar-actions">
+            {role !== 'customer' && (
+              <button type="button" className="notification-button" onClick={() => setActivePage('stock')} title="View low stock alerts">
+                <AlertTriangle size={16} />
+                <span>{lowStockAlerts.length}</span>
+              </button>
+            )}
             <div className="user-pill">
               <ShieldCheck size={16} />
-              <span>{session.name}</span>
+              <span><b>{session.name}</b><small>{role === 'superadmin' ? 'Owner' : role === 'shopkeeper' ? 'Shopkeeper' : 'Customer'}</small></span>
             </div>
-            <Magnetic>
-              <button type="button" className="topbar-signout" onClick={(event) => { event.preventDefault(); logout(); }}>
-                <LogOut size={16} />
-                <span>Sign out</span>
-              </button>
-            </Magnetic>
-            {role === 'superadmin' && !['shops', 'shopkeepers', 'catalog'].includes(active) && (
-              <select value={selectedShop} onChange={(e) => setSelectedShop(e.target.value)}>
-                <option value="">All locations</option>
-                {data.shops.map((shop) => <option key={shop.id} value={shop.id}>{shop.name}</option>)}
-              </select>
-            )}
           </div>
         </header>
 
@@ -3224,11 +3366,52 @@ function App() {
                 pager={productPager}
                 loading={productPageLoading}
                 onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
+                onPageSizeChange={(limit) => setProductPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
                 onViewDetails={setSelectedProductDetails}
                 productName={productName}
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
                 Empty={Empty}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'prices' && role !== 'customer' && (
+            <PageWrapper activeKey="prices" key="prices">
+              <PricesPage
+                role={role}
+                forms={forms}
+                reference={data.reference}
+                priceVisibility={data.priceVisibility}
+                newReference={newReference}
+                editingProductId={editingProductId}
+                saving={saving}
+                items={priceItems}
+                search={priceSearch}
+                pager={productPager}
+                loading={productPageLoading}
+                onSubmitProduct={submitProduct}
+                onProductFieldChange={updateProductField}
+                onNewReferenceChange={setNewReference}
+                onAddReferenceOption={addReferenceOption}
+                onCancelEdit={() => {
+                  setEditingProductId('');
+                  setForms((prev) => ({ ...prev, product: initialForms.product }));
+                }}
+                onExportProducts={() => exportCsv('products')}
+                onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setPriceSearch(value); }}
+                onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
+                onPageSizeChange={(limit) => setProductPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                onViewDetails={setSelectedProductDetails}
+                onEditProduct={editProduct}
+                onDeleteProduct={deleteProduct}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+                FormPanel={FormPanel}
+                Input={Input}
+                Select={Select}
+                CardGrid={CardGrid}
               />
             </PageWrapper>
           )}
@@ -3250,6 +3433,7 @@ function App() {
                 stockPager={stockPager}
                 pageLoading={pageLoading}
                 setStockPager={setStockPager}
+                onStockPageSizeChange={(limit) => setStockPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
                 setSelectedProductDetails={setSelectedProductDetails}
                 productName={productName}
                 fullModelList={fullModelList}
@@ -3396,7 +3580,12 @@ function App() {
                     </>
                   );
                 }} />
-                <Pagination meta={customerPager} loading={pageLoading.customers} onPageChange={(page) => setCustomerPager((prev) => ({ ...prev, page }))} />
+                <Pagination
+                  meta={customerPager}
+                  loading={pageLoading.customers}
+                  onPageChange={(page) => setCustomerPager((prev) => ({ ...prev, page }))}
+                  onPageSizeChange={(limit) => setCustomerPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                />
               </section>
             </PageWrapper>
           )}
@@ -3499,7 +3688,12 @@ function App() {
                 ) : (
                   <Empty title="No sales records found" />
                 )}
-                <Pagination meta={salesPager} loading={pageLoading.sales} onPageChange={(page) => setSalesPager((prev) => ({ ...prev, page }))} />
+                <Pagination
+                  meta={salesPager}
+                  loading={pageLoading.sales}
+                  onPageChange={(page) => setSalesPager((prev) => ({ ...prev, page }))}
+                  onPageSizeChange={(limit) => setSalesPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                />
               </section>
             </PageWrapper>
           )}
@@ -3634,7 +3828,12 @@ function App() {
                   ))}
                   {!data.pending.length && <Empty title="No pending payments" />}
                 </motion.div>
-                <Pagination meta={pendingPager} loading={pageLoading.pending} onPageChange={(page) => setPendingPager((prev) => ({ ...prev, page }))} />
+                <Pagination
+                  meta={pendingPager}
+                  loading={pageLoading.pending}
+                  onPageChange={(page) => setPendingPager((prev) => ({ ...prev, page }))}
+                  onPageSizeChange={(limit) => setPendingPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                />
               </section>
             </PageWrapper>
           )}
@@ -3672,7 +3871,12 @@ function App() {
                       </div>
                     )) : <Empty title="No availability records found" />}
                   </div>
-                  <Pagination meta={reportsPager} loading={pageLoading.reports} onPageChange={(page) => setReportsPager((prev) => ({ ...prev, page }))} />
+                  <Pagination
+                    meta={reportsPager}
+                    loading={pageLoading.reports}
+                    onPageChange={(page) => setReportsPager((prev) => ({ ...prev, page }))}
+                    onPageSizeChange={(limit) => setReportsPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                  />
                 </section>
                 <section className="two-col">
                 <section className="panel">

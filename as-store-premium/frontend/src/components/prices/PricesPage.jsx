@@ -23,6 +23,7 @@ export default function PricesPage({
   onExportProducts,
   onSearchChange,
   onPageChange,
+  onPageSizeChange,
   onViewDetails,
   onEditProduct,
   onDeleteProduct,
@@ -140,7 +141,12 @@ export default function PricesPage({
         </>
       )} />
 
-      <Pagination meta={pager} loading={loading} onPageChange={onPageChange} />
+      <Pagination
+        meta={pager}
+        loading={loading}
+        onPageChange={onPageChange}
+        onPageSizeChange={onPageSizeChange}
+      />
     </section>
   );
 }

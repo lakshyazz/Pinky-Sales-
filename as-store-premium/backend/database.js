@@ -1,6 +1,5 @@
 import pg from 'pg';
 import bcrypt from 'bcryptjs';
-import { readdir, readFile } from 'node:fs/promises';
 
 const { Pool } = pg;
 
@@ -99,57 +98,9 @@ const seedUser = async ({ username, password, role, name, contact = '', shopId =
 export const initDatabase = async () => {
   console.log('[Database] Connecting to PostgreSQL database on Supabase...');
   await pool.query('SELECT 1');
-
-  // Run migrations dynamically on startup
-  try {
-    const migrationsDir = new URL('./migrations/', import.meta.url);
-    const files = (await readdir(migrationsDir))
-      .filter((file) => file.endsWith('.sql'))
-      .sort();
-
-    const migrationTableExists = await pool.query("SELECT to_regclass('public.schema_migrations') AS table_name");
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        name TEXT PRIMARY KEY,
-        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    if (!migrationTableExists.rows[0]?.table_name) {
-      const baseline = files.filter((file) => /^00[1-6]_/.test(file));
-      for (const file of baseline) {
-        await pool.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
-        console.log(`[Migration] Baselined ${file}`);
-      }
-    }
-
-    for (const file of files) {
-      const applied = await pool.query('SELECT 1 FROM schema_migrations WHERE name = $1', [file]);
-      if (applied.rowCount) continue;
-      const sql = await readFile(new URL(`./migrations/${file}`, import.meta.url), 'utf8');
-      const client = await pool.connect();
-      try {
-        await client.query('BEGIN');
-        await client.query(sql);
-        await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
-        await client.query('COMMIT');
-        console.log(`[Migration] Applied ${file}`);
-      } catch (error) {
-        await client.query('ROLLBACK');
-        console.error(`[Migration] Failed to apply ${file}:`, error);
-        throw error;
-      } finally {
-        client.release();
-      }
-    }
-  } catch (migError) {
-    console.error('[Database] Dynamic migrations check failed:', migError);
-  }
-
   await pool.query(`
     ALTER TABLE products ADD COLUMN IF NOT EXISTS short_name TEXT;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS full_model_list TEXT;
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS model TEXT;
     ALTER TABLE products ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12, 2);
     ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12, 2);
     ALTER TABLE products ADD COLUMN IF NOT EXISTS wholesale_price NUMERIC(12, 2);

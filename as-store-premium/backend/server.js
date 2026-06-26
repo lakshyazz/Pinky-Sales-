@@ -452,7 +452,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       FROM stock st
       JOIN shops sh ON sh.id = st.shop_id
       JOIN products p ON p.id = st.product_id
-      WHERE ${visibleStockSql} <= sh.low_stock_threshold ${shopId ? 'AND st.shop_id = ?' : ''}
+      WHERE ${visibleStockSql} > 0 AND ${visibleStockSql} <= sh.low_stock_threshold ${shopId ? 'AND st.shop_id = ?' : ''}
       ORDER BY quantity ASC, p.name ASC
       LIMIT 12
     `, shopId ? [shopId] : []),
@@ -778,7 +778,7 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
   // Filter by stock status
   const stockQuantitySql = 'COALESCE(SUM(ib.quantity_remaining), 0)';
   const having = [];
-  if (status === 'in_stock') having.push(`${stockQuantitySql} > 0`);
+  if (status === 'in_stock') having.push(`${stockQuantitySql} > sh.low_stock_threshold`);
   if (status === 'out_of_stock') having.push(`${stockQuantitySql} = 0`);
   if (status === 'low_stock') having.push(`${stockQuantitySql} > 0 AND ${stockQuantitySql} <= sh.low_stock_threshold`);
 
@@ -786,7 +786,11 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
     SELECT p.short_name AS product_name, p.full_model_list AS model_name, p.brand, p.category, p.model,
       ib.colour, ${priceColumns} SUM(ib.quantity_remaining) AS quantity, SUM(ib.quantity_received) AS quantity_received,
       sh.name AS shop_name, u.name AS shopkeeper_name, MAX(ib.received_date) AS date_added,
-      CASE WHEN SUM(ib.quantity_remaining) > 0 THEN 'In Stock' ELSE 'Out of Stock' END AS stock_status
+      CASE
+        WHEN SUM(ib.quantity_remaining) = 0 THEN 'Out of Stock'
+        WHEN SUM(ib.quantity_remaining) <= sh.low_stock_threshold THEN 'Low Stock'
+        ELSE 'In Stock'
+      END AS stock_status
     FROM inventory_batches ib
     JOIN products p ON p.id = ib.product_id
     JOIN shops sh ON sh.id = ib.shop_id
@@ -1003,7 +1007,7 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     
     const stockQuantitySql = 'COALESCE(SUM(ib.quantity_remaining), 0)';
     const having = [];
-    if (req.query.status === 'in_stock') having.push(`${stockQuantitySql} > 0`);
+    if (req.query.status === 'in_stock') having.push(`${stockQuantitySql} > sh.low_stock_threshold`);
     if (req.query.status === 'out_of_stock') having.push(`${stockQuantitySql} = 0`);
     if (req.query.status === 'low_stock') having.push(`${stockQuantitySql} > 0 AND ${stockQuantitySql} <= sh.low_stock_threshold`);
     
