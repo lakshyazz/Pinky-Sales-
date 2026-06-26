@@ -1,0 +1,12 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm --prefix as-store-premium/frontend ci",
+  "buildCommand": "npm --prefix as-store-premium/frontend run build",
+  "outputDirectory": "as-store-premium/frontend/dist",
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "destination": "/index.html"
+    }
+  ]
+}
