@@ -892,7 +892,7 @@ textarea:focus-visible {
   display: block;
   margin-top: 4px;
   color: #475569;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 1.25;
 }
@@ -1837,6 +1837,141 @@ button:disabled {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
+}
+
+.reports-toolbar {
+  grid-template-columns: minmax(280px, 1fr) minmax(150px, 190px) minmax(150px, 190px) auto auto;
+  padding: 16px;
+}
+
+.reports-panel {
+  padding: 18px;
+}
+
+.reports-panel h2 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font-size: 17px;
+}
+
+.reports-panel > h2 {
+  margin-bottom: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reports-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reports-panel-head span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.report-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(203, 213, 225, 0.82);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.report-row {
+  min-height: 46px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 120px);
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  color: var(--ink-soft);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.88);
+}
+
+.report-row:last-child {
+  border-bottom: 0;
+}
+
+.report-row:not(.report-head):nth-child(odd) {
+  background: rgba(248, 250, 252, 0.62);
+}
+
+.report-row.report-head {
+  min-height: 34px;
+  color: #64748b;
+  background: rgba(241, 245, 249, 0.96);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.report-row span:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.report-row b {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.report-row small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.report-row strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 850;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pending-report-table .report-row {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 150px);
+}
+
+.audit-report-table {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.audit-report-table .report-row {
+  grid-template-columns: minmax(150px, 0.7fr) minmax(0, 1.6fr);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .reports-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .report-row,
+  .pending-report-table .report-row,
+  .audit-report-table .report-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 6px;
+  }
+
+  .report-row.report-head {
+    display: none;
+  }
+
+  .report-row strong {
+    text-align: left;
+  }
 }
 
 .shopkeeper-actions {

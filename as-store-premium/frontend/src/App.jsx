@@ -909,8 +909,11 @@ function App() {
     title: active.replace('-', ' '),
     description: role === 'shopkeeper' ? `${session.name} - ${session.shop_name}` : 'Manage your workspace.',
   };
+  const selectedShopRecord = selectedShop
+    ? data.shops.find((shop) => String(shop.id) === String(selectedShop))
+    : null;
   const selectedShopName = selectedShop
-    ? data.shops.find((shop) => String(shop.id) === String(selectedShop))?.name || 'Selected branch'
+    ? selectedShopRecord?.name || 'Selected branch'
     : 'All branches';
   const workspaceScope = role === 'shopkeeper' ? session.shop_name : selectedShopName;
   const pageWorkspaceScope = role === 'superadmin' && active === 'dashboard' ? 'All branches' : workspaceScope;
@@ -2325,6 +2328,189 @@ function App() {
     printWindow.document.close();
   };
 
+  const printCurrentStockSheet = (shopName, shopArea, stockData) => {
+    if (!stockData || !stockData.length) {
+      showToast('No stock rows to print');
+      return;
+    }
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      showToast('Allow popups to print the stock sheet');
+      return;
+    }
+    const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;',
+    }[char]));
+    const printPrice = (value) => Number(value) > 0 ? currency(value) : '-';
+    const printedAt = new Date().toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    const totalStock = stockData.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    const rows = stockData.map((item) => `
+      <tr>
+        <td>
+          <strong>${escapeHtml(productName(item))}</strong>
+          <small>${escapeHtml([item.brand || 'No brand', item.category || 'Mobile'].filter(Boolean).join(' / '))}</small>
+        </td>
+        <td>${escapeHtml(fullModelList(item) || productName(item))}</td>
+        <td class="num">${escapeHtml(printPrice(item.purchase_price))}</td>
+        <td class="num">${escapeHtml(printPrice(item.sale_price))}</td>
+        <td class="qty ${Number(item.quantity || 0) <= 3 ? 'low' : ''}">${Number(item.quantity || 0).toLocaleString('en-IN')} pcs</td>
+      </tr>
+    `).join('');
+
+    printWindow.document.write(`
+      <!doctype html>
+      <html lang="en">
+        <head>
+          <title>Stock Sheet - ${escapeHtml(shopName)}</title>
+          <style>
+            @page { size: A4; margin: 12mm; }
+            body {
+              font-family: Arial, Helvetica, sans-serif;
+              color: #0f172a;
+              margin: 0;
+              background: #ffffff;
+              font-size: 12px;
+            }
+            header {
+              display: flex;
+              justify-content: space-between;
+              align-items: flex-start;
+              gap: 24px;
+              padding-bottom: 12px;
+              margin-bottom: 12px;
+              border-bottom: 2px solid #0f766e;
+            }
+            h1 {
+              margin: 0 0 4px;
+              font-size: 20px;
+              letter-spacing: 0;
+            }
+            p {
+              margin: 0;
+              color: #475569;
+              line-height: 1.45;
+            }
+            .meta {
+              text-align: right;
+              font-size: 11px;
+            }
+            .summary {
+              display: flex;
+              gap: 16px;
+              margin: 0 0 12px;
+              padding: 9px 10px;
+              border: 1px solid #cbd5e1;
+              background: #f8fafc;
+            }
+            .summary span {
+              color: #475569;
+            }
+            .summary b {
+              color: #0f172a;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              table-layout: fixed;
+            }
+            th {
+              background: #e2f8f5;
+              color: #0f172a;
+              font-weight: 800;
+              text-transform: uppercase;
+              font-size: 10px;
+              letter-spacing: 0;
+              padding: 8px 9px;
+              border: 1px solid #cbd5e1;
+              text-align: left;
+            }
+            td {
+              padding: 8px 9px;
+              border: 1px solid #e2e8f0;
+              vertical-align: top;
+              line-height: 1.35;
+              overflow-wrap: anywhere;
+            }
+            td strong,
+            td small {
+              display: block;
+            }
+            td small {
+              margin-top: 3px;
+              color: #64748b;
+              font-size: 10px;
+            }
+            .num,
+            .qty {
+              text-align: right;
+              font-weight: 700;
+              white-space: nowrap;
+            }
+            .qty {
+              color: #0f766e;
+            }
+            .qty.low {
+              color: #b45309;
+            }
+            tbody tr:nth-child(even) {
+              background: #f8fafc;
+            }
+            @media print {
+              body {
+                print-color-adjust: exact;
+                -webkit-print-color-adjust: exact;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <header>
+            <div>
+              <h1>Stock Sheet</h1>
+              <p><strong>${escapeHtml(shopName)}</strong>${shopArea ? ` - ${escapeHtml(shopArea)}` : ''}</p>
+            </div>
+            <p class="meta">Generated<br>${escapeHtml(printedAt)}</p>
+          </header>
+          <div class="summary">
+            <span>Total items: <b>${stockData.length.toLocaleString('en-IN')}</b></span>
+            <span>Total stock: <b>${totalStock.toLocaleString('en-IN')} pcs</b></span>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 25%;">Product</th>
+                <th style="width: 31%;">Compatible Device</th>
+                <th style="width: 14%;">Stock Price</th>
+                <th style="width: 14%;">Sale Price</th>
+                <th style="width: 16%;">Stock Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+          <script>
+            window.onload = function() {
+              window.print();
+              setTimeout(function() { window.close(); }, 500);
+            };
+          </script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   const printInvoicePDF = (sale) => {
     const printWindow = window.open('', '_blank');
     const invoiceNo = `INV-${String(sale.id).padStart(6, '0')}`;
@@ -3106,48 +3292,48 @@ function App() {
                 <div className="stats-grid">
                   <StatCard
                     icon={ShoppingBag}
-                    label="Today's sales"
+                    label="Sales"
                     value={currency(data.dashboard.totals.today_sales)}
-                    helper="Collected across active locations"
+                    helper="Today"
                     tone="cyan"
                     sparklineTone="green"
                     trend={data.dashboard.trends?.sales || trendFromValue(data.dashboard.totals.today_sales)}
                   />
                   <StatCard
                     icon={CreditCard}
-                    label="Pending payments"
+                    label="Pending"
                     value={currency(data.dashboard.totals.pending_payments)}
-                    helper="Open customer balances"
+                    helper="Customer dues"
                     tone="amber"
                     sparklineTone="amber"
                     trend={data.dashboard.trends?.pending || trendFromValue(data.dashboard.totals.pending_payments, 'pending')}
                   />
                   <StatCard
                     icon={Package}
-                    label="Available stock"
+                    label="Stock"
                     value={data.dashboard.totals.total_stock}
-                    helper="Sellable units in scope"
+                    helper="Units"
                     tone="green"
                   />
                   <StatCard
                     icon={Building2}
-                    label="Warehouse stock"
+                    label="Warehouse"
                     value={dashboardWarehouseStock}
-                    helper="Main warehouse units"
+                    helper="Main units"
                     tone="blue"
                   />
                   <StatCard
                     icon={AlertTriangle}
-                    label="Low stock alerts"
+                    label="Low stock"
                     value={lowStockAlerts.length}
-                    helper="Needs attention soon"
+                    helper="Alert items"
                     tone="amber"
                   />
                   <StatCard
                     icon={Store}
-                    label="Shop performance"
-                    value={`${dashboardShopCount} locations`}
-                    helper="Ranked below by sales and dues"
+                    label="Shops"
+                    value={dashboardShopCount}
+                    helper="Locations"
                     tone="cyan"
                   />
                 </div>
@@ -3455,6 +3641,11 @@ function App() {
                 setSaving={setSaving}
                 initialForms={initialForms}
                 exportCsv={exportCsv}
+                onPrintStock={() => printCurrentStockSheet(
+                  workspaceScope || 'Current workspace',
+                  role === 'shopkeeper' ? session.shop_area : selectedShopRecord?.area || '',
+                  stockWithOwnership,
+                )}
                 stockWithOwnership={stockWithOwnership}
                 FormPanel={FormPanel}
                 Input={Input}
@@ -3846,7 +4037,7 @@ function App() {
           {active === 'reports' && data.reports && (
             <PageWrapper activeKey="reports" key="reports">
               <section className="space">
-                <div className="catalog-toolbar panel sales-toolbar">
+                <div className="catalog-toolbar panel reports-toolbar">
                   <div className="searchbox">
                     <Search size={18} />
                     <input
@@ -3866,11 +4057,20 @@ function App() {
                   {pageLoading.reports && <span className="status-badge due">Loading</span>}
                   <span className="status-badge stock-ok">{reportsPager.loaded ? reportsPager.total.toLocaleString('en-IN') : data.reports.availability.length} available</span>
                 </div>
-                <section className="panel">
-                  <h2>Availability report</h2>
-                  <div className="table">
+                <section className="panel reports-panel">
+                  <div className="reports-panel-head">
+                    <h2>Availability report</h2>
+                    <span>{reportsPager.loaded ? reportsPager.total.toLocaleString('en-IN') : data.reports.availability.length} records</span>
+                  </div>
+                  <div className="report-table availability-report-table">
+                    {data.reports.availability.length ? (
+                      <div className="report-row report-head">
+                        <span>Product</span>
+                        <span>Stock</span>
+                      </div>
+                    ) : null}
                     {data.reports.availability.length ? data.reports.availability.map((row, index) => (
-                      <div className="row" key={`${row.shop_name}-${row.short_name || row.name}-${index}`}>
+                      <div className="report-row" key={`${row.shop_name}-${row.short_name || row.name}-${index}`}>
                         <span><b>{productName(row)}</b><small>{row.brand || 'No brand'} Â· {row.shop_name}</small></span>
                         <strong>{row.quantity} pcs</strong>
                       </div>
@@ -3884,18 +4084,18 @@ function App() {
                   />
                 </section>
                 <section className="two-col">
-                <section className="panel">
+                <section className="panel reports-panel">
                   <h2>Pending by shop</h2>
-                  <div className="table">
+                  <div className="report-table pending-report-table">
                     {data.reports.pendingByShop.length ? data.reports.pendingByShop.map((row) => (
-                      <div className="row" key={row.shop_name}>
+                      <div className="report-row" key={row.shop_name}>
                         <span>{row.shop_name}</span>
                         <strong>{currency(row.pending)}</strong>
                       </div>
                     )) : <Empty title="No pending payments by shop" />}
                   </div>
                 </section>
-                <section className="panel audit-history-panel">
+                <section className="panel audit-history-panel reports-panel">
                   <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
                     <h2 className="!border-0 !pb-0 !m-0">Audit history</h2>
                     {role === 'superadmin' && (
@@ -3908,9 +4108,9 @@ function App() {
                       </button>
                     )}
                   </div>
-                  <div className="table audit-table">
+                  <div className="report-table audit-report-table">
                     {data.reports.auditRows.length ? data.reports.auditRows.map((row) => (
-                      <div className="row audit-row" key={row.id}>
+                      <div className="report-row audit-row" key={row.id}>
                         <span><b>{row.action}</b><small>{row.actor_name} · {row.created_at}</small></span>
                         <span className="audit-details">{row.details}</span>
                       </div>

@@ -56,6 +56,7 @@ export default function StockPage({
   setSaving,
   initialForms,
   exportCsv,
+  onPrintStock,
   stockWithOwnership,
   FormPanel,
   Input,
@@ -716,11 +717,11 @@ export default function StockPage({
                 {/* PDF Print view */}
                 <button 
                   type="button" 
-                  onClick={() => window.print()}
+                  onClick={onPrintStock}
                   style={{ padding: '16px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s ease' }}
                 >
-                  <span style={{ display: 'flex', fontWeight: 600, fontSize: '14px', color: '#14b8a6', alignItems: 'center', gap: '6px' }}><Printer size={14} /> Print Current Sheet (PDF)</span>
-                  <p style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>Open printable layout of the current inventory list view for auditing.</p>
+                  <span style={{ display: 'flex', fontWeight: 600, fontSize: '14px', color: '#14b8a6', alignItems: 'center', gap: '6px' }}><Printer size={14} /> Print Stock Sheet</span>
+                  <p style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>Create a clean PDF-ready stock list with compatible device, stock price, sale price, and remaining quantity.</p>
                 </button>
 
               </div>
