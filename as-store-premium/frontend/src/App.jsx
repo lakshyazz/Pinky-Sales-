@@ -2988,13 +2988,6 @@ function App() {
             </div>
           ))}
         </nav>
-        <div className="sidebar-info-card">
-          <span>Manage faster</span>
-          <p>Track stock, prices, branches, and products from one clean dashboard.</p>
-          <button type="button" onClick={() => { setActivePage(role === 'customer' ? 'catalog' : 'reports'); setOpen(false); }}>
-            {role === 'customer' ? 'View catalog' : 'View reports'}
-          </button>
-        </div>
         <Magnetic className="w-full mt-auto">
           <button type="button" className="logout" title="Sign out" onClick={(event) => { event.preventDefault(); logout(); }}><LogOut size={18} /> <span>Sign out</span></button>
         </Magnetic>

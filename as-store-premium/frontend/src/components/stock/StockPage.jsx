@@ -429,22 +429,22 @@ export default function StockPage({
                   </div>
 
                   {/* Description */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <label style={{ fontSize: '13px', fontWeight: 500 }}>Product Description / Compatibility Notes</label>
+                  <div className="stock-form-field">
+                    <label className="stock-form-label">Product Description / Compatibility Notes</label>
                     <textarea 
+                      className="stock-form-textarea"
                       placeholder="Add compatibility specifics or replacement warnings..."
-                      style={{ padding: '12px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '8px', color: '#fff', fontSize: '14px', minHeight: '80px', outline: 'none' }}
                       value={forms.product.description}
                       onChange={(e) => setForms(prev => ({ ...prev, product: { ...prev.product, description: e.target.value } }))}
                     />
                   </div>
 
                   {/* Colour Selection */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', border: '1px solid rgba(255,255,255,0.04)', padding: '16px', borderRadius: '12px', background: 'rgba(255,255,255,0.005)' }}>
-                    <span style={{ fontSize: '13px', fontWeight: 500, display: 'block' }}>Product Colours Tagging:</span>
-                    <small style={{ opacity: 0.6, fontSize: '12px', marginTop: '-4px' }}>Select all colours that apply to this product. Typo-free tags keep inventory consistent.</small>
+                  <div className="stock-form-box">
+                    <span className="stock-form-label">Product Colours Tagging</span>
+                    <small className="stock-form-help">Select all colours that apply to this product. Typo-free tags keep inventory consistent.</small>
                     
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '6px' }}>
+                    <div className="stock-colour-chip-list">
                       {data.reference.colours.map((col) => {
                         const isSelected = forms.product.colours.split(',').map(c => c.trim()).includes(col.name);
                         return (
@@ -452,19 +452,7 @@ export default function StockPage({
                             type="button"
                             key={col.id}
                             onClick={() => handleToggleColour(col.name)}
-                            style={{
-                              padding: '6px 12px',
-                              borderRadius: '20px',
-                              fontSize: '12px',
-                              cursor: 'pointer',
-                              border: isSelected ? '1px solid #14b8a6' : '1px solid rgba(255,255,255,0.08)',
-                              background: isSelected ? 'rgba(20,184,166,0.15)' : 'rgba(255,255,255,0.02)',
-                              color: isSelected ? '#14b8a6' : 'rgba(255,255,255,0.7)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '6px',
-                              transition: 'all 0.15s ease'
-                            }}
+                            className={`stock-colour-chip ${isSelected ? 'selected' : ''}`}
                           >
                             {isSelected && <Check size={12} />}
                             {col.name}
@@ -474,19 +462,19 @@ export default function StockPage({
                     </div>
 
                     {/* Inline Quick Add Colour */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '12px', maxWidth: '300px' }}>
+                    <div className="stock-inline-colour-add">
                       <input 
+                        className="stock-inline-colour-input"
                         type="text"
                         placeholder="Type new colour..."
                         value={inlineColorInput}
                         onChange={(e) => setInlineColorInput(e.target.value)}
-                        style={{ flex: 1, padding: '6px 10px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '6px', fontSize: '12px', color: '#fff', outline: 'none' }}
                       />
                       <button 
+                        className="stock-inline-colour-button"
                         type="button" 
                         onClick={handleAddInlineColour}
                         disabled={saving}
-                        style={{ padding: '6px 10px', borderRadius: '6px', background: '#14b8a6', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}
                       >
                         <Plus size={12} /> Add
                       </button>
