@@ -4071,7 +4071,7 @@ function App() {
                     ) : null}
                     {data.reports.availability.length ? data.reports.availability.map((row, index) => (
                       <div className="report-row" key={`${row.shop_name}-${row.short_name || row.name}-${index}`}>
-                        <span><b>{productName(row)}</b><small>{row.brand || 'No brand'} Â· {row.shop_name}</small></span>
+                        <span><b>{productName(row)}</b><small>{row.brand || 'No brand'} / {row.shop_name}</small></span>
                         <strong>{row.quantity} pcs</strong>
                       </div>
                     )) : <Empty title="No availability records found" />}
