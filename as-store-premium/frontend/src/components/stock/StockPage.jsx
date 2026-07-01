@@ -76,6 +76,8 @@ export default function StockPage({
   const [newCategoryInput, setNewCategoryInput] = useState('');
   const [editingRef, setEditingRef] = useState(null); // { type, id, name }
   const [editingRefName, setEditingRefName] = useState('');
+  const stockSummaryTotals = data.stockSummary?.totals || {};
+  const stockModelTotal = Number(stockSummaryTotals.products || 0);
 
   // Inline color adder for product creation form
   const [inlineColorInput, setInlineColorInput] = useState('');
@@ -737,6 +739,14 @@ export default function StockPage({
           <span className="stock-eyebrow">Live Stock</span>
           <h2>Current Stock Overview</h2>
         </div>
+        {stockPager.loaded && (
+          <div className="models-summary">
+            <span className="status-badge stock-ok">{Number(stockPager.total || 0).toLocaleString('en-IN')} stock rows</span>
+            {stockModelTotal > 0 && (
+              <span className="status-badge due">{stockModelTotal.toLocaleString('en-IN')} models</span>
+            )}
+          </div>
+        )}
         
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
           <SearchFilter
@@ -960,6 +970,7 @@ export default function StockPage({
         loading={pageLoading.stock} 
         onPageChange={(page) => setStockPager((prev) => ({ ...prev, page }))} 
         onPageSizeChange={onStockPageSizeChange}
+        totalLabel="stock rows"
       />
 
     </section>

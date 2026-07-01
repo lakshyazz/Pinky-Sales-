@@ -7,6 +7,7 @@ export default function ProductPagination({
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = [25, 50, 100],
+  totalLabel = 'total',
 }) {
   if (!meta?.loaded) return null;
 
@@ -18,7 +19,7 @@ export default function ProductPagination({
   return (
     <div className="pagination-bar panel">
       <div className="pagination-copy">
-        <span className="status-badge stock-ok">{total.toLocaleString('en-IN')} total</span>
+        <span className="status-badge stock-ok">{total.toLocaleString('en-IN')} {totalLabel}</span>
         <small>Page {page} of {totalPages}</small>
         {onPageSizeChange && (
           <label className="pagination-size">

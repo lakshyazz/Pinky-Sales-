@@ -80,6 +80,7 @@ export default function ModelsPage({
           loading={loading}
           onPageChange={onPageChange}
           onPageSizeChange={onPageSizeChange}
+          totalLabel="models"
         />
       )}
     </section>

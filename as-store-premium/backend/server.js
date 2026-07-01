@@ -1047,7 +1047,8 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     if (req.query.includeSummary === 'true') {
       const summaryRows = await allRecords(`
         SELECT category,
-          COUNT(*) AS products,
+          COUNT(*) AS stock_rows,
+          COUNT(DISTINCT product_id) AS products,
           COALESCE(SUM(quantity), 0) AS quantity,
           COALESCE(SUM(owner_quantity), 0) AS owner_quantity,
           COALESCE(SUM(shopkeeper_quantity), 0) AS shopkeeper_quantity,
@@ -1066,6 +1067,7 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
       `, params);
       const totals = summaryRows.reduce((acc, row) => ({
         products: acc.products + Number(row.products || 0),
+        stock_rows: acc.stock_rows + Number(row.stock_rows || 0),
         quantity: acc.quantity + Number(row.quantity || 0),
         owner_quantity: acc.owner_quantity + Number(row.owner_quantity || 0),
         shopkeeper_quantity: acc.shopkeeper_quantity + Number(row.shopkeeper_quantity || 0),
@@ -1073,6 +1075,7 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
         warehouse_quantity: acc.warehouse_quantity + Number(row.warehouse_quantity || 0),
       }), {
         products: 0,
+        stock_rows: 0,
         quantity: 0,
         owner_quantity: 0,
         shopkeeper_quantity: 0,
