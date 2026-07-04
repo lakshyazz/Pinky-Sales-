@@ -603,6 +603,62 @@ app.post('/api/shopkeepers', authenticateToken, requireSuperAdmin, async (req, r
   }
 });
 
+app.put('/api/shopkeepers/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const shopkeeperId = Number(req.params.id);
+    const username = String(req.body.username || '').trim();
+    const password = String(req.body.password || '');
+    const name = String(req.body.name || '').trim();
+    const contact = String(req.body.contact || '').trim();
+    const shopId = Number(req.body.shop_id);
+
+    if (!Number.isInteger(shopkeeperId) || shopkeeperId <= 0) {
+      return res.status(400).json({ error: 'Choose a valid shopkeeper.' });
+    }
+    if (!username || !name || !Number.isInteger(shopId) || shopId <= 0) {
+      return res.status(400).json({ error: 'Username, name and shop are required.' });
+    }
+    if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) {
+      return res.status(400).json({ error: 'Username must be 3-40 characters and use only letters, numbers, dots, dashes, or underscores.' });
+    }
+    if (password && (password.length < 8 || password.length > 200)) {
+      return res.status(400).json({ error: 'New password must contain between 8 and 200 characters.' });
+    }
+    if (name.length > 80 || contact.length > 30) {
+      return res.status(400).json({ error: 'Name or mobile number is too long.' });
+    }
+
+    const [shopkeeper, shop, existingUser] = await Promise.all([
+      getRecord("SELECT id, username, name FROM users WHERE id = ? AND role IN ('shopkeeper', 'admin')", [shopkeeperId]),
+      getRecord('SELECT id FROM shops WHERE id = ?', [shopId]),
+      getRecord('SELECT id FROM users WHERE LOWER(username) = LOWER(?) AND id <> ?', [username, shopkeeperId]),
+    ]);
+    if (!shopkeeper) return res.status(404).json({ error: 'Shopkeeper not found.' });
+    if (!shop) return res.status(400).json({ error: 'Choose a valid shop.' });
+    if (existingUser) return res.status(409).json({ error: 'That username is already in use.' });
+
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      await runQuery(
+        "UPDATE users SET username = ?, password = ?, name = ?, contact = ?, shop_id = ? WHERE id = ? AND role IN ('shopkeeper', 'admin')",
+        [username, hash, name, contact, shopId, shopkeeperId]
+      );
+    } else {
+      await runQuery(
+        "UPDATE users SET username = ?, name = ?, contact = ?, shop_id = ? WHERE id = ? AND role IN ('shopkeeper', 'admin')",
+        [username, name, contact, shopId, shopkeeperId]
+      );
+    }
+
+    sessionUserCache.delete(shopkeeperId);
+    await audit(req, 'Updated shopkeeper login', 'user', shopkeeperId, `${name} (@${username})`);
+    res.json({ id: shopkeeperId, username, name, contact, shop_id: shopId });
+  } catch (error) {
+    console.error('[Shopkeepers] Update failed:', error);
+    res.status(500).json({ error: 'Unable to update this shopkeeper right now.' });
+  }
+});
+
 app.delete('/api/shopkeepers/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const shopkeeperId = Number(req.params.id);

@@ -340,31 +340,31 @@ export default function StockPage({
       <section style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '24px' }}>
         
         {/* PANEL 1: Add/Edit Product Panel */}
-        <div className="panel" style={{ border: '1px solid rgba(255,255,255,0.06)', overflow: 'hidden', padding: 0 }}>
+        <div className="panel stock-product-panel">
           <button 
             type="button" 
             onClick={() => setIsAddProductOpen(!isAddProductOpen)} 
-            style={{ width: '100%', padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.01)', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+            className="stock-product-toggle"
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <span style={{ padding: '8px', borderRadius: '8px', background: 'rgba(99,102,241,0.1)', color: '#6366f1' }}>
+            <div className="stock-product-toggle-main">
+              <span className="stock-product-toggle-icon">
                 <Smartphone size={18} />
               </span>
               <div>
-                <strong style={{ fontSize: '15px', display: 'block' }}>{editingProductId ? 'Edit Product & Pricing' : 'Add New Product'}</strong>
-                <small style={{ opacity: 0.6, fontSize: '12px' }}>{editingProductId ? 'Modify pricing, models, and specifications' : 'Create a new catalog item with default pricing'}</small>
+                <strong>{editingProductId ? 'Edit Product & Pricing' : 'Add New Product'}</strong>
+                <small>{editingProductId ? 'Modify pricing, models, and specifications' : 'Create a new catalog item with default pricing'}</small>
               </div>
             </div>
             {isAddProductOpen ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
           </button>
 
           {isAddProductOpen && (
-            <div style={{ padding: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-              <form onSubmit={(e) => { e.preventDefault(); onSubmitProduct(); }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '20px' }}>
+            <div className="stock-product-body">
+              <form className="stock-product-form" onSubmit={(e) => { e.preventDefault(); onSubmitProduct(); }}>
+                <div className="stock-product-flow">
                   
                   {/* Grid 1: Basic specifications */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr md:1fr 1fr', gap: '16px' }}>
+                  <div className="stock-product-grid stock-product-grid--identity">
                     <Input 
                       label="Short Display Name (Visible to Users)" 
                       required 
@@ -388,7 +388,7 @@ export default function StockPage({
                   </div>
 
                   {/* Grid 2: Brand and Category */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+                  <div className="stock-product-grid stock-product-grid--taxonomy">
                     <Select 
                       label="Mobile Brand" 
                       required
@@ -406,7 +406,7 @@ export default function StockPage({
                   </div>
 
                   {/* Pricing grid */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                  <div className="stock-product-grid stock-product-grid--pricing">
                     <Input 
                       label="Selling / Retail Price (Sale)" 
                       required
@@ -485,7 +485,7 @@ export default function StockPage({
                   </div>
 
                   {/* Actions */}
-                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+                  <div className="stock-product-actions">
                     {editingProductId && (
                       <button 
                         className="soft" 
@@ -499,7 +499,7 @@ export default function StockPage({
                       </button>
                     )}
                     <button className="primary" type="submit" disabled={saving}>
-                      <Save size={16} style={{ marginRight: '6px' }} />
+                      <Save size={16} />
                       {saving ? 'Saving...' : editingProductId ? 'Update Product' : 'Add Product'}
                     </button>
                   </div>

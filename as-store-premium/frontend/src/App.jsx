@@ -10,11 +10,13 @@ import {
   Contact,
   CreditCard,
   Download,
+  Edit3,
   Eye,
   EyeOff,
   FileText,
   ListFilter,
   IndianRupee,
+  KeyRound,
   LayoutGrid,
   LogOut,
   Menu,
@@ -815,12 +817,16 @@ function App() {
   const [globalSearchFocused, setGlobalSearchFocused] = useState(false);
   const [searchHydrated, setSearchHydrated] = useState(false);
   const [salesFilters, setSalesFilters] = useState({ search: '', date: '' });
+  const [shopkeeperSearch, setShopkeeperSearch] = useState('');
   const [transferDrawerOpen, setTransferDrawerOpen] = useState(false);
   const [expandedPaymentId, setExpandedPaymentId] = useState('');
   const [editingProductId, setEditingProductId] = useState('');
+  const [editingShopkeeper, setEditingShopkeeper] = useState(null);
+  const [shopkeeperEditForm, setShopkeeperEditForm] = useState(initialForms.shopkeeper);
   const deferredCatalogFilters = useDeferredValue(catalogFilters);
   const deferredStockFilters = useDeferredValue(stockFilters);
   const deferredShopkeeperStockSearch = useDeferredValue(shopkeeperStockSearch);
+  const deferredShopkeeperSearch = useDeferredValue(shopkeeperSearch);
   const deferredCustomerFilters = useDeferredValue(customerFilters);
   const deferredSalesFilters = useDeferredValue(salesFilters);
   const deferredPendingFilters = useDeferredValue(pendingFilters);
@@ -1641,6 +1647,68 @@ function App() {
       await loadCore();
     } catch (error) {
       showToast(error.message || 'Unable to save right now');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const openShopkeeperEditor = (shopkeeper) => {
+    setEditingShopkeeper(shopkeeper);
+    setShopkeeperEditForm({
+      username: shopkeeper.username || '',
+      password: '',
+      name: shopkeeper.name || '',
+      contact: shopkeeper.contact || '',
+      shop_id: shopkeeper.shop_id ? String(shopkeeper.shop_id) : '',
+    });
+  };
+
+  const closeShopkeeperEditor = () => {
+    if (saving) return;
+    setEditingShopkeeper(null);
+    setShopkeeperEditForm(initialForms.shopkeeper);
+  };
+
+  const updateShopkeeperLogin = async () => {
+    if (!editingShopkeeper) return;
+    const username = shopkeeperEditForm.username.trim();
+    const name = shopkeeperEditForm.name.trim();
+    if (!name || !username) {
+      showToast('Enter the shopkeeper name and username');
+      return;
+    }
+    if (!/^[a-zA-Z0-9._-]{3,40}$/.test(username)) {
+      showToast('Username must be 3-40 characters using letters, numbers, dots, dashes, or underscores');
+      return;
+    }
+    if (shopkeeperEditForm.password && shopkeeperEditForm.password.length < 8) {
+      showToast('New password must contain at least 8 characters');
+      return;
+    }
+    if (!shopkeeperEditForm.shop_id) {
+      showToast('Please select a shop');
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        ...shopkeeperEditForm,
+        username,
+        name,
+        contact: shopkeeperEditForm.contact.trim(),
+        shop_id: shopkeeperEditForm.shop_id,
+      };
+      await authedFetch(`/shopkeepers/${editingShopkeeper.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      showToast(shopkeeperEditForm.password ? 'Login details and password updated' : 'Login details updated');
+      setEditingShopkeeper(null);
+      setShopkeeperEditForm(initialForms.shopkeeper);
+      await loadCore();
+      await loadTab('shopkeepers');
+    } catch (error) {
+      showToast(error.message || 'Unable to update this shopkeeper');
     } finally {
       setSaving(false);
     }
@@ -2973,6 +3041,15 @@ function App() {
   }) : productPageItems;
   const priceItems = productPageItems;
   const visibleSales = data.sales;
+  const shopkeeperQuery = normalizedText(deferredShopkeeperSearch);
+  const visibleShopkeepers = data.shopkeepers.filter((user) => {
+    if (!shopkeeperQuery) return true;
+    return [user.name, user.username, user.contact, user.shop_name]
+      .filter(Boolean)
+      .some((value) => normalizedText(value).includes(shopkeeperQuery));
+  });
+  const staffedBranchCount = new Set(data.shopkeepers.map((user) => String(user.shop_id || '')).filter(Boolean)).size;
+  const incompleteShopkeeperContacts = data.shopkeepers.filter((user) => !String(user.contact || '').trim()).length;
 
   const visibleCatalog = data.catalog.filter((product) => {
     const query = deferredCatalogFilters.search.trim().toLowerCase();
@@ -3479,6 +3556,28 @@ function App() {
           {active === 'shopkeepers' && (
             <PageWrapper activeKey="shopkeepers" key="shopkeepers">
               <section className="space">
+                <section className="shopkeeper-command-panel panel">
+                  <div className="shopkeeper-command-copy">
+                    <span className="stock-eyebrow">Owner Access</span>
+                    <h2>Shopkeeper logins</h2>
+                    <p>Edit staff login details, reset passwords, and keep each branch assignment current.</p>
+                  </div>
+                  <div className="shopkeeper-command-stats">
+                    <span>
+                      <small>Total logins</small>
+                      <strong>{data.shopkeepers.length}</strong>
+                    </span>
+                    <span>
+                      <small>Staffed branches</small>
+                      <strong>{staffedBranchCount}</strong>
+                    </span>
+                    <span>
+                      <small>Missing mobile</small>
+                      <strong>{incompleteShopkeeperContacts}</strong>
+                    </span>
+                  </div>
+                </section>
+
                 <FormPanel title="Create shopkeeper login" action={saving ? 'Creating login...' : 'Create login'} onSubmit={submitShopkeeper} disabled={saving}>
                   <Input label="Name" autoComplete="name" maxLength={80} className="md:col-span-2" value={forms.shopkeeper.name} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, name: v } })} />
                   <Input label="Mobile" autoComplete="tel" inputMode="tel" maxLength={30} className="md:col-span-2" value={forms.shopkeeper.contact} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, contact: v } })} />
@@ -3498,48 +3597,81 @@ function App() {
                   )}
                 </FormPanel>
                 {data.shopkeepers.length ? (
-                  <motion.div 
-                    variants={listVariants}
-                    initial="hidden"
-                    whileInView="visible"
-                    viewport={{ once: true, margin: "-10px" }}
-                    className="table panel"
-                  >
-                    {data.shopkeepers.map((user) => {
-                      const initials = user.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : 'SK';
-                      return (
-                        <motion.div variants={itemVariants} className="row shopkeeper-row" key={user.id}>
-                          <div className="flex items-center gap-3">
-                            <div className="w-10 h-10 rounded-lg bg-teal/10 text-teal flex items-center justify-center font-bold text-sm shrink-0">
-                              {initials}
-                            </div>
-                            <span><b>{user.name}</b><small>@{user.username}</small></span>
-                          </div>
-                          <span>
-                            <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-0.5">Contact</span>
-                            <span className="flex items-center gap-1.5 text-sm text-slate-600 font-medium"><Contact size={14} /> {user.contact || 'Not provided'}</span>
-                          </span>
-                          <span>
-                            <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-0.5">Assigned Shop</span>
-                            <span className="flex items-center gap-1.5 text-sm text-slate-800 font-bold"><Store size={14} /> {user.shop_name}</span>
-                          </span>
-                          <div className="shopkeeper-actions">
-                            <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-1">Access Role</span>
-                            <span className="status-badge paid">Branch Staff</span>
-                            <button
-                              className="shopkeeper-delete-button"
-                              type="button"
-                              disabled={saving}
-                              aria-label={`Delete ${user.name}'s shopkeeper login`}
-                              onClick={() => deleteShopkeeper(user)}
-                            >
-                              <Trash2 size={14} /> Delete login
-                            </button>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </motion.div>
+                  <section className="shopkeeper-list-panel panel">
+                    <div className="shopkeeper-list-toolbar">
+                      <div>
+                        <span className="stock-eyebrow">Login Directory</span>
+                        <h2>Active staff access</h2>
+                        <p>Search by staff name, username, mobile number, or assigned branch.</p>
+                      </div>
+                      <div className="shopkeeper-search-wrap">
+                        <SearchInput
+                          value={shopkeeperSearch}
+                          onChange={setShopkeeperSearch}
+                          placeholder="Search logins..."
+                          ariaLabel="Search shopkeeper logins"
+                        />
+                        <span className="status-badge stock-ok">{visibleShopkeepers.length} shown</span>
+                      </div>
+                    </div>
+                    {visibleShopkeepers.length ? (
+                      <motion.div
+                        variants={listVariants}
+                        initial="hidden"
+                        whileInView="visible"
+                        viewport={{ once: true, margin: "-10px" }}
+                        className="shopkeeper-list"
+                      >
+                        {visibleShopkeepers.map((user) => {
+                          const initials = user.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : 'SK';
+                          return (
+                            <motion.div variants={itemVariants} className="row shopkeeper-row" key={user.id}>
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-lg bg-teal/10 text-teal flex items-center justify-center font-bold text-sm shrink-0">
+                                  {initials}
+                                </div>
+                                <span><b>{user.name}</b><small>@{user.username}</small></span>
+                              </div>
+                              <span>
+                                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-0.5">Contact</span>
+                                <span className="flex items-center gap-1.5 text-sm text-slate-600 font-medium"><Contact size={14} /> {user.contact || 'Not provided'}</span>
+                              </span>
+                              <span>
+                                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-0.5">Assigned Shop</span>
+                                <span className="flex items-center gap-1.5 text-sm text-slate-800 font-bold"><Store size={14} /> {user.shop_name || 'No shop assigned'}</span>
+                              </span>
+                              <div className="shopkeeper-actions">
+                                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-1">Access Role</span>
+                                <span className="status-badge paid">Branch Staff</span>
+                                <div className="shopkeeper-row-buttons">
+                                  <button
+                                    className="shopkeeper-edit-button"
+                                    type="button"
+                                    disabled={saving}
+                                    aria-label={`Edit ${user.name}'s shopkeeper login`}
+                                    onClick={() => openShopkeeperEditor(user)}
+                                  >
+                                    <Edit3 size={14} /> Edit
+                                  </button>
+                                  <button
+                                    className="shopkeeper-delete-button"
+                                    type="button"
+                                    disabled={saving}
+                                    aria-label={`Delete ${user.name}'s shopkeeper login`}
+                                    onClick={() => deleteShopkeeper(user)}
+                                  >
+                                    <Trash2 size={14} /> Delete
+                                  </button>
+                                </div>
+                              </div>
+                            </motion.div>
+                          );
+                        })}
+                      </motion.div>
+                    ) : (
+                      <Empty title="No shopkeeper logins match this search" />
+                    )}
+                  </section>
                 ) : (
                   <Empty title="No shopkeepers registered yet" />
                 )}
@@ -4194,6 +4326,64 @@ function App() {
                   <Select label="Product" value={forms.transfer.product_id} onChange={(v) => setForms({ ...forms, transfer: { ...forms.transfer, product_id: v } })} options={data.products.map((p) => [p.id, productName(p)])} />
                   <Input label="Quantity" type="number" value={forms.transfer.quantity} onChange={(v) => setForms({ ...forms, transfer: { ...forms.transfer, quantity: v } })} />
                   <button className="primary" type="submit" disabled={saving}><Send size={17} /> {saving ? 'Transferring...' : 'Confirm transfer'}</button>
+                </form>
+              </motion.aside>
+            </div>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {editingShopkeeper && (
+            <div className="drawer-layer" role="presentation">
+              <motion.button
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="drawer-mask"
+                type="button"
+                aria-label="Close login editor"
+                onClick={closeShopkeeperEditor}
+              />
+              <motion.aside
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+                className="transfer-drawer shopkeeper-edit-drawer"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="shopkeeper-edit-title"
+              >
+                <div className="drawer-head">
+                  <div className="shopkeeper-edit-title">
+                    <span className="shopkeeper-edit-icon"><UserCog size={20} /></span>
+                    <div>
+                      <span className="eyebrow">Staff login</span>
+                      <h2 id="shopkeeper-edit-title">Edit login info</h2>
+                      <p>@{editingShopkeeper.username}</p>
+                    </div>
+                  </div>
+                  <button type="button" className="icon" aria-label="Close login editor" onClick={closeShopkeeperEditor}><X size={18} /></button>
+                </div>
+
+                <div className="shopkeeper-security-note">
+                  <KeyRound size={18} />
+                  <span>
+                    Leave the password field blank to keep the current password. Enter a new one only when you want to reset access.
+                  </span>
+                </div>
+
+                <form className="drawer-form shopkeeper-edit-form" onSubmit={(event) => { event.preventDefault(); updateShopkeeperLogin(); }} onKeyDown={handleFormKeyDown}>
+                  <Input label="Name" autoComplete="name" maxLength={80} value={shopkeeperEditForm.name} onChange={(v) => setShopkeeperEditForm((prev) => ({ ...prev, name: v }))} />
+                  <Input label="Mobile" autoComplete="tel" inputMode="tel" maxLength={30} value={shopkeeperEditForm.contact} onChange={(v) => setShopkeeperEditForm((prev) => ({ ...prev, contact: v }))} />
+                  <Input label="Username" autoComplete="off" minLength={3} maxLength={40} value={shopkeeperEditForm.username} onChange={(v) => setShopkeeperEditForm((prev) => ({ ...prev, username: v }))} />
+                  <Input label="New password (optional)" type="password" autoComplete="new-password" minLength={8} maxLength={200} value={shopkeeperEditForm.password} onChange={(v) => setShopkeeperEditForm((prev) => ({ ...prev, password: v }))} />
+                  <Select label="Assigned shop" value={shopkeeperEditForm.shop_id} onChange={(v) => setShopkeeperEditForm((prev) => ({ ...prev, shop_id: v }))} options={data.shops.map((s) => [s.id, s.name])} />
+                  <div className="shopkeeper-edit-actions">
+                    <button className="primary" type="submit" disabled={saving}><ShieldCheck size={17} /> {saving ? 'Saving...' : 'Save login'}</button>
+                    <button className="soft" type="button" disabled={saving} onClick={closeShopkeeperEditor}>Cancel</button>
+                  </div>
                 </form>
               </motion.aside>
             </div>
