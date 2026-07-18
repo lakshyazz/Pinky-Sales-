@@ -35,8 +35,8 @@ export function OtherProductsPage({ session, setGlobalToast, api }) {
   const loadData = async () => {
     try {
       const [resProd, resRef] = await Promise.all([
-        api('/api/other-products', {}, session.token).catch(() => []),
-        api('/api/reference-data', {}, session.token).catch(() => ({ categories: [] }))
+        api('/other-products', {}, session.token).catch(() => []),
+        api('/reference-data', {}, session.token).catch(() => ({ categories: [] }))
       ]);
       setProducts(resProd.filter(p => !p.category_name || p.category_name.toLowerCase() !== 'mobile display'));
       setCategories(resRef.categories || []);
@@ -74,7 +74,7 @@ export function OtherProductsPage({ session, setGlobalToast, api }) {
     }
     setLoading(true);
     try {
-      const url = editingId ? `/api/other-products/${editingId}` : '/api/other-products';
+      const url = editingId ? `/other-products/${editingId}` : '/other-products';
       const method = editingId ? 'PUT' : 'POST';
       await api(url, {
         method,
@@ -98,7 +98,7 @@ export function OtherProductsPage({ session, setGlobalToast, api }) {
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this product?')) return;
     try {
-      await api(`/api/other-products/${id}`, {
+      await api(`/other-products/${id}`, {
         method: 'DELETE'
       }, session.token);
       

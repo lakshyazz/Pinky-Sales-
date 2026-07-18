@@ -21,7 +21,7 @@ export function CategoriesPage({ session, setGlobalToast, api }) {
 
   const loadData = async () => {
     try {
-      const data = await api('/api/reference-data', {}, session.token);
+      const data = await api('/reference-data', {}, session.token);
       setCategories(data.categories || []);
     } catch (e) {
       console.error(e);
@@ -52,7 +52,7 @@ export function CategoriesPage({ session, setGlobalToast, api }) {
     }
     setLoading(true);
     try {
-      const url = editingId ? `/api/reference-data/categories/${editingId}` : '/api/reference-data/categories';
+      const url = editingId ? `/reference-data/categories/${editingId}` : '/reference-data/categories';
       const method = editingId ? 'PUT' : 'POST';
       const data = await api(url, {
         method,
@@ -72,7 +72,7 @@ export function CategoriesPage({ session, setGlobalToast, api }) {
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this category?')) return;
     try {
-      await api(`/api/reference-data/categories/${id}`, {
+      await api(`/reference-data/categories/${id}`, {
         method: 'DELETE'
       }, session.token);
       
