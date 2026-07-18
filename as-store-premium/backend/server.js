@@ -869,8 +869,9 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     name, short_name, full_model_list, brand, category, model, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours,
   } = req.body;
-  const compatibilityModels = String(full_model_list || name || '').trim();
+  let compatibilityModels = String(full_model_list || name || '').trim();
   const displayName = String(short_name || compatibilityModels).trim();
+  if (!compatibilityModels) compatibilityModels = displayName;
   
   const parsePrice = (val, fallback = null) => {
     if (val === '' || val === null || val === undefined) return fallback;
@@ -879,8 +880,8 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   };
   
   const salePriceNum = Number(sale_price ?? official_price);
-  if (!compatibilityModels || !displayName || !brand || !category || isNaN(salePriceNum) || salePriceNum <= 0) {
-    return res.status(400).json({ error: 'Short name, compatible models, brand, category and a valid sale price are required.' });
+  if (!displayName || !brand || !category || isNaN(salePriceNum) || salePriceNum <= 0) {
+    return res.status(400).json({ error: 'Short name, brand, category and a valid sale price are required.' });
   }
 
   const purchasePriceNum = parsePrice(purchase_price, null);
@@ -923,8 +924,9 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     name, short_name, full_model_list, brand, category, model, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
   } = req.body;
-  const compatibilityModels = String(full_model_list || name || '').trim();
+  let compatibilityModels = String(full_model_list || name || '').trim();
   const displayName = String(short_name || compatibilityModels).trim();
+  if (!compatibilityModels) compatibilityModels = displayName;
 
   const parsePrice = (val, fallback = null) => {
     if (val === '' || val === null || val === undefined) return fallback;
@@ -933,8 +935,8 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
   };
   
   const salePriceNum = Number(sale_price ?? official_price);
-  if (!compatibilityModels || !displayName || !brand || !category || isNaN(salePriceNum) || salePriceNum <= 0) {
-    return res.status(400).json({ error: 'Short name, compatible models, brand, category and a valid sale price are required.' });
+  if (!displayName || !brand || !category || isNaN(salePriceNum) || salePriceNum <= 0) {
+    return res.status(400).json({ error: 'Short name, brand, category and a valid sale price are required.' });
   }
 
   const purchasePriceNum = parsePrice(purchase_price, null);
@@ -998,6 +1000,62 @@ app.delete('/api/products/:id', authenticateToken, requireShopStaff, async (req,
   } catch (error) {
     console.error('[Products] Delete failed:', error);
     res.status(500).json({ error: 'Unable to delete this product right now.' });
+  }
+});
+
+// --- Other Products ---
+app.get('/api/other-products', authenticateToken, async (req, res) => {
+  try {
+    const rows = await allRecords(`
+      SELECT op.*, c.name as category_name
+      FROM other_products op
+      LEFT JOIN categories c ON op.product_category_id = c.id
+      ORDER BY op.id DESC
+    `);
+    res.json(rows);
+  } catch (error) {
+    console.error('[OtherProducts] Get failed:', error);
+    res.status(500).json({ error: 'Failed to fetch other products' });
+  }
+});
+
+app.post('/api/other-products', authenticateToken, async (req, res) => {
+  try {
+    const { product_name, product_company, price, product_category_id } = req.body;
+    if (!product_name) return res.status(400).json({ error: 'Product name is required' });
+    const result = await runQuery(
+      'INSERT INTO other_products (product_name, product_company, price, product_category_id) VALUES (?, ?, ?, ?) RETURNING *',
+      [product_name, product_company, price || 0, product_category_id || null]
+    );
+    res.json({ success: true, id: result.rows[0].id });
+  } catch (error) {
+    console.error('[OtherProducts] Create failed:', error);
+    res.status(500).json({ error: 'Failed to create product' });
+  }
+});
+
+app.put('/api/other-products/:id', authenticateToken, async (req, res) => {
+  try {
+    const { product_name, product_company, price, product_category_id } = req.body;
+    if (!product_name) return res.status(400).json({ error: 'Product name is required' });
+    await runQuery(
+      'UPDATE other_products SET product_name = ?, product_company = ?, price = ?, product_category_id = ? WHERE id = ?',
+      [product_name, product_company, price || 0, product_category_id || null, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[OtherProducts] Update failed:', error);
+    res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+app.delete('/api/other-products/:id', authenticateToken, async (req, res) => {
+  try {
+    await runQuery('DELETE FROM other_products WHERE id = ?', [req.params.id]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[OtherProducts] Delete failed:', error);
+    res.status(500).json({ error: 'Failed to delete product' });
   }
 });
 

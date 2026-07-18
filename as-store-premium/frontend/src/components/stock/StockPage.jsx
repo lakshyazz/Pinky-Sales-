@@ -374,7 +374,6 @@ export default function StockPage({
                     />
                     <Input 
                       label="Compatible Phone Models (Full list)" 
-                      required 
                       placeholder="Example: A2633, A2482, A2631"
                       value={forms.product.full_model_list} 
                       onChange={(v) => handleProductNameChange(v, 'full_model_list')} 
@@ -547,13 +546,6 @@ export default function StockPage({
                   style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'brands' ? 'rgba(168,85,247,0.15)' : 'transparent', color: refTab === 'brands' ? '#a855f7' : 'rgba(255,255,255,0.6)' }}
                 >
                   Brands {role !== 'superadmin' && <small>(Read-Only)</small>}
-                </button>
-                <button 
-                  type="button" 
-                  onClick={() => { setRefTab('categories'); setEditingRef(null); }}
-                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'categories' ? 'rgba(168,85,247,0.15)' : 'transparent', color: refTab === 'categories' ? '#a855f7' : 'rgba(255,255,255,0.6)' }}
-                >
-                  Categories {role !== 'superadmin' && <small>(Read-Only)</small>}
                 </button>
               </div>
 

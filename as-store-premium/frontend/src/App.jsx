@@ -41,6 +41,8 @@ import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import Pagination from './components/ui/Pagination';
 import SearchInput from './components/ui/SearchInput';
+import { CategoriesPage } from './components/other-products/CategoriesPage';
+import { OtherProductsPage } from './components/other-products/OtherProductsPage';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
 const productionApiBase = configuredApiBase?.startsWith('http')
@@ -232,6 +234,8 @@ const navByRole = {
     ['stock', 'Stock', Package],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
+    ['categories', 'Product Categories', Store],
+    ['other-products', 'Other Products', Package],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
     ['customers', 'Customers', Users],
@@ -245,6 +249,8 @@ const navByRole = {
     ['stock', 'Stock', Package],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
+    ['categories', 'Product Categories', Store],
+    ['other-products', 'Other Products', Package],
     ['customers', 'Customers', Users],
     ['requests', 'Requests', Send],
     ['sales', 'Create Sale', ReceiptText],
@@ -262,13 +268,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'models', 'prices'] },
+    { title: 'Inventory', ids: ['stock', 'models', 'prices', 'categories', 'other-products'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'models', 'prices'] },
+    { title: 'Inventory', ids: ['stock', 'models', 'prices', 'categories', 'other-products'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -309,6 +315,16 @@ const pageMetaById = {
     group: 'Pricing',
     title: 'Stock Prices',
     description: 'Review and edit purchase, selling, and wholesale prices from the product catalog.',
+  },
+  'categories': {
+    group: 'Inventory',
+    title: 'Product Categories',
+    description: 'Manage global product categories.',
+  },
+  'other-products': {
+    group: 'Inventory',
+    title: 'Other Products',
+    description: 'Manage other products in the system.',
   },
   customers: {
     group: 'Operations',
@@ -3739,6 +3755,18 @@ function App() {
             </PageWrapper>
           )}
 
+          {active === 'categories' && (
+            <PageWrapper activeKey="categories" key="categories">
+              <CategoriesPage session={session} setGlobalToast={showToast} api={api} />
+            </PageWrapper>
+          )}
+
+          {active === 'other-products' && (
+            <PageWrapper activeKey="other-products" key="other-products">
+              <OtherProductsPage session={session} setGlobalToast={showToast} api={api} />
+            </PageWrapper>
+          )}
+
           {active === 'stock' && (
             <PageWrapper activeKey="stock" key="stock">
               <StockPage
@@ -4101,8 +4129,7 @@ function App() {
                 <motion.div 
                   variants={listVariants}
                   initial="hidden"
-                  whileInView="visible"
-                  viewport={{ once: true, margin: "-10px" }}
+                  animate="visible"
                   className="payment-list"
                 >
                   {data.pending.map((item) => (
