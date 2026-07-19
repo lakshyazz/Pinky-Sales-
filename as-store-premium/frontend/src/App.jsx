@@ -3769,17 +3769,34 @@ function App() {
                 productLoading={brandProductsLoading}
                 onSearchChange={setBrandSearch}
                 onSelectBrand={selectBrand}
-                onClearBrand={() => {
-                  setSelectedBrand('');
-                  setBrandProducts([]);
-                }}
-                onOpenStockBrand={openBrandStock}
-                onViewDetails={setSelectedProductDetails}
+                session={session}
+                setGlobalToast={showToast}
+                api={api}
+                data={data}
+                onBrandChange={loadCore}
+                currency={currency}
                 productName={productName}
-                fullModelList={fullModelList}
-                priceLabel={priceLabel}
-                Empty={Empty}
               />
+            </PageWrapper>
+          )}
+
+          {active === 'categories' && (
+            <PageWrapper activeKey="categories" key="categories">
+              <CategoriesPage
+                session={session}
+                setGlobalToast={showToast}
+                api={api}
+                data={data}
+                onCategoryChange={loadCore}
+                currency={currency}
+                productName={productName}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'other-products' && (
+            <PageWrapper activeKey="other-products" key="other-products">
+              <OtherProductsPage session={session} setGlobalToast={showToast} api={api} />
             </PageWrapper>
           )}
 
@@ -3835,34 +3852,14 @@ function App() {
                 productName={productName}
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
-                FormPanel={FormPanel}
-                Input={Input}
-                Select={Select}
-                CardGrid={CardGrid}
+                Empty={Empty}
               />
-            </PageWrapper>
-          )}
-
-          {active === 'categories' && (
-            <PageWrapper activeKey="categories" key="categories">
-              <CategoriesPage session={session} setGlobalToast={showToast} api={api} />
-            </PageWrapper>
-          )}
-
-          {active === 'other-products' && (
-            <PageWrapper activeKey="other-products" key="other-products">
-              <OtherProductsPage session={session} setGlobalToast={showToast} api={api} />
             </PageWrapper>
           )}
 
           {active === 'stock' && (
             <PageWrapper activeKey="stock" key="stock">
               <StockPage
-                role={role}
-                shopId={shopId}
-                forms={forms}
-                setForms={setForms}
-                data={data}
                 ownerInventoryQuantity={ownerInventoryQuantity}
                 myInventoryQuantity={myInventoryQuantity}
                 updateStock={updateStock}
