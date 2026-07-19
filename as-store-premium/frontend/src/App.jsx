@@ -31,6 +31,7 @@ import {
   ShoppingBag,
   Store,
   Sun,
+  Tags,
   Trash2,
   UserCog,
   Users,
@@ -39,6 +40,7 @@ import {
 import ModelsPage from './components/models/ModelsPage';
 import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
+import BrandsPage from './components/brands/BrandsPage';
 import Pagination from './components/ui/Pagination';
 import SearchInput from './components/ui/SearchInput';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
@@ -232,6 +234,7 @@ const navByRole = {
   superadmin: [
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
+    ['brands', 'Brands', Tags],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
@@ -247,6 +250,7 @@ const navByRole = {
   shopkeeper: [
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
+    ['brands', 'Brands', Tags],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
@@ -268,13 +272,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'models', 'prices', 'categories', 'other-products'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories', 'other-products'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'models', 'prices', 'categories', 'other-products'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories', 'other-products'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -305,6 +309,11 @@ const pageMetaById = {
     group: 'Inventory',
     title: 'Consolidated Stock',
     description: 'View complete stock availability across warehouse, branches, models, colours, and product groups.',
+  },
+  brands: {
+    group: 'Inventory',
+    title: 'Brands',
+    description: 'Browse company cards and drill into every product grouped under that brand.',
   },
   models: {
     group: 'Inventory',
@@ -787,6 +796,7 @@ function App() {
     shops: [],
     shopkeepers: [],
     products: [],
+    brandSummary: [],
     stock: [],
     customers: [],
     sales: [],
@@ -819,6 +829,10 @@ function App() {
   const [forms, setForms] = useState(initialForms);
   const [catalogFilters, setCatalogFilters] = useState({ search: '', brand: '', category: '', colour: '', shopId: '' });
   const [stockFilters, setStockFilters] = useState({ search: '', brand: '', category: '', colour: '', status: '', shopkeeperId: '', ownership: '' });
+  const [brandSearch, setBrandSearch] = useState('');
+  const [selectedBrand, setSelectedBrand] = useState('');
+  const [brandProducts, setBrandProducts] = useState([]);
+  const [brandProductsLoading, setBrandProductsLoading] = useState(false);
   const [shopkeeperStockSearch, setShopkeeperStockSearch] = useState('');
   const [categorySearch, setCategorySearch] = useState('');
   const [stockCategoryPage, setStockCategoryPage] = useState(null);
@@ -857,6 +871,7 @@ function App() {
   const [reportsPager, setReportsPager] = useState(() => createPager(50));
   const [productPageLoading, setProductPageLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState({
+    brands: false,
     stock: false,
     customers: false,
     sales: false,
@@ -1184,6 +1199,53 @@ function App() {
     }
   };
 
+  const loadBrandProducts = async (brand, currentShop = shopId) => {
+    const cleanBrand = String(brand || '').trim();
+    if (!token || role === 'customer' || !cleanBrand) return;
+    setBrandProductsLoading(true);
+    try {
+      const params = scopedParams(currentShop);
+      params.set('brand', cleanBrand);
+      const response = await authedFetch(`/brand-products?${params.toString()}`);
+      setBrandProducts(response);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load brand products right now.');
+    } finally {
+      setBrandProductsLoading(false);
+    }
+  };
+
+  const loadBrandsPage = async (currentShop = shopId) => {
+    if (!token || role === 'customer') return;
+    setPageLoading((prev) => ({ ...prev, brands: true }));
+    try {
+      const params = scopedParams(currentShop);
+      const query = params.toString();
+      const response = await authedFetch(`/brands${query ? `?${query}` : ''}`);
+      setData((prev) => ({ ...prev, brandSummary: response }));
+      if (selectedBrand) await loadBrandProducts(selectedBrand, currentShop);
+    } catch (error) {
+      handleLoadError(error, 'Unable to load brands right now.');
+    } finally {
+      setPageLoading((prev) => ({ ...prev, brands: false }));
+    }
+  };
+
+  const selectBrand = async (brand) => {
+    const cleanBrand = String(brand || '').trim();
+    setSelectedBrand(cleanBrand);
+    setBrandProducts([]);
+    if (cleanBrand) await loadBrandProducts(cleanBrand);
+  };
+
+  const openBrandStock = (brand) => {
+    const cleanBrand = String(brand || '').trim();
+    if (!cleanBrand) return;
+    setStockFilters((prev) => ({ ...prev, brand: cleanBrand, search: '' }));
+    setStockPager((prev) => ({ ...prev, page: 1 }));
+    setActivePage('stock');
+  };
+
   const loadCustomersPage = async ({ page = customerPager.page, currentShop = shopId, filters = customerFilters } = {}) => {
     if (!token || role === 'customer') return;
     setPageLoading((prev) => ({ ...prev, customers: true }));
@@ -1393,6 +1455,7 @@ function App() {
           search: stockFilters.search,
         });
       }
+      if (tab === 'brands') await loadBrandsPage(currentShop);
       if (tab === 'customers') {
         const dependencyParams = scopedParams(currentShop);
         dependencyParams.set('page', '1');
@@ -3692,6 +3755,31 @@ function App() {
                   <Empty title="No shopkeepers registered yet" />
                 )}
               </section>
+            </PageWrapper>
+          )}
+
+          {active === 'brands' && role !== 'customer' && (
+            <PageWrapper activeKey="brands" key="brands">
+              <BrandsPage
+                brands={data.brandSummary}
+                selectedBrand={selectedBrand}
+                products={brandProducts}
+                search={brandSearch}
+                loading={pageLoading.brands}
+                productLoading={brandProductsLoading}
+                onSearchChange={setBrandSearch}
+                onSelectBrand={selectBrand}
+                onClearBrand={() => {
+                  setSelectedBrand('');
+                  setBrandProducts([]);
+                }}
+                onOpenStockBrand={openBrandStock}
+                onViewDetails={setSelectedProductDetails}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+                Empty={Empty}
+              />
             </PageWrapper>
           )}
 

@@ -25,7 +25,7 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   next();
 });
-app.use(express.json({ limit: '256kb' }));
+app.use(express.json({ limit: '1mb' }));
 
 const wrapRouteHandler = (handler) => {
   if (typeof handler !== 'function' || handler.length === 4) return handler;
@@ -155,6 +155,59 @@ const normalizeColours = (value) => {
   });
   return [...unique.values()];
 };
+const detectBrandFromProductText = (value) => {
+  const text = String(value || '').toLowerCase();
+  if (/\b(iphone|ipad|apple)\b/.test(text)) return 'Apple';
+  if (/\b(redmi)\b/.test(text)) return 'Redmi';
+  if (/\b(mi|xiaomi)\b/.test(text)) return 'Xiaomi';
+  if (/\b(one\s*plus|oneplus)\b/.test(text)) return 'OnePlus';
+  if (/\b(pixel)\b/.test(text)) return 'Google Pixel';
+  if (/\b(poco)\b/.test(text)) return 'Poco';
+  if (/\b(samsung)\b/.test(text)) return 'Samsung';
+  if (/\b(vivo)\b/.test(text)) return 'Vivo';
+  if (/\b(oppo)\b/.test(text)) return 'Oppo';
+  if (/\b(realme)\b/.test(text)) return 'Realme';
+  if (/\b(nothing)\b/.test(text)) return 'Nothing';
+  if (/\b(motorola|moto)\b/.test(text)) return 'Motorola';
+  if (/\b(huawei)\b/.test(text)) return 'Huawei';
+  if (/\b(honor)\b/.test(text)) return 'Honor';
+  if (/\b(nokia)\b/.test(text)) return 'Nokia';
+  if (/\b(infinix)\b/.test(text)) return 'Infinix';
+  if (/\b(tecno)\b/.test(text)) return 'Tecno';
+  if (/\b(lava)\b/.test(text)) return 'Lava';
+  if (/\b(micromax)\b/.test(text)) return 'Micromax';
+  if (/\b(iqoo)\b/.test(text)) return 'IQOO';
+  if (/\b(asus)\b/.test(text)) return 'Asus';
+  if (/\b(sony)\b/.test(text)) return 'Sony';
+  if (/\b(lenovo)\b/.test(text)) return 'Lenovo';
+  return '';
+};
+const normalizeImportKey = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+const getImportValue = (row, aliases) => {
+  const normalized = new Map(Object.entries(row || {}).map(([key, value]) => [normalizeImportKey(key), value]));
+  for (const alias of aliases) {
+    const value = normalized.get(normalizeImportKey(alias));
+    if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+  }
+  return '';
+};
+const parseImportNumber = (value, fallback = null) => {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const cleaned = String(value).replace(/[,\s₹]/g, '');
+  const number = Number(cleaned);
+  return Number.isFinite(number) ? number : fallback;
+};
+const parseImportInteger = (value, fallback = 0) => {
+  if (value === '' || value === null || value === undefined) return fallback;
+  const number = Number(String(value).replace(/[,\s]/g, ''));
+  return Number.isInteger(number) ? number : null;
+};
+const cleanImportText = (value, maxLength = 500) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
+const importRowError = (rowNumber, message) => {
+  const error = new Error(`Row ${rowNumber}: ${message}`);
+  error.status = 400;
+  return error;
+};
 const ensureReference = async (table, value) => {
   const name = String(value || '').trim();
   if (!name) return null;
@@ -166,6 +219,17 @@ const ensureReference = async (table, value) => {
   }
   const result = await runQuery(`INSERT INTO ${table} (name) VALUES (?)`, [name]);
   invalidateCache('reference-data');
+  return { id: result.id, name };
+};
+const ensureReferenceInTransaction = async (tx, table, value) => {
+  const name = String(value || '').trim();
+  if (!name) return null;
+  const existing = await tx.getRecord(`SELECT id, name FROM ${table} WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) ORDER BY id LIMIT 1`, [name]);
+  if (existing) {
+    await tx.runQuery(`UPDATE ${table} SET is_active = TRUE WHERE id = ?`, [existing.id]);
+    return existing;
+  }
+  const result = await tx.runQuery(`INSERT INTO ${table} (name) VALUES (?)`, [name]);
   return { id: result.id, name };
 };
 const settingEnabled = (settings, key, fallback = false) => {
@@ -366,6 +430,26 @@ const requireScopedShopId = (req, requestedShopId) => {
     throw error;
   }
   return shopId;
+};
+const getReadableInventoryScope = async (req) => {
+  const requestedShopId = scopeReadableShopId(req);
+  if (requestedShopId) return assertShopReadAccess(req, requestedShopId);
+  return isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : null;
+};
+const inventoryJoinScope = (req, shopId, alias = 'ib') => {
+  const clauses = [];
+  const params = [];
+  if (shopId) {
+    clauses.push(`${alias}.shop_id = ?`);
+    params.push(shopId);
+  }
+  if (isShopStaffRole(req.user.role)) {
+    clauses.push(`(${alias}.assigned_user_id IS NULL OR ${alias}.assigned_user_id = ${Number(req.user.id)})`);
+  }
+  return {
+    sql: clauses.length ? ` AND ${clauses.join(' AND ')}` : '',
+    params,
+  };
 };
 
 app.post('/api/auth/login', async (req, res) => {
@@ -860,6 +944,235 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
   res.json(rows);
 });
 
+app.get('/api/brands', authenticateToken, requireShopStaff, async (req, res) => {
+  const shopId = await getReadableInventoryScope(req);
+  const scope = inventoryJoinScope(req, shopId);
+  const rows = await allRecords(`
+    SELECT b.id, b.name AS brand,
+      COUNT(DISTINCT p.id) AS product_count,
+      COALESCE(SUM(ib.quantity_remaining), 0) AS quantity,
+      COALESCE(SUM(ib.quantity_remaining * COALESCE(p.sale_price, p.retail_price, p.official_price, 0)), 0) AS stock_value,
+      COUNT(DISTINCT p.id) FILTER (WHERE ib.quantity_remaining > 0 AND ib.quantity_remaining <= sh.low_stock_threshold) AS low_stock_products,
+      MAX(ib.received_date) AS last_stocked_at
+    FROM brands b
+    LEFT JOIN products p ON LOWER(TRIM(p.brand)) = LOWER(TRIM(b.name)) AND p.is_active = 1
+    LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${scope.sql}
+    LEFT JOIN shops sh ON sh.id = ib.shop_id
+    WHERE b.is_active = TRUE
+    GROUP BY b.id, b.name
+    ORDER BY b.name
+  `, scope.params);
+  res.json(rows);
+});
+
+app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, res) => {
+  const brand = cleanQueryText(req.query.brand, 120);
+  if (!brand) return res.status(400).json({ error: 'Brand is required.' });
+  const shopId = await getReadableInventoryScope(req);
+  const scope = inventoryJoinScope(req, shopId);
+  const visibility = await getPriceVisibility();
+  const extraPrices = req.user.role === 'superadmin'
+    ? ', p.purchase_price, p.wholesale_price'
+    : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}${visibility.show_wholesale_price_shopkeeper ? ', p.wholesale_price' : ''}`;
+  const officialPrice = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
+  const rows = await allRecords(`
+    SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category, p.model,
+      p.sale_price, p.retail_price, p.description, p.colours, p.updated_at
+      ${officialPrice}${extraPrices},
+      COALESCE(SUM(ib.quantity_remaining), 0) AS quantity,
+      COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS owner_quantity,
+      COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NOT NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS shopkeeper_quantity,
+      COALESCE(SUM(CASE WHEN ib.assigned_user_id = ${Number(req.user.id)} THEN ib.quantity_remaining ELSE 0 END), 0) AS my_quantity,
+      MAX(ib.received_date) AS last_stocked_at,
+      STRING_AGG(DISTINCT NULLIF(TRIM(ib.colour), ''), ', ') FILTER (WHERE NULLIF(TRIM(ib.colour), '') IS NOT NULL) AS stock_colours
+    FROM products p
+    LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${scope.sql}
+    WHERE p.is_active = 1 AND LOWER(TRIM(p.brand)) = LOWER(TRIM(?))
+    GROUP BY p.id
+    ORDER BY COALESCE(p.short_name, p.name)
+  `, [...scope.params, brand]);
+  res.json(rows);
+});
+
+const buildImportProductPayload = (row, rowNumber) => {
+  const shortName = cleanImportText(getImportValue(row, ['short_name', 'short name', 'product_name', 'product name', 'display_name', 'display name', 'name']), 180);
+  const fullModelList = cleanImportText(getImportValue(row, ['full_model_list', 'compatible_models', 'compatible models', 'models', 'model_list', 'model list', 'compatibility']), 600) || shortName;
+  const model = cleanImportText(getImportValue(row, ['model', 'mobile_model', 'mobile model', 'phone_model', 'phone model', 'model_code', 'model code']), 160);
+  const detectedBrand = detectBrandFromProductText(`${shortName} ${fullModelList} ${model}`);
+  const brand = cleanImportText(getImportValue(row, ['brand', 'company', 'mobile_brand', 'mobile brand']), 120) || detectedBrand;
+  const category = cleanImportText(getImportValue(row, ['category', 'product_category', 'product category', 'type']), 120) || 'Displays';
+  const colour = cleanImportText(getImportValue(row, ['colour', 'color', 'shade']), 120);
+  const quantity = parseImportInteger(getImportValue(row, ['quantity', 'qty', 'stock', 'opening_stock', 'opening stock', 'pieces', 'pcs']), 0);
+  const salePrice = parseImportNumber(getImportValue(row, ['sale_price', 'sale price', 'selling_price', 'selling price', 'retail_price', 'retail price', 'price', 'mrp']), null);
+  const purchasePrice = parseImportNumber(getImportValue(row, ['purchase_price', 'purchase price', 'cost_price', 'cost price', 'cost']), null);
+  const wholesalePrice = parseImportNumber(getImportValue(row, ['wholesale_price', 'wholesale price', 'wholesale']), null);
+  const description = cleanImportText(getImportValue(row, ['description', 'notes', 'note']), 600);
+  const receivedDate = cleanImportText(getImportValue(row, ['received_date', 'received date', 'date', 'stock_date', 'stock date']), 20) || today();
+  const colours = normalizeColours([
+    colour,
+    ...String(getImportValue(row, ['colours', 'colors']) || '').split(','),
+  ]);
+
+  if (!shortName) throw importRowError(rowNumber, 'Product name is required.');
+  if (!brand) throw importRowError(rowNumber, 'Brand is required, or include iPhone/iPad/Apple in the product name for auto-detection.');
+  if (!category) throw importRowError(rowNumber, 'Category is required.');
+  if (quantity === null || quantity < 0) throw importRowError(rowNumber, 'Quantity must be a whole number 0 or more.');
+  if (salePrice !== null && salePrice <= 0) throw importRowError(rowNumber, 'Sale price must be greater than 0 when provided.');
+  if ([purchasePrice, wholesalePrice].some((price) => price !== null && price < 0)) throw importRowError(rowNumber, 'Cost and wholesale prices must be 0 or more.');
+
+  return {
+    shortName,
+    fullModelList,
+    brand,
+    category,
+    model,
+    colour,
+    colours,
+    quantity,
+    salePrice,
+    purchasePrice,
+    wholesalePrice,
+    description,
+    receivedDate,
+  };
+};
+
+const resolveImportShopId = async (tx, req, row, fallbackShopId, rowNumber, needsStock) => {
+  if (isShopStaffRole(req.user.role)) return Number(req.user.shop_id);
+  const rawShopId = getImportValue(row, ['shop_id', 'shop id', 'branch_id', 'branch id']);
+  if (rawShopId) return requireScopedShopId(req, rawShopId);
+
+  const shopName = cleanImportText(getImportValue(row, ['shop', 'shop_name', 'shop name', 'branch', 'branch_name', 'branch name']), 160);
+  if (shopName) {
+    const shop = await tx.getRecord(`
+      SELECT id FROM shops
+      WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) OR LOWER(TRIM(area)) = LOWER(TRIM(?))
+      ORDER BY id LIMIT 1
+    `, [shopName, shopName]);
+    if (!shop) throw importRowError(rowNumber, `Shop or branch "${shopName}" was not found.`);
+    return requireScopedShopId(req, shop.id);
+  }
+
+  if (fallbackShopId) return requireScopedShopId(req, fallbackShopId);
+  if (!needsStock) return null;
+  throw importRowError(rowNumber, 'Select a shop before importing stock, or include a shop column.');
+};
+
+const findImportProduct = async (tx, payload) => tx.getRecord(`
+  SELECT * FROM products
+  WHERE is_active = 1
+    AND LOWER(TRIM(brand)) = LOWER(TRIM(?))
+    AND (
+      LOWER(TRIM(short_name)) = LOWER(TRIM(?))
+      OR LOWER(TRIM(name)) = LOWER(TRIM(?))
+      OR LOWER(TRIM(full_model_list)) = LOWER(TRIM(?))
+      OR (? <> '' AND LOWER(TRIM(model)) = LOWER(TRIM(?)))
+    )
+  ORDER BY id LIMIT 1
+`, [payload.brand, payload.shortName, payload.shortName, payload.fullModelList, payload.model, payload.model]);
+
+app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, res) => {
+  const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
+  if (!rows.length) return res.status(400).json({ error: 'Import file has no rows.' });
+  if (rows.length > 500) return res.status(400).json({ error: 'Import up to 500 rows at a time.' });
+
+  const stats = {
+    totalRows: rows.length,
+    createdProducts: 0,
+    updatedProducts: 0,
+    stockBatches: 0,
+    importedQuantity: 0,
+  };
+  const createdProductIds = new Set();
+  const updatedProductIds = new Set();
+
+  try {
+    await runTransaction(async (tx) => {
+      for (const [index, row] of rows.entries()) {
+        const rowNumber = index + 2;
+        const payload = buildImportProductPayload(row, rowNumber);
+        const shopId = await resolveImportShopId(tx, req, row, req.body.shop_id || req.body.shopId, rowNumber, payload.quantity > 0);
+        const categoryRef = await ensureReferenceInTransaction(tx, 'categories', payload.category);
+        const brandRef = await ensureReferenceInTransaction(tx, 'brands', payload.brand);
+        const canonicalColours = [];
+        for (const colour of payload.colours) {
+          const colourRef = await ensureReferenceInTransaction(tx, 'colours', colour);
+          if (colourRef) canonicalColours.push(colourRef.name);
+        }
+
+        const canonicalBrand = brandRef?.name || payload.brand;
+        const canonicalCategory = categoryRef?.name || payload.category;
+        const productPayload = { ...payload, brand: canonicalBrand, category: canonicalCategory, colours: canonicalColours };
+        const existing = await findImportProduct(tx, productPayload);
+        let productId = existing?.id;
+        const existingSalePrice = parseImportNumber(existing?.sale_price ?? existing?.official_price ?? existing?.retail_price, null);
+        const salePrice = productPayload.salePrice ?? existingSalePrice;
+        if (!salePrice || salePrice <= 0) throw importRowError(rowNumber, 'Sale price is required for new products or products without a saved price.');
+
+        if (existing) {
+          await tx.runQuery(
+            `UPDATE products SET
+              name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, model = ?,
+              official_price = ?, purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
+              description = ?, colours = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?`,
+            [
+              productPayload.fullModelList, productPayload.shortName, productPayload.fullModelList, canonicalBrand, canonicalCategory, productPayload.model,
+              salePrice, productPayload.purchasePrice ?? existing.purchase_price, salePrice, productPayload.wholesalePrice ?? existing.wholesale_price,
+              salePrice, productPayload.description || existing.description || '', canonicalColours.length ? canonicalColours : existing.colours || [], productId,
+            ]
+          );
+          updatedProductIds.add(Number(productId));
+        } else {
+          const inserted = await tx.runQuery(
+            `INSERT INTO products (
+              name, short_name, full_model_list, brand, category, model, official_price,
+              purchase_price, sale_price, wholesale_price, retail_price, description, colours
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              productPayload.fullModelList, productPayload.shortName, productPayload.fullModelList, canonicalBrand, canonicalCategory, productPayload.model,
+              salePrice, productPayload.purchasePrice, salePrice, productPayload.wholesalePrice, salePrice, productPayload.description, canonicalColours,
+            ]
+          );
+          productId = inserted.id;
+          createdProductIds.add(Number(productId));
+          const shops = await tx.allRecords('SELECT id FROM shops');
+          for (const shop of shops) {
+            await tx.runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, 0) ON CONFLICT(shop_id, product_id) DO NOTHING', [shop.id, productId]);
+          }
+        }
+
+        if (payload.quantity > 0) {
+          if (!shopId) throw importRowError(rowNumber, 'Shop is required when quantity is greater than 0.');
+          await tx.runQuery(
+            `INSERT INTO inventory_batches (
+              shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+              colour, quantity_received, quantity_remaining, received_date, notes, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              shopId, productId, isShopStaffRole(req.user.role) ? req.user.id : null,
+              productPayload.purchasePrice ?? existing?.purchase_price, productPayload.wholesalePrice ?? existing?.wholesale_price,
+              salePrice, salePrice, productPayload.colour || null, payload.quantity, payload.quantity,
+              productPayload.receivedDate, productPayload.description || 'CSV stock import', req.user.id,
+            ]
+          );
+          await syncStockFromBatches(tx, shopId, productId);
+          stats.stockBatches += 1;
+          stats.importedQuantity += payload.quantity;
+        }
+      }
+    });
+
+    stats.createdProducts = createdProductIds.size;
+    stats.updatedProducts = [...updatedProductIds].filter((id) => !createdProductIds.has(id)).length;
+    invalidateCache('reference-data');
+    await audit(req, 'Imported stock CSV', 'inventory_batch', null, `${stats.totalRows} rows, ${stats.importedQuantity} units`);
+    res.status(201).json({ success: true, ...stats });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to import stock.' });
+  }
+});
+
 app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
   res.json(await getProductsForRole(req.user.role, req.query));
 });
@@ -1027,7 +1340,7 @@ app.post('/api/other-products', authenticateToken, async (req, res) => {
       'INSERT INTO other_products (product_name, product_company, price, product_category_id) VALUES (?, ?, ?, ?) RETURNING *',
       [product_name, product_company, price || 0, product_category_id || null]
     );
-    res.json({ success: true, id: result.rows[0].id });
+    res.status(201).json({ success: true, id: result.id });
   } catch (error) {
     console.error('[OtherProducts] Create failed:', error);
     res.status(500).json({ error: 'Failed to create product' });
