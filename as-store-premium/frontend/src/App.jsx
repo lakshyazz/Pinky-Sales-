@@ -3837,6 +3837,11 @@ function App() {
           {active === 'stock' && (
             <PageWrapper activeKey="stock" key="stock">
               <StockPage
+                role={role}
+                shopId={shopId}
+                forms={forms}
+                setForms={setForms}
+                data={data}
                 ownerInventoryQuantity={ownerInventoryQuantity}
                 myInventoryQuantity={myInventoryQuantity}
                 updateStock={updateStock}

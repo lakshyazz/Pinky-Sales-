@@ -27,9 +27,9 @@ import ExpandableText from '../shared/ExpandableText';
 export default function StockPage({
   role,
   shopId,
-  forms,
+  forms = {},
   setForms,
-  data,
+  data = {},
   ownerInventoryQuantity,
   myInventoryQuantity,
   updateStock,
@@ -76,7 +76,7 @@ export default function StockPage({
   const [newCategoryInput, setNewCategoryInput] = useState('');
   const [editingRef, setEditingRef] = useState(null); // { type, id, name }
   const [editingRefName, setEditingRefName] = useState('');
-  const stockSummaryTotals = data.stockSummary?.totals || {};
+  const stockSummaryTotals = data?.stockSummary?.totals || {};
   const stockModelTotal = Number(stockSummaryTotals.products || 0);
 
   // Inline color adder for product creation form
