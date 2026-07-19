@@ -168,15 +168,38 @@ export function CategoriesPage({ session, setGlobalToast, api, data = {}, onCate
       </div>
 
       {/* Search Bar */}
-      <div style={{ position: 'relative', maxWidth: '380px' }}>
-        <Search style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', width: '16px', height: '16px', color: '#94a3b8', pointerEvents: 'none' }} />
+      <div style={{ position: 'relative', width: '100%', maxWidth: '580px' }}>
+        <Search style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', width: '20px', height: '20px', color: '#64748b', pointerEvents: 'none' }} />
         <input
           type="text"
           placeholder="Search category name..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          style={{ width: '100%', paddingLeft: '38px', paddingRight: '16px', paddingTop: '10px', paddingBottom: '10px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '16px', fontSize: '13px', fontWeight: '600', color: '#0f172a', outline: 'none' }}
+          style={{
+            width: '100%',
+            paddingLeft: '48px',
+            paddingRight: searchQuery ? '40px' : '20px',
+            paddingTop: '13px',
+            paddingBottom: '13px',
+            backgroundColor: '#ffffff',
+            border: '2px solid #cbd5e1',
+            borderRadius: '20px',
+            fontSize: '15px',
+            fontWeight: '600',
+            color: '#0f172a',
+            outline: 'none',
+            boxShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.06)'
+          }}
         />
+        {searchQuery && (
+          <button
+            type="button"
+            onClick={() => setSearchQuery('')}
+            style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', display: 'flex', alignItems: 'center' }}
+          >
+            <X size={18} />
+          </button>
+        )}
       </div>
 
       {/* Category Cards Grid */}

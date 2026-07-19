@@ -95,15 +95,39 @@ export default function ModelsPage({
 
       {/* Search & Category Filter Pills Bar */}
       <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
-        <div style={{ position: 'relative', width: '100%', maxWidth: '400px' }}>
-          <Search style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)', width: '16px', height: '16px', color: '#94a3b8', pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', width: '100%', maxWidth: '640px' }}>
+          <Search style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', width: '20px', height: '20px', color: '#64748b', pointerEvents: 'none' }} />
           <input
             type="text"
             placeholder="Search model, brand, category, or description..."
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            style={{ width: '100%', paddingLeft: '40px', paddingRight: '16px', paddingTop: '10px', paddingBottom: '10px', backgroundColor: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '16px', fontSize: '13px', fontWeight: '600', color: '#0f172a', outline: 'none' }}
+            style={{
+              width: '100%',
+              paddingLeft: '48px',
+              paddingRight: search ? '40px' : '20px',
+              paddingTop: '14px',
+              paddingBottom: '14px',
+              backgroundColor: '#ffffff',
+              border: '2px solid #cbd5e1',
+              borderRadius: '20px',
+              fontSize: '15px',
+              fontWeight: '600',
+              color: '#0f172a',
+              outline: 'none',
+              boxShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.06)',
+              transition: 'all 0.2s ease'
+            }}
           />
+          {search && (
+            <button
+              type="button"
+              onClick={() => onSearchChange('')}
+              style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', display: 'flex', alignItems: 'center' }}
+            >
+              <X size={18} />
+            </button>
+          )}
         </div>
 
         {/* Category Pills */}
