@@ -1418,10 +1418,13 @@ function App() {
         shops,
         products: loadedProducts,
         reference: cleanReferenceData(reference),
-        priceVisibility,
+        priceVisibility: priceVisibility || prev.priceVisibility,
         warehouse: warehouse || prev.warehouse,
         catalog: role === 'customer' ? loadedProducts : prev.catalog,
       }));
+      if (role === 'superadmin' && warehouse?.id && !selectedShop) {
+        setSelectedShop(String(warehouse.id));
+      }
     } catch (error) {
       handleLoadError(error, 'Unable to load the workspace. Check whether the local servers are running.');
     } finally {
