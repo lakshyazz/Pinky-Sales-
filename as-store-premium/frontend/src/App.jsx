@@ -49,9 +49,7 @@ import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
-const productionApiBase = configuredApiBase?.startsWith('http')
-  ? configuredApiBase
-  : 'https://pinkysales.onrender.com/api';
+const productionApiBase = configuredApiBase || '/api';
 const API_BASE = (
   import.meta.env.PROD
     ? productionApiBase
@@ -975,7 +973,13 @@ function App() {
   const authedFetch = (path, options = {}) => api(path, options, token);
   const showToast = (message, tone = inferToastTone(message)) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToast({ message, tone });
+    const cleanMessage = typeof message === 'object' && message !== null
+      ? message.message || message.error || String(message)
+      : String(message || '');
+    const cleanTone = typeof message === 'object' && message !== null
+      ? message.tone || message.type || tone
+      : tone;
+    setToast({ message: cleanMessage, tone: cleanTone });
     toastTimerRef.current = setTimeout(() => setToast(null), 3200);
   };
   const requestConfirmation = (dialog) => setConfirmDialog(dialog);

@@ -182,7 +182,7 @@ export default function SupplierImportWorkspace({
         const json = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
         if (!json.length) {
-          setGlobalToast({ message: 'The uploaded file contains no data rows.', type: 'error' });
+          setGlobalToast('The uploaded file contains no data rows.', 'error');
           return;
         }
 
@@ -193,7 +193,7 @@ export default function SupplierImportWorkspace({
         setStep(2);
       } catch (err) {
         console.error('[ExcelParse] Error reading Excel file:', err);
-        setGlobalToast({ message: 'Failed to parse Excel file. Please ensure it is a valid .xlsx or .csv file.', type: 'error' });
+        setGlobalToast('Failed to parse Excel file. Please ensure it is a valid .xlsx or .csv file.', 'error');
       }
     };
 
@@ -238,7 +238,7 @@ export default function SupplierImportWorkspace({
   // Execute Bulk Import to Backend
   const handleExecuteImport = async () => {
     if (!mappedRecords.length) {
-      setGlobalToast({ message: 'No valid records to import. Please check your column mappings.', type: 'error' });
+      setGlobalToast('No valid records to import. Please check your column mappings.', 'error');
       return;
     }
 
@@ -256,11 +256,11 @@ export default function SupplierImportWorkspace({
 
       setImportResult(res.summary);
       setStep(4);
-      setGlobalToast({ message: `Successfully imported ${res.summary.createdBatches} inventory batches!`, tone: 'success' });
+      setGlobalToast(`Successfully imported ${res.summary.createdBatches} inventory batches!`, 'success');
       if (onImportComplete) onImportComplete();
     } catch (err) {
       console.error('[BulkImport] Execution failed:', err);
-      setGlobalToast({ message: err.message || 'Failed to complete inventory import.', tone: 'error' });
+      setGlobalToast(err.message || 'Failed to complete inventory import.', 'error');
     } finally {
       setImporting(false);
     }
