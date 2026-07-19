@@ -1,10 +1,20 @@
 {
   "name": "pinky-sales",
   "version": "1.0.0",
+  "type": "module",
   "description": "AS Store Premium Management Suite",
-  "main": "server.js",
+  "main": "as-store-premium/backend/server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node as-store-premium/backend/server.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.11.5",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18.0.0"
