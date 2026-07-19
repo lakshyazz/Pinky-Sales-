@@ -2803,9 +2803,7 @@ app.use((error, req, res, next) => {
       : 500;
   const message = databaseUnavailable
     ? 'Database connection timed out. Please retry.'
-    : status >= 500
-      ? 'Unable to complete this request right now.'
-      : error?.message || 'Request failed.';
+    : error?.message || 'Unable to complete this request right now.';
 
   console.error(`[Server] ${req.method} ${req.originalUrl} failed:`, error);
   return res.status(status).json({ error: message });

@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 
 const { Pool } = pg;
 
-const connectionString = 
+const rawConnectionString = 
   process.env.DATABASE_URL || 
   process.env.POSTGRES_URL || 
   process.env.POSTGRES_URL_NON_POOLING ||
@@ -15,6 +15,8 @@ const connectionString =
   process.env.SUPABASE_POSTGRES_URL ||
   process.env.SUPABASE_URL ||
   'postgres://postgres.hnntlrycgywhstbqqmfo:J3H14Vo7XVbdXPNx@aws-0-us-east-1.pooler.supabase.com:5432/postgres';
+
+const connectionString = rawConnectionString ? rawConnectionString.replace(/([?&])sslmode=[^&]*(&?)/gi, '$1').replace(/\?$/, '') : '';
 
 if (!connectionString) {
   throw new Error('Database connection URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables.');
