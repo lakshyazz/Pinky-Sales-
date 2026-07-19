@@ -6,37 +6,67 @@ import ExpandableText from '../shared/ExpandableText';
 
 export default function PricesPage({
   role,
-  forms,
-  reference,
-  priceVisibility,
-  newReference,
+  forms = { product: {} },
+  reference = { categories: [], colours: [], brands: [] },
+  priceVisibility = {},
+  newReference = {},
   editingProductId,
   saving,
-  items,
-  search,
-  pager,
-  loading,
-  onSubmitProduct,
-  onProductFieldChange,
-  onNewReferenceChange,
-  onAddReferenceOption,
-  onCancelEdit,
-  onExportProducts,
-  onSearchChange,
-  onPageChange,
-  onPageSizeChange,
-  onViewDetails,
-  onEditProduct,
-  onDeleteProduct,
-  productName,
-  fullModelList,
-  priceLabel,
-  FormPanel,
-  Input,
-  Select,
-  CardGrid,
+  items = [],
+  search = '',
+  pager = {},
+  loading = false,
+  onSubmitProduct = () => {},
+  onProductFieldChange = () => {},
+  onNewReferenceChange = () => {},
+  onAddReferenceOption = () => {},
+  onCancelEdit = () => {},
+  onExportProducts = () => {},
+  onSearchChange = () => {},
+  onPageChange = () => {},
+  onPageSizeChange = () => {},
+  onViewDetails = () => {},
+  onEditProduct = () => {},
+  onDeleteProduct = () => {},
+  productName = (p) => p?.name || p?.short_name || 'Product',
+  fullModelList = (p) => p?.full_model_list || p?.model || '',
+  priceLabel = (val) => `₹${Number(val || 0).toLocaleString('en-IN')}`,
+  FormPanel = ({ children, title, action, onSubmit }) => (
+    <form onSubmit={onSubmit} className="panel space-y-4">
+      <h3 className="text-base font-bold text-slate-900">{title}</h3>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">{children}</div>
+      <button type="submit" className="primary mt-4">{action}</button>
+    </form>
+  ),
+  Input = ({ label, value, onChange, type = "text", className = "" }) => (
+    <div className={className}>
+      <label className="text-xs font-extrabold text-slate-500 uppercase tracking-wider block mb-1">{label}</label>
+      <input type={type} value={value || ""} onChange={(e) => onChange(e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-cyan-500" />
+    </div>
+  ),
+  Select = ({ label, value, onChange, options = [], className = "" }) => (
+    <div className={className}>
+      <label className="text-xs font-extrabold text-slate-500 uppercase tracking-wider block mb-1">{label}</label>
+      <select value={value || ""} onChange={(e) => onChange(e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-cyan-500 bg-white">
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+    </div>
+  ),
+  CardGrid = ({ items = [], render, emptyTitle }) => (
+    items.length ? (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {items.map((item) => (
+          <div key={item.id} className="panel p-4 flex flex-col justify-between">
+            {render(item)}
+          </div>
+        ))}
+      </div>
+    ) : (
+      <div className="p-12 text-center text-slate-400 font-bold bg-white rounded-3xl border border-slate-200">{emptyTitle}</div>
+    )
+  ),
 }) {
-  const productForm = forms.product;
+  const productForm = forms.product || {};
   const appendColour = (value) => {
     const selected = productForm.colours.split(',').map((item) => item.trim()).filter(Boolean);
     if (value && !selected.includes(value)) onProductFieldChange('colours', [...selected, value].join(', '));
@@ -54,7 +84,7 @@ export default function PricesPage({
             className="md:col-span-1"
             value={productForm.category}
             onChange={(value) => value === '__new__' ? onNewReferenceChange({ type: 'categories', name: '' }) : onProductFieldChange('category', value)}
-            options={[...reference.categories.map((item) => [item.name, item.name]), ['__new__', '+ Add New Category']]}
+            options={[...(reference?.categories || []).map((item) => [item.name, item.name]), ['__new__', '+ Add New Category']]}
           />
           {newReference.type === 'categories' && (
             <div className="inline-reference-control md:col-span-2">
@@ -75,7 +105,7 @@ export default function PricesPage({
               if (value === '__new__') return onNewReferenceChange({ type: 'colours', name: '' });
               appendColour(value);
             }}
-            options={[...reference.colours.map((item) => [item.name, item.name]), ['__new__', '+ Add New Colour']]}
+            options={[...(reference?.colours || []).map((item) => [item.name, item.name]), ['__new__', '+ Add New Colour']]}
           />
           <Input label="Selected colours" className="md:col-span-3" value={productForm.colours} onChange={(value) => onProductFieldChange('colours', value)} />
           {newReference.type === 'colours' && (

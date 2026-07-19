@@ -3834,6 +3834,10 @@ function App() {
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
                 Empty={Empty}
+                FormPanel={FormPanel}
+                Input={Input}
+                Select={Select}
+                CardGrid={CardGrid}
               />
             </PageWrapper>
           )}
