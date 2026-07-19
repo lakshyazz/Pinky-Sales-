@@ -1096,7 +1096,14 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const productId = Number(req.params.id);
   if (!productId) return res.status(400).json({ error: 'Invalid product ID' });
 
+  const isSuperAdmin = req.user.role === 'superadmin';
   const { short_name, name, brand, category, full_model_list, model, sale_price, wholesale_price, purchase_price, official_price, description, colours } = req.body;
+
+  // Price edits are strictly restricted to superadmin (Superowner)
+  const newSalePrice = isSuperAdmin && sale_price !== undefined ? Number(sale_price) : null;
+  const newWholesalePrice = isSuperAdmin && wholesale_price !== undefined ? Number(wholesale_price) : null;
+  const newPurchasePrice = isSuperAdmin && purchase_price !== undefined ? Number(purchase_price) : null;
+  const newOfficialPrice = isSuperAdmin && official_price !== undefined ? Number(official_price) : null;
 
   try {
     await runTransaction(async (tx) => {
@@ -1123,17 +1130,20 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         category || null,
         full_model_list || null,
         model || null,
-        sale_price !== undefined ? Number(sale_price) : null,
-        wholesale_price !== undefined ? Number(wholesale_price) : null,
-        purchase_price !== undefined ? Number(purchase_price) : null,
-        official_price !== undefined ? Number(official_price) : null,
+        newSalePrice,
+        newWholesalePrice,
+        newPurchasePrice,
+        newOfficialPrice,
         description || null,
         colours || null,
         productId
       ]);
     });
 
-    res.json({ success: true, message: 'Product updated successfully' });
+    res.json({
+      success: true,
+      message: isSuperAdmin ? 'Product and prices updated successfully' : 'Product details updated (Prices can only be edited by Super Admin)',
+    });
   } catch (error) {
     console.error('[ProductsAPI] Error updating product:', error);
     res.status(500).json({ error: 'Failed to update product' });
