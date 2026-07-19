@@ -462,7 +462,7 @@ app.post('/api/auth/login', async (req, res) => {
     SELECT u.id, u.username, u.password, u.role, u.name, u.shop_id, s.name AS shop_name, s.area AS shop_area
     FROM users u
     LEFT JOIN shops s ON s.id = u.shop_id
-    WHERE u.username = ?
+    WHERE LOWER(TRIM(u.username)) = LOWER(TRIM(?))
   `, [username]);
 
   if (!user || !(await bcrypt.compare(password, user.password))) {
