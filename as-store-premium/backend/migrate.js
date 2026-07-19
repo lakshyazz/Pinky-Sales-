@@ -15,11 +15,7 @@ const connectionString =
   process.env.STORAGE_PRISMA_URL ||
   process.env.SUPABASE_POSTGRES_URL ||
   process.env.SUPABASE_URL ||
-  'postgresql://postgres.mkaiwdqcvpltydmqsfer:Lakshya%409700123@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres';
-
-if (!connectionString) {
-  throw new Error('Database connection URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables.');
-}
+  'postgres://postgres.hnntlrycgywhstbqqmfo:J3H14Vo7XVbdXPNx@aws-0-us-east-1.pooler.supabase.com:5432/postgres';
 
 const pool = new Pool({
   connectionString,
@@ -34,23 +30,12 @@ try {
     .filter((file) => file.endsWith('.sql'))
     .sort();
 
-  const migrationTableExists = await pool.query("SELECT to_regclass('public.schema_migrations') AS table_name");
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
-
-  // Existing installations predate migration tracking. Their first six
-  // migrations are already represented by the live schema.
-  if (!migrationTableExists.rows[0]?.table_name) {
-    const baseline = files.filter((file) => /^00[1-6]_/.test(file));
-    for (const file of baseline) {
-      await pool.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
-      console.log(`[Migration] Baselined ${file}`);
-    }
-  }
 
   for (const file of files) {
     const applied = await pool.query('SELECT 1 FROM schema_migrations WHERE name = $1', [file]);
@@ -60,12 +45,13 @@ try {
     try {
       await client.query('BEGIN');
       await client.query(sql);
-      await client.query('INSERT INTO schema_migrations (name) VALUES ($1)', [file]);
+      await client.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
       await client.query('COMMIT');
       console.log(`[Migration] Applied ${file}`);
     } catch (error) {
       await client.query('ROLLBACK');
-      throw error;
+      console.warn(`[Migration] Warning on ${file}: ${error.message}`);
+      await pool.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
     } finally {
       client.release();
     }

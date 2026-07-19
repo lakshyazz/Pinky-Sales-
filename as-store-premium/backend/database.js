@@ -14,7 +14,7 @@ const connectionString =
   process.env.STORAGE_PRISMA_URL ||
   process.env.SUPABASE_POSTGRES_URL ||
   process.env.SUPABASE_URL ||
-  'postgresql://postgres.mkaiwdqcvpltydmqsfer:Lakshya%409700123@aws-1-ap-southeast-2.pooler.supabase.com:6543/postgres';
+  'postgres://postgres.hnntlrycgywhstbqqmfo:J3H14Vo7XVbdXPNx@aws-0-us-east-1.pooler.supabase.com:5432/postgres';
 
 if (!connectionString) {
   throw new Error('Database connection URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables.');
