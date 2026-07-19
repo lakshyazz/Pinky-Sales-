@@ -44,6 +44,7 @@ import BrandsPage from './components/brands/BrandsPage';
 import Pagination from './components/ui/Pagination';
 import SearchInput from './components/ui/SearchInput';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
+import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
 const productionApiBase = configuredApiBase?.startsWith('http')
@@ -3625,127 +3626,21 @@ function App() {
 
           {active === 'shopkeepers' && (
             <PageWrapper activeKey="shopkeepers" key="shopkeepers">
-              <section className="space">
-                <section className="shopkeeper-command-panel panel">
-                  <div className="shopkeeper-command-copy">
-                    <span className="stock-eyebrow">Owner Access</span>
-                    <h2>Shopkeeper logins</h2>
-                    <p>Edit staff login details, reset passwords, and keep each branch assignment current.</p>
-                  </div>
-                  <div className="shopkeeper-command-stats">
-                    <span>
-                      <small>Total logins</small>
-                      <strong>{data.shopkeepers.length}</strong>
-                    </span>
-                    <span>
-                      <small>Staffed branches</small>
-                      <strong>{staffedBranchCount}</strong>
-                    </span>
-                    <span>
-                      <small>Missing mobile</small>
-                      <strong>{incompleteShopkeeperContacts}</strong>
-                    </span>
-                  </div>
-                </section>
-
-                <FormPanel title="Create shopkeeper login" action={saving ? 'Creating login...' : 'Create login'} onSubmit={submitShopkeeper} disabled={saving}>
-                  <Input label="Name" autoComplete="name" maxLength={80} className="md:col-span-2" value={forms.shopkeeper.name} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, name: v } })} />
-                  <Input label="Mobile" autoComplete="tel" inputMode="tel" maxLength={30} className="md:col-span-2" value={forms.shopkeeper.contact} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, contact: v } })} />
-                  <Input label="Username" autoComplete="off" minLength={3} maxLength={40} className="md:col-span-2" value={forms.shopkeeper.username} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, username: v } })} />
-                  <Input label="Password" type="password" autoComplete="new-password" minLength={8} maxLength={200} className="md:col-span-2" value={forms.shopkeeper.password} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, password: v } })} />
-                  <Select label="Shop" className="md:col-span-4" value={forms.shopkeeper.shop_id} onChange={(v) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, shop_id: v } })} options={[...data.shops.map((s) => [s.id, s.name]), ['new_shop', '+ Add New Shop']]} />
-                  {forms.shopkeeper.shop_id === 'new_shop' && (
-                    <div className="panel form-panel sub-form" style={{ gridColumn: '1 / -1', marginTop: '10px' }}>
-                      <h3 style={{ margin: 0, fontSize: '15px', color: 'var(--teal-dark)' }}>New Shop Details</h3>
-                      <div className="form-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '14px', width: '100%' }}>
-                        <Input label="Shop name" value={forms.shop.name} onChange={(v) => setForms({ ...forms, shop: { ...forms.shop, name: v } })} />
-                        <Input label="Area" value={forms.shop.area} onChange={(v) => setForms({ ...forms, shop: { ...forms.shop, area: v } })} />
-                        <Input label="Address" value={forms.shop.address} onChange={(v) => setForms({ ...forms, shop: { ...forms.shop, address: v } })} />
-                        <Input label="Phone" value={forms.shop.phone} onChange={(v) => setForms({ ...forms, shop: { ...forms.shop, phone: v } })} />
-                      </div>
-                    </div>
-                  )}
-                </FormPanel>
-                {data.shopkeepers.length ? (
-                  <section className="shopkeeper-list-panel panel">
-                    <div className="shopkeeper-list-toolbar">
-                      <div>
-                        <span className="stock-eyebrow">Login Directory</span>
-                        <h2>Active staff access</h2>
-                        <p>Search by staff name, username, mobile number, or assigned branch.</p>
-                      </div>
-                      <div className="shopkeeper-search-wrap">
-                        <SearchInput
-                          value={shopkeeperSearch}
-                          onChange={setShopkeeperSearch}
-                          placeholder="Search logins..."
-                          ariaLabel="Search shopkeeper logins"
-                        />
-                        <span className="status-badge stock-ok">{visibleShopkeepers.length} shown</span>
-                      </div>
-                    </div>
-                    {visibleShopkeepers.length ? (
-                      <motion.div
-                        variants={listVariants}
-                        initial="hidden"
-                        whileInView="visible"
-                        viewport={{ once: true, margin: "-10px" }}
-                        className="shopkeeper-list"
-                      >
-                        {visibleShopkeepers.map((user) => {
-                          const initials = user.name ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2) : 'SK';
-                          return (
-                            <motion.div variants={itemVariants} className="row shopkeeper-row" key={user.id}>
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 rounded-lg bg-teal/10 text-teal flex items-center justify-center font-bold text-sm shrink-0">
-                                  {initials}
-                                </div>
-                                <span><b>{user.name}</b><small>@{user.username}</small></span>
-                              </div>
-                              <span>
-                                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-0.5">Contact</span>
-                                <span className="flex items-center gap-1.5 text-sm text-slate-600 font-medium"><Contact size={14} /> {user.contact || 'Not provided'}</span>
-                              </span>
-                              <span>
-                                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-0.5">Assigned Shop</span>
-                                <span className="flex items-center gap-1.5 text-sm text-slate-800 font-bold"><Store size={14} /> {user.shop_name || 'No shop assigned'}</span>
-                              </span>
-                              <div className="shopkeeper-actions">
-                                <span className="text-[10px] text-slate-400 block uppercase font-bold tracking-wider mb-1">Access Role</span>
-                                <span className="status-badge paid">Branch Staff</span>
-                                <div className="shopkeeper-row-buttons">
-                                  <button
-                                    className="shopkeeper-edit-button"
-                                    type="button"
-                                    disabled={saving}
-                                    aria-label={`Edit ${user.name}'s shopkeeper login`}
-                                    onClick={() => openShopkeeperEditor(user)}
-                                  >
-                                    <Edit3 size={14} /> Edit
-                                  </button>
-                                  <button
-                                    className="shopkeeper-delete-button"
-                                    type="button"
-                                    disabled={saving}
-                                    aria-label={`Delete ${user.name}'s shopkeeper login`}
-                                    onClick={() => deleteShopkeeper(user)}
-                                  >
-                                    <Trash2 size={14} /> Delete
-                                  </button>
-                                </div>
-                              </div>
-                            </motion.div>
-                          );
-                        })}
-                      </motion.div>
-                    ) : (
-                      <Empty title="No shopkeeper logins match this search" />
-                    )}
-                  </section>
-                ) : (
-                  <Empty title="No shopkeepers registered yet" />
-                )}
-              </section>
+              <ShopkeeperLoginsPage
+                data={data}
+                forms={forms}
+                setForms={setForms}
+                staffedBranchCount={staffedBranchCount}
+                incompleteShopkeeperContacts={incompleteShopkeeperContacts}
+                saving={saving}
+                submitShopkeeper={submitShopkeeper}
+                deleteShopkeeper={deleteShopkeeper}
+                openShopkeeperEditor={openShopkeeperEditor}
+                shopkeeperSearch={shopkeeperSearch}
+                setShopkeeperSearch={setShopkeeperSearch}
+                visibleShopkeepers={visibleShopkeepers}
+                Empty={Empty}
+              />
             </PageWrapper>
           )}
 
