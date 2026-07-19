@@ -475,8 +475,9 @@ const inventoryJoinScope = (req, shopId, alias = 'ib') => {
 };
 
 app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
-  const username = String(req.body.username || '').trim();
-  const password = String(req.body.password || '');
+  const body = req.body || {};
+  const username = String(body.username || '').trim();
+  const password = String(body.password || '');
   console.log('[AuthLog] 1. Login request received for username:', username);
 
   if (!username || !password) return res.status(400).json({ error: 'Enter username and password.' });
