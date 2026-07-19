@@ -93,59 +93,51 @@ export default function ModelsPage({
         </div>
       </div>
 
-      {/* Search & Category Filter Pills Bar */}
-      <div className="flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
-        <div style={{ position: 'relative', width: '100%', maxWidth: '640px' }}>
-          <Search style={{ position: 'absolute', left: '16px', top: '50%', transform: 'translateY(-50%)', width: '20px', height: '20px', color: '#64748b', pointerEvents: 'none' }} />
-          <input
-            type="text"
-            placeholder="Search model, brand, category, or description..."
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            style={{
-              width: '100%',
-              paddingLeft: '48px',
-              paddingRight: search ? '40px' : '20px',
-              paddingTop: '14px',
-              paddingBottom: '14px',
-              backgroundColor: '#ffffff',
-              border: '2px solid #cbd5e1',
-              borderRadius: '20px',
-              fontSize: '15px',
-              fontWeight: '600',
-              color: '#0f172a',
-              outline: 'none',
-              boxShadow: '0 4px 20px -2px rgba(15, 23, 42, 0.06)',
-              transition: 'all 0.2s ease'
-            }}
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => onSearchChange('')}
-              style={{ position: 'absolute', right: '14px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', display: 'flex', alignItems: 'center' }}
-            >
-              <X size={18} />
-            </button>
-          )}
-        </div>
+      {/* Dedicated Large Full-Width Search Bar */}
+      <div className="w-full relative shadow-xl shadow-slate-200/50 rounded-3xl overflow-hidden bg-white border-2 border-slate-300 focus-within:border-cyan-500 focus-within:ring-4 focus-within:ring-cyan-500/10 transition-all">
+        <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-6 h-6 text-slate-400 pointer-events-none" />
+        <input
+          type="text"
+          placeholder="Search model, brand, category, or description..."
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          className="w-full bg-transparent border-none outline-none font-bold text-slate-900 placeholder-slate-400"
+          style={{
+            paddingLeft: '56px',
+            paddingRight: search ? '52px' : '24px',
+            paddingTop: '16px',
+            paddingBottom: '16px',
+            fontSize: '17px',
+            minHeight: '58px',
+            width: '100%'
+          }}
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => onSearchChange('')}
+            className="absolute right-4 top-1/2 -translate-y-1/2 p-2 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
+      </div>
 
-        {/* Category Pills */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full no-scrollbar">
-          {categories.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setSelectedCategory(cat)}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all ${
-                selectedCategory === cat
-                  ? 'bg-slate-900 text-white shadow-md shadow-slate-900/20'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
+      {/* Category Pills Bar */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full no-scrollbar">
+        {categories.map((cat) => (
+          <button
+            key={cat}
+            onClick={() => setSelectedCategory(cat)}
+            className={`px-4 py-2 rounded-2xl text-xs font-extrabold whitespace-nowrap transition-all ${
+              selectedCategory === cat
+                ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
+                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            {cat}
+          </button>
+        ))}
       </div>
 
       {/* Grid View */}
