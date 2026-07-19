@@ -5,6 +5,10 @@
   "outputDirectory": "as-store-premium/frontend/dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "/api/index.js"
+    },
+    {
       "source": "/:path*",
       "destination": "/index.html"
     }

@@ -3,10 +3,10 @@ import bcrypt from 'bcryptjs';
 
 const { Pool } = pg;
 
-const connectionString = process.env.DATABASE_URL;
+const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL || process.env.POSTGRES_URL_NON_POOLING;
 
 if (!connectionString) {
-  throw new Error('DATABASE_URL is required.');
+  throw new Error('Database connection URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables.');
 }
 
 const pool = new Pool({

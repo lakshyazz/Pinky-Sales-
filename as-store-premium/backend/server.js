@@ -2585,6 +2585,10 @@ app.use((error, req, res, next) => {
   return res.status(status).json({ error: message });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[Server] Multi-shop API is live on http://localhost:${PORT}`);
-});
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[Server] Multi-shop API is live on http://localhost:${PORT}`);
+  });
+}
+
+export default app;
