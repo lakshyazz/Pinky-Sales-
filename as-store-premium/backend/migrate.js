@@ -8,9 +8,11 @@ const connectionString =
   process.env.DATABASE_URL || 
   process.env.POSTGRES_URL || 
   process.env.POSTGRES_URL_NON_POOLING ||
-  process.env.STORAGE_URL ||
   process.env.STORAGE_POSTGRES_URL ||
   process.env.STORAGE_POSTGRES_URL_NON_POOLING ||
+  process.env.STORAGE_POSTGRES_PRISMA_URL ||
+  process.env.STORAGE_URL ||
+  process.env.STORAGE_PRISMA_URL ||
   process.env.SUPABASE_POSTGRES_URL ||
   process.env.SUPABASE_URL;
 
