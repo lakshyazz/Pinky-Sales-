@@ -477,36 +477,60 @@ const inventoryJoinScope = (req, shopId, alias = 'ib') => {
 app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
+  console.log('[AuthLog] 1. Login request received for username:', username);
+
   if (!username || !password) return res.status(400).json({ error: 'Enter username and password.' });
   if (username.length > 80 || password.length > 200) return res.status(400).json({ error: 'Username or password is too long.' });
 
-  const user = await getRecord(`
-    SELECT u.id, u.username, u.password, u.role, u.name, u.shop_id, s.name AS shop_name, s.area AS shop_area
-    FROM users u
-    LEFT JOIN shops s ON s.id = u.shop_id
-    WHERE LOWER(TRIM(u.username)) = LOWER(TRIM(?))
-  `, [username]);
+  try {
+    const user = await getRecord(`
+      SELECT u.id, u.username, u.password, u.role, u.name, u.shop_id, s.name AS shop_name, s.area AS shop_area
+      FROM users u
+      LEFT JOIN shops s ON s.id = u.shop_id
+      WHERE LOWER(TRIM(u.username)) = LOWER(TRIM(?))
+    `, [username]);
 
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(401).json({ error: 'Wrong username or password.' });
-  }
-  if (!VALID_ROLES.has(user.role)) {
-    return res.status(403).json({ error: 'This account has an invalid role. Contact the Super Admin.' });
-  }
-  if (isShopStaffRole(user.role) && !user.shop_id) {
-    return res.status(403).json({ error: 'This account is not assigned to a shop. Contact the Super Admin.' });
-  }
+    console.log('[AuthLog] 2. DB Query executed. User found:', user ? user.username : 'NONE');
 
-  res.json({
-    token: createToken(user),
-    id: user.id,
-    username: user.username,
-    role: user.role,
-    name: user.name,
-    shop_id: user.shop_id,
-    shop_name: user.shop_name,
-    shop_area: user.shop_area,
-  });
+    if (!user) {
+      console.log('[AuthLog] 3. Failed: User record not found for username:', username);
+      return res.status(401).json({ error: 'Wrong username or password.' });
+    }
+
+    const passwordValid = await bcrypt.compare(password, user.password || '');
+    console.log('[AuthLog] 4. Password comparison result:', passwordValid);
+
+    if (!passwordValid) {
+      console.log('[AuthLog] 5. Failed: Password comparison returned false.');
+      return res.status(401).json({ error: 'Wrong username or password.' });
+    }
+
+    if (!VALID_ROLES.has(user.role)) {
+      console.log('[AuthLog] 6. Failed: Invalid role:', user.role);
+      return res.status(403).json({ error: 'This account has an invalid role. Contact the Super Admin.' });
+    }
+    if (isShopStaffRole(user.role) && !user.shop_id) {
+      console.log('[AuthLog] 7. Failed: Shop staff account missing shop_id.');
+      return res.status(403).json({ error: 'This account is not assigned to a shop. Contact the Super Admin.' });
+    }
+
+    const token = createToken(user);
+    console.log('[AuthLog] 8. JWT generated successfully.');
+
+    res.json({
+      token,
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      name: user.name,
+      shop_id: user.shop_id,
+      shop_name: user.shop_name,
+      shop_area: user.shop_area,
+    });
+  } catch (error) {
+    console.error('[AuthLog] EXCEPTION in /api/auth/login:', error.message, error.stack);
+    res.status(500).json({ error: error.message || 'Internal server error during login execution.' });
+  }
 });
 
 app.get('/api/me', authenticateToken, async (req, res) => {
