@@ -2634,11 +2634,19 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
         const colour = String(item.colour || '').trim();
         const notes = String(item.notes || `Imported via ${fileName || 'Excel'}`).trim();
 
-        const purchasePrice = Math.max(0, Number(item.purchase_price || 0));
-        const wholesalePrice = Math.max(0, Number(item.wholesale_price || purchasePrice * 1.1));
-        const retailPrice = Math.max(0, Number(item.retail_price || item.sale_price || purchasePrice * 1.3));
-        const officialPrice = Math.max(0, Number(item.official_price || retailPrice));
-        const qty = Math.max(1, Number(item.quantity || item.qty || 1));
+        const parseNum = (val, def = 0) => {
+          if (val === null || val === undefined || val === '') return def;
+          if (typeof val === 'number') return Number.isNaN(val) ? def : val;
+          const cleaned = String(val).replace(/[^0-9.-]/g, '');
+          const n = parseFloat(cleaned);
+          return Number.isNaN(n) ? def : n;
+        };
+
+        const purchasePrice = Math.max(0, parseNum(item.purchase_price, 0));
+        const wholesalePrice = Math.max(0, parseNum(item.wholesale_price, purchasePrice * 1.1));
+        const retailPrice = Math.max(0, parseNum(item.retail_price || item.sale_price, purchasePrice * 1.3));
+        const officialPrice = Math.max(0, parseNum(item.official_price, retailPrice));
+        const qty = Math.max(1, Math.round(parseNum(item.quantity || item.qty, 1)));
         const dateIn = item.received_date ? String(item.received_date) : new Date().toISOString().split('T')[0];
 
         // Unique hash for row deduplication

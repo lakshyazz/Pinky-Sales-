@@ -105,6 +105,15 @@ const TARGET_FIELDS = [
   },
 ];
 
+const parseCleanNumber = (val, fallback = 0) => {
+  if (val === null || val === undefined || val === '') return fallback;
+  if (typeof val === 'number') return Number.isNaN(val) ? fallback : val;
+  const cleaned = String(val).replace(/[^0-9.-]/g, '');
+  const num = parseFloat(cleaned);
+  return Number.isNaN(num) ? fallback : num;
+};
+
+// Generate transformed payload from current field mappings
 export default function SupplierImportWorkspace({
   data = {},
   api,
@@ -210,20 +219,24 @@ export default function SupplierImportWorkspace({
         return row[colHeader];
       };
 
+      const nameCandidate = String(getVal('short_name') || getVal('full_model_list') || '').trim();
+      const modelsCandidate = String(getVal('full_model_list') || getVal('short_name') || '').trim();
+
       return {
-        short_name: String(getVal('short_name') || '').trim(),
+        short_name: nameCandidate,
         brand: String(getVal('brand') || 'Generic').trim(),
         category: String(getVal('category') || 'General').trim(),
-        full_model_list: String(getVal('full_model_list') || '').trim(),
-        quantity: Math.max(1, Number(getVal('quantity') || 1)),
-        purchase_price: Number(getVal('purchase_price') || 0),
-        wholesale_price: Number(getVal('wholesale_price') || 0),
-        retail_price: Number(getVal('retail_price') || 0),
+        full_model_list: modelsCandidate,
+        quantity: Math.max(1, Math.round(parseCleanNumber(getVal('quantity'), 1))),
+        purchase_price: parseCleanNumber(getVal('purchase_price'), 0),
+        wholesale_price: parseCleanNumber(getVal('wholesale_price'), 0),
+        retail_price: parseCleanNumber(getVal('retail_price'), 0),
+        official_price: parseCleanNumber(getVal('official_price'), 0),
         colour: String(getVal('colour') || '').trim(),
         notes: String(getVal('notes') || '').trim(),
         source_key: `IMP-${fileName}-${idx}-${Date.now()}`
       };
-    }).filter((r) => r.short_name);
+    }).filter((r) => r.short_name || r.full_model_list);
   }, [rawRows, fieldMapping, fileName]);
 
   // Derived valuation metrics for Step 3
