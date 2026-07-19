@@ -1069,6 +1069,8 @@ const findImportProduct = async (tx, payload) => tx.getRecord(`
       OR (? <> '' AND LOWER(TRIM(model)) = LOWER(TRIM(?)))
     )
   ORDER BY id LIMIT 1
+`, [payload.brand, payload.shortName, payload.shortName, payload.fullModelList, payload.model, payload.model]);
+
 app.get('/api/brands', authenticateToken, async (req, res) => {
   try {
     const rows = await allRecords(`

@@ -1215,8 +1215,18 @@ function App() {
     }
   };
 
-  const loadBrandsPage = async () => {
-    setPageLoading((prev) => ({ ...prev, brands: false }));
+  const loadBrandsPage = async (currentShop = shopId) => {
+    setPageLoading((prev) => ({ ...prev, brands: true }));
+    try {
+      const params = scopedParams(currentShop);
+      const query = params.toString();
+      const response = await authedFetch(`/brands${query ? `?${query}` : ''}`);
+      setData((prev) => ({ ...prev, brandSummary: Array.isArray(response) ? response : [] }));
+    } catch (error) {
+      console.warn('Unable to load brands summary', error);
+    } finally {
+      setPageLoading((prev) => ({ ...prev, brands: false }));
+    }
   };
 
   const selectBrand = async (brand) => {
