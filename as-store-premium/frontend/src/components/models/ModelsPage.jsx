@@ -28,6 +28,8 @@ export default function ModelsPage({
   ),
 }) {
   const isSuperAdmin = role === 'superadmin';
+  const isShopkeeper = role === 'shopkeeper' || role === 'admin';
+  const canEditSellingPrice = isSuperAdmin || isShopkeeper;
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'table'
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [inspectProduct, setInspectProduct] = useState(null);
@@ -535,9 +537,14 @@ export default function ModelsPage({
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">Product Pricing Tiers</span>
-                    {!isSuperAdmin && (
+                    {isShopkeeper && !isSuperAdmin && (
+                      <span className="text-[10px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200/60 inline-flex items-center gap-1">
+                        <Check className="w-3 h-3 text-teal-600" /> Shopkeeper Branch Selling Price Control Enabled
+                      </span>
+                    )}
+                    {!isSuperAdmin && !isShopkeeper && (
                       <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60 inline-flex items-center gap-1">
-                        <Lock className="w-3 h-3" /> Price editing restricted to Super Admin
+                        <Lock className="w-3 h-3" /> Price editing restricted
                       </span>
                     )}
                   </div>
@@ -547,13 +554,13 @@ export default function ModelsPage({
                       <input
                         type="number"
                         step="any"
-                        disabled={!isSuperAdmin}
+                        disabled={!canEditSellingPrice}
                         value={editForm.sale_price}
                         onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
                         placeholder="e.g. 540"
-                        title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
+                        title={!canEditSellingPrice ? 'Only Shopkeepers and Super Admin can edit prices' : ''}
                         className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
-                          !isSuperAdmin
+                          !canEditSellingPrice
                             ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
                             : 'bg-emerald-50/60 border border-emerald-200 text-emerald-700 focus:border-emerald-500 focus:bg-white'
                         }`}

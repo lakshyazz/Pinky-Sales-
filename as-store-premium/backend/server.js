@@ -1097,13 +1097,17 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   if (!productId) return res.status(400).json({ error: 'Invalid product ID' });
 
   const isSuperAdmin = req.user.role === 'superadmin';
-  const { short_name, name, brand, category, full_model_list, model, sale_price, wholesale_price, purchase_price, official_price, description, colours } = req.body;
+  const isShopkeeper = req.user.role === 'shopkeeper' || req.user.role === 'admin' || req.user.role === 'shop_staff';
+  const canEditSellingPrice = isSuperAdmin || isShopkeeper;
 
-  // Price edits are strictly restricted to superadmin (Superowner)
-  const newSalePrice = isSuperAdmin && sale_price !== undefined ? Number(sale_price) : null;
-  const newWholesalePrice = isSuperAdmin && wholesale_price !== undefined ? Number(wholesale_price) : null;
-  const newPurchasePrice = isSuperAdmin && purchase_price !== undefined ? Number(purchase_price) : null;
-  const newOfficialPrice = isSuperAdmin && official_price !== undefined ? Number(official_price) : null;
+  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id } = req.body;
+
+  // Shopkeepers and Superadmins can update selling price (sale_price). Cost and wholesale are superadmin only.
+  const targetSalePrice = sale_price ?? retail_price;
+  const newSalePrice = canEditSellingPrice && targetSalePrice !== undefined && targetSalePrice !== null && targetSalePrice !== '' ? Number(targetSalePrice) : null;
+  const newWholesalePrice = isSuperAdmin && wholesale_price !== undefined && wholesale_price !== null && wholesale_price !== '' ? Number(wholesale_price) : null;
+  const newPurchasePrice = isSuperAdmin && purchase_price !== undefined && purchase_price !== null && purchase_price !== '' ? Number(purchase_price) : null;
+  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;
 
   try {
     await runTransaction(async (tx) => {
@@ -1116,6 +1120,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           full_model_list = COALESCE(?, full_model_list),
           model = COALESCE(?, model),
           sale_price = COALESCE(?, sale_price),
+          retail_price = COALESCE(?, retail_price),
           wholesale_price = COALESCE(?, wholesale_price),
           purchase_price = COALESCE(?, purchase_price),
           official_price = COALESCE(?, official_price),
@@ -1131,6 +1136,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         full_model_list || null,
         model || null,
         newSalePrice,
+        newSalePrice,
         newWholesalePrice,
         newPurchasePrice,
         newOfficialPrice,
@@ -1138,11 +1144,25 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         colours || null,
         productId
       ]);
+
+      // If price was updated, also update prices on inventory_batches for the shop
+      if (newSalePrice) {
+        const activeShopId = shop_id || req.user.shop_id;
+        if (activeShopId) {
+          await tx.execute(`
+            UPDATE inventory_batches SET
+              sale_price = ?,
+              retail_price = ?,
+              official_price = ?
+            WHERE product_id = ? AND shop_id = ?
+          `, [newSalePrice, newSalePrice, newSalePrice, productId, activeShopId]);
+        }
+      }
     });
 
     res.json({
       success: true,
-      message: isSuperAdmin ? 'Product and prices updated successfully' : 'Product details updated (Prices can only be edited by Super Admin)',
+      message: 'Product selling price & details updated successfully',
     });
   } catch (error) {
     console.error('[ProductsAPI] Error updating product:', error);
@@ -1651,6 +1671,19 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
           const error = new Error('Not enough accessible batch stock to set this quantity.');
           error.status = 400;
           throw error;
+        }
+      }
+      if (retail_price || official_price) {
+        const updatePrice = Number(retail_price || official_price);
+        if (!isNaN(updatePrice) && updatePrice > 0) {
+          await tx.runQuery(
+            'UPDATE inventory_batches SET sale_price = ?, retail_price = ?, official_price = ? WHERE shop_id = ? AND product_id = ?',
+            [updatePrice, updatePrice, updatePrice, shopId, product_id]
+          );
+          await tx.runQuery(
+            'UPDATE products SET sale_price = ?, retail_price = ? WHERE id = ?',
+            [updatePrice, updatePrice, product_id]
+          );
         }
       }
       await syncStockFromBatches(tx, shopId, product_id);
