@@ -48,12 +48,13 @@ import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
 
+const isVercelEnvironment = typeof window !== 'undefined' && (window.location.hostname.endsWith('vercel.app') || window.location.hostname === 'localhost');
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
-const productionApiBase = configuredApiBase || '/api';
+const productionApiBase = isVercelEnvironment ? '/api' : (configuredApiBase || '/api');
 const API_BASE = (
   import.meta.env.PROD
     ? productionApiBase
-    : configuredApiBase || 'http://localhost:5000/api'
+    : configuredApiBase || '/api'
 ).replace(/\/$/, '');
 
 class ApiError extends Error {
@@ -1410,14 +1411,16 @@ function App() {
       } else {
         ({ shops, products, reference, priceVisibility, warehouse } = await authedFetch('/bootstrap'));
       }
+      const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
+      const loadedProducts = getPaginatedRows(products);
       setData((prev) => ({
         ...prev,
         shops,
-        products,
+        products: loadedProducts,
         reference: cleanReferenceData(reference),
         priceVisibility,
         warehouse: warehouse || prev.warehouse,
-        catalog: role === 'customer' ? products : prev.catalog,
+        catalog: role === 'customer' ? loadedProducts : prev.catalog,
       }));
     } catch (error) {
       handleLoadError(error, 'Unable to load the workspace. Check whether the local servers are running.');

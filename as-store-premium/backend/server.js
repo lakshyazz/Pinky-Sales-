@@ -2560,7 +2560,7 @@ app.delete('/api/reports/audit', authenticateToken, requireSuperAdmin, async (re
   }
 });
 
-app.post('/api/inventory/bulk-import', authenticateToken, requireSuperAdmin, async (req, res) => {
+app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateToken, requireSuperAdmin, async (req, res) => {
   const { fileName, destinationShopId, defaultAssignedUserId, records = [] } = req.body;
   if (!Array.isArray(records) || !records.length) {
     return res.status(400).json({ error: 'No inventory records provided for bulk import.' });
@@ -2723,7 +2723,7 @@ app.post('/api/inventory/bulk-import', authenticateToken, requireSuperAdmin, asy
   }
 });
 
-app.get('/api/inventory/import-logs', authenticateToken, requireSuperAdmin, async (req, res) => {
+app.get(['/api/inventory/import-logs', '/inventory/import-logs'], authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const logs = await allRecords(
       `SELECT il.*, u.name as importer_name, s.name as shop_name 
