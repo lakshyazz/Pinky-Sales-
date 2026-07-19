@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock } from 'lucide-react';
+import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
 
@@ -48,6 +48,16 @@ export default function ModelsPage({
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Add Stock Modal State
+  const [addStockProduct, setAddStockProduct] = useState(null);
+  const [addStockForm, setAddStockForm] = useState({
+    quantity: '',
+    sale_price: '',
+    colour: '',
+    notes: '',
+  });
+  const [savingStock, setSavingStock] = useState(false);
+
   // Extract unique categories for quick filter pills
   const categories = useMemo(() => {
     const set = new Set(['All']);
@@ -83,6 +93,70 @@ export default function ModelsPage({
       full_model_list: product.full_model_list || product.model || '',
       description: product.description || '',
     });
+  };
+
+  const handleOpenAddStock = (product) => {
+    setAddStockProduct(product);
+    setAddStockForm({
+      quantity: '',
+      sale_price: product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : '',
+      colour: '',
+      notes: '',
+    });
+  };
+
+  const handleSaveAddStock = async (e) => {
+    if (e) e.preventDefault();
+    if (!addStockProduct) return;
+    const qty = Number(addStockForm.quantity);
+    if (!addStockForm.quantity || isNaN(qty) || qty <= 0) {
+      if (setGlobalToast) setGlobalToast('Please enter a valid stock quantity', 'error');
+      else alert('Please enter a valid stock quantity');
+      return;
+    }
+
+    try {
+      setSavingStock(true);
+      const token = session?.token || localStorage.getItem('token');
+      const payload = {
+        product_id: addStockProduct.id,
+        quantity: qty,
+        retail_price: addStockForm.sale_price ? Number(addStockForm.sale_price) : undefined,
+        colour: addStockForm.colour || undefined,
+        notes: addStockForm.notes || `Stock added via model catalog (${productName(addStockProduct)})`,
+      };
+
+      if (api) {
+        await api('/stock', { method: 'PUT', body: JSON.stringify(payload) }, token);
+      } else {
+        const res = await fetch('/api/stock', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error('Failed to update stock');
+      }
+
+      // Update local product stock count for immediate visual reactivity
+      if (addStockProduct.quantity !== undefined) {
+        addStockProduct.quantity = Number(addStockProduct.quantity || 0) + qty;
+      }
+      if (addStockForm.sale_price) {
+        addStockProduct.sale_price = Number(addStockForm.sale_price);
+      }
+
+      if (setGlobalToast) setGlobalToast(`Added ${qty} pcs to stock for ${productName(addStockProduct)}`, 'success');
+      if (onProductUpdated) onProductUpdated();
+      setAddStockProduct(null);
+    } catch (err) {
+      if (setGlobalToast) setGlobalToast(err.message || 'Failed to update stock', 'error');
+      else alert(err.message || 'Failed to update stock');
+    } finally {
+      setSavingStock(false);
+    }
   };
 
   const handleSaveEdit = async (e) => {
@@ -303,6 +377,17 @@ export default function ModelsPage({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
+                        handleOpenAddStock(product);
+                      }}
+                      className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition-all text-xs font-bold flex items-center gap-1 shadow-md shadow-emerald-600/20"
+                      title="Add Stock for this Model"
+                    >
+                      <PackagePlus className="w-3.5 h-3.5" /> + Stock
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
                         handleOpenEdit(product);
                       }}
                       className="px-3 py-2 rounded-xl bg-cyan-50 text-cyan-700 hover:bg-cyan-600 hover:text-white transition-all text-xs font-bold flex items-center gap-1 shadow-sm"
@@ -375,6 +460,13 @@ export default function ModelsPage({
                     <td className="p-4 font-black text-emerald-600">{priceLabel(product.sale_price)}</td>
                     <td className="p-4 text-right">
                       <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenAddStock(product)}
+                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all text-xs inline-flex items-center gap-1 shadow-sm"
+                        >
+                          <PackagePlus className="w-3.5 h-3.5" /> + Stock
+                        </button>
                         <button
                           type="button"
                           onClick={() => handleOpenEdit(product)}
@@ -460,24 +552,148 @@ export default function ModelsPage({
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-2">
                 <button
                   onClick={() => {
                     const prod = inspectProduct;
                     setInspectProduct(null);
-                    handleOpenEdit(prod);
+                    handleOpenAddStock(prod);
                   }}
-                  className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-600/20"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
                 >
-                  <Edit3 className="w-4 h-4" /> Edit Product & Prices
+                  <PackagePlus className="w-4 h-4" /> + Add Stock
                 </button>
-                <button
-                  onClick={() => setInspectProduct(null)}
-                  className="px-5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs"
-                >
-                  Close
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const prod = inspectProduct;
+                      setInspectProduct(null);
+                      handleOpenEdit(prod);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-cyan-50 hover:bg-cyan-600 hover:text-white text-cyan-700 font-bold text-xs flex items-center gap-1"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" /> Edit
+                  </button>
+                  <button
+                    onClick={() => setInspectProduct(null)}
+                    className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Stock to Model Modal */}
+      <AnimatePresence>
+        {addStockProduct && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              className="relative w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6 my-8"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-emerald-600 text-white shadow-md shadow-emerald-600/20">
+                    <PackagePlus className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">Add Stock to Model</h3>
+                    <p className="text-xs text-slate-500 font-medium">Add new inventory pieces to your shop for this existing model.</p>
+                  </div>
+                </div>
+                <button onClick={() => setAddStockProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
+                  <X className="w-5 h-5" />
                 </button>
               </div>
+
+              <div className="my-4 p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
+                <div>
+                  <span className="font-extrabold text-slate-900 text-sm block">{productName(addStockProduct)}</span>
+                  <span className="text-slate-500 font-semibold">{addStockProduct.brand || 'Generic'} · {addStockProduct.category || 'General'}</span>
+                </div>
+                <span className="px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 font-black text-xs">
+                  {priceLabel(addStockProduct.sale_price)}
+                </span>
+              </div>
+
+              <form onSubmit={handleSaveAddStock} className="space-y-4 text-xs">
+                <div>
+                  <label className="text-[11px] font-extrabold text-emerald-700 uppercase tracking-wider block mb-1">Stock Quantity to Add (Pcs) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={addStockForm.quantity}
+                    onChange={(e) => setAddStockForm({ ...addStockForm, quantity: e.target.value })}
+                    placeholder="e.g. 25"
+                    className="w-full px-3.5 py-2.5 bg-emerald-50/60 border border-emerald-300 rounded-xl font-black text-emerald-900 text-sm outline-none focus:border-emerald-500 focus:bg-white transition-all"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Retail Selling Price (₹)</label>
+                    <input
+                      type="number"
+                      step="any"
+                      disabled={!canEditSellingPrice}
+                      value={addStockForm.sale_price}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, sale_price: e.target.value })}
+                      placeholder="e.g. 540"
+                      className={`w-full px-3.5 py-2.5 rounded-xl font-bold text-xs outline-none transition-all ${
+                        !canEditSellingPrice
+                          ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+                          : 'bg-slate-50 border border-slate-200 text-slate-900 focus:border-cyan-500 focus:bg-white'
+                      }`}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Colour Variant (Optional)</label>
+                    <input
+                      type="text"
+                      value={addStockForm.colour}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, colour: e.target.value })}
+                      placeholder="e.g. Black, Silver, Transparent"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Batch Notes (Optional)</label>
+                  <input
+                    type="text"
+                    value={addStockForm.notes}
+                    onChange={(e) => setAddStockForm({ ...addStockForm, notes: e.target.value })}
+                    placeholder="e.g. Received new shipment from vendor"
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setAddStockProduct(null)}
+                    className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingStock}
+                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
+                  >
+                    <PackagePlus className="w-4 h-4" /> {savingStock ? 'Updating Stock...' : 'Save Stock to Inventory'}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Smartphone, 
   LayoutGrid, 
@@ -18,7 +18,9 @@ import {
   Check, 
   ArrowRight,
   Settings,
-  AlertCircle
+  AlertCircle,
+  Search,
+  PackagePlus
 } from 'lucide-react';
 import ProductPagination from '../shared/ProductPagination';
 import SearchFilter from '../shared/SearchFilter';
@@ -68,6 +70,10 @@ export default function StockPage({
   const [isReferenceOpen, setIsReferenceOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+
+  // Model Picker Modal state for quick stock addition from existing models
+  const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
+  const [modelPickerSearch, setModelPickerSearch] = useState('');
 
   // Reference Manager state
   const [refTab, setRefTab] = useState('colours'); // 'colours', 'brands', 'categories'
@@ -216,6 +222,20 @@ export default function StockPage({
   };
   const stockPreview = getStockMetricPreview();
 
+  // Filtered products list for model picker modal
+  const filteredModelPickerProducts = useMemo(() => {
+    const list = data.products || [];
+    if (!modelPickerSearch.trim()) return list;
+    const term = modelPickerSearch.toLowerCase().trim();
+    return list.filter((p) => {
+      const nameMatch = String(p.short_name || p.name || '').toLowerCase().includes(term);
+      const brandMatch = String(p.brand || '').toLowerCase().includes(term);
+      const catMatch = String(p.category || '').toLowerCase().includes(term);
+      const modelMatch = String(p.full_model_list || p.model || '').toLowerCase().includes(term);
+      return nameMatch || brandMatch || catMatch || modelMatch;
+    });
+  }, [data.products, modelPickerSearch]);
+
   return (
     <section className="space">
       
@@ -263,7 +283,8 @@ export default function StockPage({
           disabled={saving || !forms.stock.product_id || forms.stock.quantity === ''}
         >
           <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr', gap: '16px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr md:3fr', gap: '16px' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end', justifyContent: 'space-between' }}>
+            <div style={{ flex: 1, minWidth: '260px' }}>
               <Select 
                 label="Select Product to Update" 
                 value={forms.stock.product_id} 
@@ -281,6 +302,27 @@ export default function StockPage({
                 options={data.products.map((p) => [p.id, `${productName(p)} · [${p.brand}] · ${priceLabel(p.sale_price)}`])} 
               />
             </div>
+            <button
+              type="button"
+              onClick={() => setIsModelPickerOpen(true)}
+              style={{
+                padding: '10px 16px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, #0d9488 0%, #0284c7 100%)',
+                color: '#ffffff',
+                fontWeight: 700,
+                fontSize: '12px',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 4px 12px rgba(13, 148, 136, 0.25)'
+              }}
+            >
+              <PackagePlus size={15} /> Pick from Models Catalog
+            </button>
+          </div>
 
             {/* Current Stock Preview & Optional Colour dropdown */}
             {forms.stock.product_id && (
@@ -964,6 +1006,99 @@ export default function StockPage({
         onPageSizeChange={onStockPageSizeChange}
         totalLabel="stock rows"
       />
+
+      {/* Model Catalog Picker Modal for Stock Addition */}
+      {isModelPickerOpen && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px', background: 'rgba(15, 23, 42, 0.65)', backdropFilter: 'blur(8px)' }}>
+          <div style={{ position: 'relative', width: '100%', maxWidth: '640px', maxHeight: '85vh', background: '#ffffff', border: '1px solid rgba(226, 232, 240, 0.8)', borderRadius: '24px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '20px', borderBottom: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ padding: '10px', borderRadius: '14px', background: 'rgba(13, 148, 136, 0.1)', color: '#0d9488' }}>
+                  <PackagePlus size={20} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', margin: 0 }}>Pick Model from Catalog</h3>
+                  <p style={{ fontSize: '12px', color: '#64748b', margin: '2px 0 0' }}>Select any existing catalog model to update or add new branch stock.</p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setIsModelPickerOpen(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#64748b', padding: '6px', borderRadius: '8px' }}>
+                <X size={20} />
+              </button>
+            </div>
+
+            <div style={{ padding: '16px', borderBottom: '1px solid #f1f5f9', background: '#f8fafc' }}>
+              <SearchFilter
+                placeholder="Search catalog models by name, brand, category, or code..."
+                value={modelPickerSearch}
+                onChange={(val) => setModelPickerSearch(val)}
+              />
+            </div>
+
+            <div style={{ padding: '16px', overflowY: 'auto', flex: 1, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '12px' }}>
+              {filteredModelPickerProducts.map((prod) => (
+                <button
+                  key={prod.id}
+                  type="button"
+                  onClick={() => {
+                    setForms((prev) => ({
+                      ...prev,
+                      stock: {
+                        ...prev.stock,
+                        product_id: String(prod.id),
+                        colour: '',
+                        quantity: ''
+                      }
+                    }));
+                    setIsModelPickerOpen(false);
+                    window.scrollTo({ top: 120, behavior: 'smooth' });
+                  }}
+                  style={{
+                    padding: '14px',
+                    borderRadius: '16px',
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justify: 'space-between',
+                    gap: '10px'
+                  }}
+                  className="model-picker-item"
+                >
+                  <div>
+                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#0f172a', display: 'block', lineHeight: 1.3 }}>{productName(prod)}</span>
+                    <small style={{ fontSize: '11px', color: '#64748b', marginTop: '2px', display: 'block' }}>{prod.brand || 'Generic'} · {prod.category || 'General'}</small>
+                    {fullModelList(prod) && fullModelList(prod) !== productName(prod) && (
+                      <span style={{ fontSize: '10px', color: '#0369a1', background: '#e0f2fe', padding: '2px 6px', borderRadius: '4px', marginTop: '6px', display: 'inline-block', fontWeight: 600 }}>
+                        {fullModelList(prod)}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '8px', borderTop: '1px solid #f1f5f9' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#059669' }}>{priceLabel(prod.sale_price)}</span>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: '#0d9488', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                      Select <ArrowRight size={12} />
+                    </span>
+                  </div>
+                </button>
+              ))}
+              {!filteredModelPickerProducts.length && (
+                <div style={{ gridColumn: '1 / -1', padding: '32px', textAlign: 'center', color: '#64748b', fontSize: '13px', fontWeight: 600 }}>
+                  No catalog models match "{modelPickerSearch}"
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: '12px 20px', borderTop: '1px solid #f1f5f9', background: '#f8fafc', display: 'flex', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setIsModelPickerOpen(false)} style={{ padding: '8px 18px', borderRadius: '10px', background: '#e2e8f0', border: 'none', color: '#334155', fontWeight: 700, fontSize: '12px', cursor: 'pointer' }}>
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </section>
   );
