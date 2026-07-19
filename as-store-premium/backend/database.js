@@ -108,28 +108,36 @@ const seedUser = async ({ username, password, role, name, contact = '', shopId =
 export const initDatabase = async () => {
   console.log('[Database] Connecting to PostgreSQL database on Supabase...');
   await pool.query('SELECT 1');
-  await pool.query(`
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS short_name TEXT;
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS full_model_list TEXT;
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12, 2);
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12, 2);
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS wholesale_price NUMERIC(12, 2);
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS retail_price NUMERIC(12, 2);
-    ALTER TABLE products ADD COLUMN IF NOT EXISTS colours TEXT[] NOT NULL DEFAULT '{}';
-    UPDATE products
-    SET
-      full_model_list = COALESCE(NULLIF(full_model_list, ''), name),
-      short_name = COALESCE(NULLIF(short_name, ''), CASE WHEN LENGTH(name) > 60 THEN TRIM(SPLIT_PART(name, '/', 1)) ELSE name END),
-      sale_price = COALESCE(sale_price, official_price),
-      retail_price = COALESCE(retail_price, official_price)
-    WHERE full_model_list IS NULL OR short_name IS NULL OR sale_price IS NULL OR retail_price IS NULL;
-    UPDATE products SET short_name = LEFT(short_name, 57) || '...' WHERE LENGTH(short_name) > 60;
-    CREATE INDEX IF NOT EXISTS products_short_name_idx ON products (short_name);
-  `);
+  try {
+    await pool.query(`
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS short_name TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS full_model_list TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12, 2);
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS sale_price NUMERIC(12, 2);
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS wholesale_price NUMERIC(12, 2);
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS retail_price NUMERIC(12, 2);
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS colours TEXT[] NOT NULL DEFAULT '{}';
+      UPDATE products
+      SET
+        full_model_list = COALESCE(NULLIF(full_model_list, ''), name),
+        short_name = COALESCE(NULLIF(short_name, ''), CASE WHEN LENGTH(name) > 60 THEN TRIM(SPLIT_PART(name, '/', 1)) ELSE name END),
+        sale_price = COALESCE(sale_price, official_price),
+        retail_price = COALESCE(retail_price, official_price)
+      WHERE full_model_list IS NULL OR short_name IS NULL OR sale_price IS NULL OR retail_price IS NULL;
+      UPDATE products SET short_name = LEFT(short_name, 57) || '...' WHERE LENGTH(short_name) > 60;
+      CREATE INDEX IF NOT EXISTS products_short_name_idx ON products (short_name);
+    `);
+  } catch (ddlErr) {
+    console.warn('[Database] Non-fatal init DDL notice:', ddlErr.message);
+  }
 
   if (process.env.SEED_DEFAULT_ADMIN === 'true') {
-    await seedUser({ username: 'superadmin', password: 'superadmin123', role: 'superadmin', name: 'Super Admin', contact: '9999999999' });
-    await runQuery("UPDATE users SET name = 'Super Admin' WHERE username = 'superadmin' AND name = 'Father - Super Admin';");
+    try {
+      await seedUser({ username: 'superadmin', password: 'superadmin123', role: 'superadmin', name: 'Super Admin', contact: '9999999999' });
+      await runQuery("UPDATE users SET name = 'Super Admin' WHERE username = 'superadmin' AND name = 'Father - Super Admin';");
+    } catch (seedErr) {
+      console.warn('[Database] Non-fatal seed notice:', seedErr.message);
+    }
   }
   
   console.log('[Database] PostgreSQL database connection ready.');

@@ -51,9 +51,31 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
 
-await initDatabase().catch((err) => {
-  console.error('[Server] Failed to initialize database:', err);
-  process.exit(1);
+let dbInitialized = false;
+let dbInitPromise = null;
+
+const ensureDatabaseInit = async () => {
+  if (dbInitialized) return;
+  if (!dbInitPromise) {
+    dbInitPromise = initDatabase()
+      .then(() => { dbInitialized = true; })
+      .catch((err) => {
+        dbInitPromise = null;
+        console.error('[Server] Database connection error:', err);
+        throw err;
+      });
+  }
+  return dbInitPromise;
+};
+
+app.use(async (req, _res, next) => {
+  if (req.path === '/api/health') return next();
+  try {
+    await ensureDatabaseInit();
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -452,7 +474,7 @@ const inventoryJoinScope = (req, shopId, alias = 'ib') => {
   };
 };
 
-app.post('/api/auth/login', async (req, res) => {
+app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   if (!username || !password) return res.status(400).json({ error: 'Enter username and password.' });
