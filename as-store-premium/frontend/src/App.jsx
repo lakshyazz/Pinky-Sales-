@@ -35,6 +35,7 @@ import {
   Trash2,
   UserCog,
   Users,
+  UploadCloud,
   X,
 } from 'lucide-react';
 import ModelsPage from './components/models/ModelsPage';
@@ -45,6 +46,7 @@ import Pagination from './components/ui/Pagination';
 import SearchInput from './components/ui/SearchInput';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
+import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
 const productionApiBase = configuredApiBase?.startsWith('http')
@@ -240,6 +242,7 @@ const navByRole = {
     ['categories', 'Product Categories', Store],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
+    ['import', 'Supplier Import', UploadCloud],
     ['customers', 'Customers', Users],
     ['sales', 'Sales', ReceiptText],
     ['requests', 'Requests', Send],
@@ -271,7 +274,7 @@ const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
     { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories'] },
-    { title: 'Operations', ids: ['shops', 'shopkeepers', 'customers', 'sales', 'requests', 'payments'] },
+    { title: 'Operations', ids: ['shops', 'shopkeepers', 'import', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
@@ -302,6 +305,11 @@ const pageMetaById = {
     group: 'Operations',
     title: 'Shopkeepers',
     description: 'Create and manage branch staff access without changing inventory history.',
+  },
+  import: {
+    group: 'Operations',
+    title: 'Supplier Excel Import',
+    description: 'Ingest supplier inventory spreadsheets automatically into FIFO stock and product catalog.',
   },
   stock: {
     group: 'Inventory',
@@ -3640,6 +3648,17 @@ function App() {
                 setShopkeeperSearch={setShopkeeperSearch}
                 visibleShopkeepers={visibleShopkeepers}
                 Empty={Empty}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'import' && (
+            <PageWrapper activeKey="import" key="import">
+              <SupplierImportWorkspace
+                data={data}
+                api={authedFetch}
+                setGlobalToast={showToast}
+                onImportComplete={loadCore}
               />
             </PageWrapper>
           )}

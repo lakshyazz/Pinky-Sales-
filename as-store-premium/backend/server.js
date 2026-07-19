@@ -2527,6 +2527,7 @@ app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) =>
   ]);
   appendExactFilter(availabilityWhere, availabilityParams, req.query.brand, 'p.brand = ?');
   appendExactFilter(availabilityWhere, availabilityParams, req.query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
+
   const availabilityBaseSql = `
     FROM stock st
     JOIN products p ON p.id = st.product_id
@@ -2556,6 +2557,183 @@ app.delete('/api/reports/audit', authenticateToken, requireSuperAdmin, async (re
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to clear audit logs.' });
+  }
+});
+
+app.post('/api/inventory/bulk-import', authenticateToken, requireSuperAdmin, async (req, res) => {
+  const { fileName, destinationShopId, defaultAssignedUserId, records = [] } = req.body;
+  if (!Array.isArray(records) || !records.length) {
+    return res.status(400).json({ error: 'No inventory records provided for bulk import.' });
+  }
+
+  const shopId = Number(destinationShopId) || 1;
+  const assignedUserId = defaultAssignedUserId ? Number(defaultAssignedUserId) : null;
+  const userId = req.user.id;
+
+  let createdProductsCount = 0;
+  let createdBatchesCount = 0;
+  let totalQuantityAdded = 0;
+  let totalValuation = 0;
+
+  try {
+    await runTransaction(async (tx) => {
+      for (const item of records) {
+        const name = String(item.short_name || item.name || '').trim();
+        if (!name) continue;
+
+        const brand = String(item.brand || 'Generic').trim();
+        const category = String(item.category || 'General').trim();
+        const fullModelList = String(item.full_model_list || item.models || '').trim();
+        const colour = String(item.colour || '').trim();
+        const notes = String(item.notes || `Imported via ${fileName || 'Excel'}`).trim();
+
+        const purchasePrice = Math.max(0, Number(item.purchase_price || 0));
+        const wholesalePrice = Math.max(0, Number(item.wholesale_price || purchasePrice * 1.1));
+        const retailPrice = Math.max(0, Number(item.retail_price || item.sale_price || purchasePrice * 1.3));
+        const officialPrice = Math.max(0, Number(item.official_price || retailPrice));
+        const qty = Math.max(1, Number(item.quantity || item.qty || 1));
+        const dateIn = item.received_date ? String(item.received_date) : new Date().toISOString().split('T')[0];
+
+        // Unique hash for row deduplication
+        const sourceKey = item.source_key || `IMP-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+        // 1. Ensure Brand, Category, Colour exist
+        if (category) {
+          await tx.runQuery(
+            'INSERT INTO categories (name) VALUES (?) ON CONFLICT (name) DO NOTHING',
+            [category]
+          );
+        }
+        if (brand) {
+          await tx.runQuery(
+            'INSERT INTO brands (name) VALUES (?) ON CONFLICT (name) DO NOTHING',
+            [brand]
+          );
+        }
+        if (colour) {
+          await tx.runQuery(
+            'INSERT INTO colours (name) VALUES (?) ON CONFLICT (name) DO NOTHING',
+            [colour]
+          );
+        }
+
+        // 2. Find or Create Product Catalog Entry
+        let product = await tx.getRecord(
+          'SELECT id, sale_price, purchase_price, wholesale_price FROM products WHERE LOWER(TRIM(short_name)) = LOWER(TRIM(?)) LIMIT 1',
+          [name]
+        );
+
+        let productId;
+        if (!product) {
+          const insertRes = await tx.runQuery(
+            `INSERT INTO products (short_name, brand, category, full_model_list, purchase_price, wholesale_price, official_price, sale_price, description, colours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              name,
+              brand,
+              category,
+              fullModelList,
+              purchasePrice,
+              wholesalePrice,
+              officialPrice,
+              retailPrice,
+              `Imported item from supplier file ${fileName || ''}`,
+              colour ? [colour] : []
+            ]
+          );
+          productId = insertRes.id;
+          createdProductsCount++;
+        } else {
+          productId = product.id;
+          if (retailPrice > 0 || purchasePrice > 0) {
+            await tx.runQuery(
+              `UPDATE products SET 
+                purchase_price = COALESCE(NULLIF(?, 0), purchase_price),
+                wholesale_price = COALESCE(NULLIF(?, 0), wholesale_price),
+                sale_price = COALESCE(NULLIF(?, 0), sale_price),
+                brand = COALESCE(NULLIF(?, 'Generic'), brand),
+                category = COALESCE(NULLIF(?, 'General'), category)
+               WHERE id = ?`,
+              [purchasePrice, wholesalePrice, retailPrice, brand, category, productId]
+            );
+          }
+        }
+
+        // 3. Create FIFO Inventory Batch
+        await tx.runQuery(
+          `INSERT INTO inventory_batches (
+            shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+            colour, quantity_received, quantity_remaining, received_date, notes, source_key, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT (source_key) DO NOTHING`,
+          [
+            shopId,
+            productId,
+            assignedUserId,
+            purchasePrice,
+            wholesalePrice,
+            officialPrice,
+            retailPrice,
+            colour || null,
+            qty,
+            qty,
+            dateIn,
+            notes,
+            sourceKey,
+            userId
+          ]
+        );
+
+        createdBatchesCount++;
+        totalQuantityAdded += qty;
+        totalValuation += (purchasePrice || retailPrice) * qty;
+      }
+
+      // 4. Log Import Session Audit Record
+      await tx.runQuery(
+        `INSERT INTO import_logs (
+          file_name, imported_by, total_rows, created_products, total_quantity, total_valuation, destination_shop_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          fileName || 'supplier_import.xlsx',
+          userId,
+          records.length,
+          createdProductsCount,
+          totalQuantityAdded,
+          totalValuation,
+          shopId
+        ]
+      );
+    });
+
+    res.json({
+      success: true,
+      summary: {
+        totalRowsProcessed: records.length,
+        createdProducts: createdProductsCount,
+        createdBatches: createdBatchesCount,
+        totalQuantityAdded,
+        totalValuation: Number(totalValuation.toFixed(2))
+      }
+    });
+  } catch (error) {
+    console.error('[BulkImport] Error executing inventory import:', error);
+    res.status(500).json({ error: error.message || 'Failed to execute bulk inventory import.' });
+  }
+});
+
+app.get('/api/inventory/import-logs', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const logs = await allRecords(
+      `SELECT il.*, u.name as importer_name, s.name as shop_name 
+       FROM import_logs il
+       LEFT JOIN users u ON u.id = il.imported_by
+       LEFT JOIN shops s ON s.id = il.destination_shop_id
+       ORDER BY il.import_timestamp DESC LIMIT 50`
+    );
+    res.json({ logs });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch import logs.' });
   }
 });
 
