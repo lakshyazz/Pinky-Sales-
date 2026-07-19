@@ -1071,7 +1071,7 @@ const findImportProduct = async (tx, payload) => tx.getRecord(`
   ORDER BY id LIMIT 1
 `, [payload.brand, payload.shortName, payload.shortName, payload.fullModelList, payload.model, payload.model]);
 
-app.get('/api/brands', authenticateToken, async (req, res) => {
+const handleGetBrands = async (req, res) => {
   try {
     const rows = await allRecords(`
       SELECT p.brand, COUNT(DISTINCT p.id) AS product_count, COALESCE(SUM(ib.quantity_remaining), 0) AS quantity, COALESCE(SUM(ib.quantity_remaining * p.sale_price), 0) AS stock_value
@@ -1081,11 +1081,16 @@ app.get('/api/brands', authenticateToken, async (req, res) => {
       GROUP BY p.brand
       ORDER BY p.brand ASC
     `);
-    res.json(rows);
+    res.json({ success: true, data: rows });
   } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch brands summary' });
+    console.error('[BrandsAPI] Error fetching brands:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch brands summary' });
   }
-});
+};
+
+app.get('/api/brands', authenticateToken, handleGetBrands);
+app.get('/api/brands/summary', authenticateToken, handleGetBrands);
+app.get('/brands', authenticateToken, handleGetBrands);
 
 app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];

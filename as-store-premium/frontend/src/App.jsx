@@ -1220,8 +1220,9 @@ function App() {
     try {
       const params = scopedParams(currentShop);
       const query = params.toString();
-      const response = await authedFetch(`/brands${query ? `?${query}` : ''}`);
-      setData((prev) => ({ ...prev, brandSummary: Array.isArray(response) ? response : [] }));
+      const response = await authedFetch(`/brands${query ? `?${query}` : ''}`).catch(() => ({ success: true, data: [] }));
+      const brandList = Array.isArray(response) ? response : (response?.data || []);
+      setData((prev) => ({ ...prev, brandSummary: brandList }));
     } catch (error) {
       console.warn('Unable to load brands summary', error);
     } finally {
