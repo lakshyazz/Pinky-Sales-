@@ -86,3 +86,86 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   details TEXT,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS categories (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS colours (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS brands (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS inventory_batches (
+  id SERIAL PRIMARY KEY,
+  shop_id INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  assigned_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  purchase_price NUMERIC(12, 2),
+  wholesale_price NUMERIC(12, 2),
+  official_price NUMERIC(12, 2),
+  retail_price NUMERIC(12, 2),
+  colour TEXT,
+  quantity_received INTEGER NOT NULL CHECK (quantity_received >= 0),
+  quantity_remaining INTEGER NOT NULL CHECK (quantity_remaining >= 0),
+  received_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  notes TEXT,
+  source_key TEXT UNIQUE,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sale_batch_allocations (
+  id SERIAL PRIMARY KEY,
+  sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
+  batch_id INTEGER NOT NULL REFERENCES inventory_batches(id) ON DELETE RESTRICT,
+  quantity INTEGER NOT NULL CHECK (quantity > 0),
+  purchase_price NUMERIC(12, 2),
+  created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS other_product_categories (
+  id SERIAL PRIMARY KEY,
+  product_category VARCHAR(255) NOT NULL,
+  other_if_needed TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS other_products (
+  id SERIAL PRIMARY KEY,
+  product_name VARCHAR(255) NOT NULL,
+  product_company VARCHAR(255),
+  price NUMERIC(10, 2) DEFAULT 0,
+  product_category_id INTEGER REFERENCES other_product_categories(id) ON DELETE SET NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS import_logs (
+  id SERIAL PRIMARY KEY,
+  file_name TEXT NOT NULL,
+  imported_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  total_rows INTEGER NOT NULL DEFAULT 0,
+  created_products INTEGER NOT NULL DEFAULT 0,
+  total_quantity INTEGER NOT NULL DEFAULT 0,
+  total_valuation NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+  destination_shop_id INTEGER REFERENCES shops(id) ON DELETE SET NULL,
+  import_timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
