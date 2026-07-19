@@ -1069,7 +1069,21 @@ const findImportProduct = async (tx, payload) => tx.getRecord(`
       OR (? <> '' AND LOWER(TRIM(model)) = LOWER(TRIM(?)))
     )
   ORDER BY id LIMIT 1
-`, [payload.brand, payload.shortName, payload.shortName, payload.fullModelList, payload.model, payload.model]);
+app.get('/api/brands', authenticateToken, async (req, res) => {
+  try {
+    const rows = await allRecords(`
+      SELECT p.brand, COUNT(DISTINCT p.id) AS product_count, COALESCE(SUM(ib.quantity_remaining), 0) AS quantity, COALESCE(SUM(ib.quantity_remaining * p.sale_price), 0) AS stock_value
+      FROM products p
+      LEFT JOIN inventory_batches ib ON ib.product_id = p.id
+      WHERE p.is_active = 1 AND p.brand IS NOT NULL AND TRIM(p.brand) != ''
+      GROUP BY p.brand
+      ORDER BY p.brand ASC
+    `);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch brands summary' });
+  }
+});
 
 app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
