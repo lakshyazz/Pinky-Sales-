@@ -44,7 +44,6 @@ import BrandsPage from './components/brands/BrandsPage';
 import Pagination from './components/ui/Pagination';
 import SearchInput from './components/ui/SearchInput';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
-import { OtherProductsPage } from './components/other-products/OtherProductsPage';
 
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
 const productionApiBase = configuredApiBase?.startsWith('http')
@@ -238,7 +237,6 @@ const navByRole = {
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
-    ['other-products', 'Other Products', Package],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
     ['customers', 'Customers', Users],
@@ -254,7 +252,6 @@ const navByRole = {
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
-    ['other-products', 'Other Products', Package],
     ['customers', 'Customers', Users],
     ['requests', 'Requests', Send],
     ['sales', 'Create Sale', ReceiptText],
@@ -272,13 +269,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories', 'other-products'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories', 'other-products'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -329,11 +326,6 @@ const pageMetaById = {
     group: 'Inventory',
     title: 'Product Categories',
     description: 'Manage global product categories.',
-  },
-  'other-products': {
-    group: 'Inventory',
-    title: 'Other Products',
-    description: 'Manage other products in the system.',
   },
   customers: {
     group: 'Operations',
@@ -3782,12 +3774,6 @@ function App() {
                 currency={currency}
                 productName={productName}
               />
-            </PageWrapper>
-          )}
-
-          {active === 'other-products' && (
-            <PageWrapper activeKey="other-products" key="other-products">
-              <OtherProductsPage session={session} setGlobalToast={showToast} api={api} />
             </PageWrapper>
           )}
 
