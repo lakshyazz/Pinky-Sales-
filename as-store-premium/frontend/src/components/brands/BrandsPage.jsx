@@ -92,7 +92,7 @@ export default function BrandsPage({
   }, [data.reference, allProducts]);
 
   const brandList = React.useMemo(() => {
-    if (propBrands && Array.isArray(propBrands)) {
+    if (propBrands && Array.isArray(propBrands) && propBrands.length > 0) {
       return propBrands.map((b) => ({
         rawName: b.brand,
         name: capitalizeBrand(b.brand),

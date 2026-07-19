@@ -3761,14 +3761,6 @@ function App() {
           {active === 'brands' && role !== 'customer' && (
             <PageWrapper activeKey="brands" key="brands">
               <BrandsPage
-                brands={data.brandSummary}
-                selectedBrand={selectedBrand}
-                products={brandProducts}
-                search={brandSearch}
-                loading={pageLoading.brands}
-                productLoading={brandProductsLoading}
-                onSearchChange={setBrandSearch}
-                onSelectBrand={selectBrand}
                 session={session}
                 setGlobalToast={showToast}
                 api={api}
