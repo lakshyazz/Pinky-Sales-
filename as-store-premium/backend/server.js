@@ -2600,35 +2600,36 @@ app.post('/api/inventory/bulk-import', authenticateToken, requireSuperAdmin, asy
         // 1. Ensure Brand, Category, Colour exist
         if (category) {
           await tx.runQuery(
-            'INSERT INTO categories (name) VALUES (?) ON CONFLICT (name) DO NOTHING',
-            [category]
+            'INSERT INTO categories (name) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM categories WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [category, category]
           );
         }
         if (brand) {
           await tx.runQuery(
-            'INSERT INTO brands (name) VALUES (?) ON CONFLICT (name) DO NOTHING',
-            [brand]
+            'INSERT INTO brands (name) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM brands WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [brand, brand]
           );
         }
         if (colour) {
           await tx.runQuery(
-            'INSERT INTO colours (name) VALUES (?) ON CONFLICT (name) DO NOTHING',
-            [colour]
+            'INSERT INTO colours (name) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM colours WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)))',
+            [colour, colour]
           );
         }
 
         // 2. Find or Create Product Catalog Entry
         let product = await tx.getRecord(
-          'SELECT id, sale_price, purchase_price, wholesale_price FROM products WHERE LOWER(TRIM(short_name)) = LOWER(TRIM(?)) LIMIT 1',
-          [name]
+          'SELECT id, sale_price, purchase_price, wholesale_price FROM products WHERE LOWER(TRIM(short_name)) = LOWER(TRIM(?)) OR LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1',
+          [name, name]
         );
 
         let productId;
         if (!product) {
           const insertRes = await tx.runQuery(
-            `INSERT INTO products (short_name, brand, category, full_model_list, purchase_price, wholesale_price, official_price, sale_price, description, colours)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO products (name, short_name, brand, category, full_model_list, purchase_price, wholesale_price, official_price, sale_price, description, colours)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
+              name,
               name,
               brand,
               category,
