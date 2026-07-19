@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
 
@@ -9,6 +9,10 @@ export default function ModelsPage({
   search = '',
   onSearchChange,
   role,
+  session,
+  api,
+  setGlobalToast,
+  onProductUpdated,
   pager = {},
   loading = false,
   onPageChange,
@@ -26,6 +30,20 @@ export default function ModelsPage({
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'table'
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [inspectProduct, setInspectProduct] = useState(null);
+
+  // Edit Product Modal State
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [editForm, setEditForm] = useState({
+    short_name: '',
+    brand: '',
+    category: '',
+    sale_price: '',
+    wholesale_price: '',
+    purchase_price: '',
+    full_model_list: '',
+    description: '',
+  });
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Extract unique categories for quick filter pills
   const categories = useMemo(() => {
@@ -47,6 +65,77 @@ export default function ModelsPage({
       onViewDetails(product);
     } else {
       setInspectProduct(product);
+    }
+  };
+
+  const handleOpenEdit = (product) => {
+    setEditingProduct(product);
+    setEditForm({
+      short_name: product.short_name || product.name || '',
+      brand: product.brand || '',
+      category: product.category || '',
+      sale_price: product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : '',
+      wholesale_price: product.wholesale_price !== undefined && product.wholesale_price !== null ? String(product.wholesale_price) : '',
+      purchase_price: product.purchase_price !== undefined && product.purchase_price !== null ? String(product.purchase_price) : '',
+      full_model_list: product.full_model_list || product.model || '',
+      description: product.description || '',
+    });
+  };
+
+  const handleSaveEdit = async (e) => {
+    if (e) e.preventDefault();
+    if (!editingProduct) return;
+
+    try {
+      setSavingEdit(true);
+      const token = session?.token || localStorage.getItem('token');
+      const payload = {
+        short_name: editForm.short_name,
+        name: editForm.short_name,
+        brand: editForm.brand,
+        category: editForm.category,
+        sale_price: editForm.sale_price ? Number(editForm.sale_price) : 0,
+        wholesale_price: editForm.wholesale_price ? Number(editForm.wholesale_price) : 0,
+        purchase_price: editForm.purchase_price ? Number(editForm.purchase_price) : 0,
+        full_model_list: editForm.full_model_list,
+        description: editForm.description,
+      };
+
+      if (api) {
+        await api(`/products/${editingProduct.id}`, { method: 'PUT', body: JSON.stringify(payload) }, token);
+      } else {
+        const res = await fetch(`/api/products/${editingProduct.id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error('Failed to update product');
+      }
+
+      // Mutate local item properties for immediate UI reactivity
+      Object.assign(editingProduct, {
+        short_name: payload.short_name,
+        name: payload.short_name,
+        brand: payload.brand,
+        category: payload.category,
+        sale_price: payload.sale_price,
+        wholesale_price: payload.wholesale_price,
+        purchase_price: payload.purchase_price,
+        full_model_list: payload.full_model_list,
+        description: payload.description,
+      });
+
+      if (setGlobalToast) setGlobalToast('Product details & pricing updated successfully', 'success');
+      if (onProductUpdated) onProductUpdated();
+      setEditingProduct(null);
+    } catch (err) {
+      if (setGlobalToast) setGlobalToast(err.message || 'Failed to update product', 'error');
+      else alert(err.message || 'Failed to update product');
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -206,17 +295,30 @@ export default function ModelsPage({
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">Retail Price</span>
                     <span className="text-sm font-black text-emerald-600">{priceLabel(product.sale_price)}</span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleOpenDetails(product);
-                    }}
-                    className="p-2.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-cyan-600 hover:text-white transition-all shadow-sm"
-                    title="View Details"
-                  >
-                    <Eye className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenEdit(product);
+                      }}
+                      className="px-3 py-2 rounded-xl bg-cyan-50 text-cyan-700 hover:bg-cyan-600 hover:text-white transition-all text-xs font-bold flex items-center gap-1 shadow-sm"
+                      title="Edit Product & Prices"
+                    >
+                      <Edit3 className="w-3.5 h-3.5" /> Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleOpenDetails(product);
+                      }}
+                      className="p-2.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all shadow-sm"
+                      title="View Specs"
+                    >
+                      <Eye className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </motion.div>
             );
@@ -242,7 +344,7 @@ export default function ModelsPage({
                   <th className="p-4">Category</th>
                   <th className="p-4">Compatible Devices</th>
                   <th className="p-4">Sale Price</th>
-                  <th className="p-4 text-right">Action</th>
+                  <th className="p-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -269,13 +371,22 @@ export default function ModelsPage({
                     </td>
                     <td className="p-4 font-black text-emerald-600">{priceLabel(product.sale_price)}</td>
                     <td className="p-4 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenDetails(product)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-cyan-600 hover:text-white text-slate-700 font-bold transition-all text-xs inline-flex items-center gap-1.5"
-                      >
-                        <Eye className="w-3.5 h-3.5" /> Specs
-                      </button>
+                      <div className="flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(product)}
+                          className="px-3 py-1.5 rounded-xl bg-cyan-50 text-cyan-700 hover:bg-cyan-600 hover:text-white font-bold transition-all text-xs inline-flex items-center gap-1"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenDetails(product)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold transition-all text-xs inline-flex items-center gap-1"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> Specs
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -346,14 +457,170 @@ export default function ModelsPage({
                 </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 flex justify-end">
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    const prod = inspectProduct;
+                    setInspectProduct(null);
+                    handleOpenEdit(prod);
+                  }}
+                  className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-600/20"
+                >
+                  <Edit3 className="w-4 h-4" /> Edit Product & Prices
+                </button>
                 <button
                   onClick={() => setInspectProduct(null)}
-                  className="px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs"
+                  className="px-5 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs"
                 >
                   Close
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Product & Prices Modal */}
+      <AnimatePresence>
+        {editingProduct && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94 }}
+              className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6 my-8"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-2xl bg-cyan-600 text-white shadow-md shadow-cyan-600/20">
+                    <Edit3 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-slate-900">Edit Product & Pricing</h3>
+                    <p className="text-xs text-slate-500 font-medium">Update model specifications, device compatibility, and selling prices.</p>
+                  </div>
+                </div>
+                <button onClick={() => setEditingProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEdit} className="py-5 space-y-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Display Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={editForm.short_name}
+                      onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
+                      placeholder="e.g. iPhone 13 Display Original"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Brand Manufacturer</label>
+                    <input
+                      type="text"
+                      value={editForm.brand}
+                      onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
+                      placeholder="e.g. Apple, OnePlus, Samsung"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-emerald-700 uppercase tracking-wider block mb-1">Retail Sale Price (₹)</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editForm.sale_price}
+                      onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
+                      placeholder="e.g. 540"
+                      className="w-full px-3.5 py-2.5 bg-emerald-50/60 border border-emerald-200 rounded-xl font-black text-emerald-700 outline-none focus:border-emerald-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-indigo-700 uppercase tracking-wider block mb-1">Wholesale Price (₹)</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editForm.wholesale_price}
+                      onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
+                      placeholder="e.g. 480"
+                      className="w-full px-3.5 py-2.5 bg-indigo-50/60 border border-indigo-200 rounded-xl font-black text-indigo-700 outline-none focus:border-indigo-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-rose-700 uppercase tracking-wider block mb-1">Purchase Cost (₹)</label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={editForm.purchase_price}
+                      onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
+                      placeholder="e.g. 380"
+                      className="w-full px-3.5 py-2.5 bg-rose-50/60 border border-rose-200 rounded-xl font-black text-rose-700 outline-none focus:border-rose-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Category</label>
+                    <input
+                      type="text"
+                      value={editForm.category}
+                      onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                      placeholder="e.g. Display, Battery, Spare Parts"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Compatible Devices List</label>
+                    <input
+                      type="text"
+                      value={editForm.full_model_list}
+                      onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
+                      placeholder="e.g. iPhone 13, iPhone 13 Pro, A2633"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Description & Specs Notes</label>
+                  <textarea
+                    rows={3}
+                    value={editForm.description}
+                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                    placeholder="Provide additional details, warranty notes, or specifications..."
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs resize-none"
+                  />
+                </div>
+
+                <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditingProduct(null)}
+                    className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-600/20 active:scale-95 transition-all"
+                  >
+                    <Save className="w-4 h-4" /> {savingEdit ? 'Saving Changes...' : 'Save Product & Prices'}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

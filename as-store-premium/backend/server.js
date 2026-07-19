@@ -1092,6 +1092,54 @@ app.get('/api/brands', authenticateToken, handleGetBrands);
 app.get('/api/brands/summary', authenticateToken, handleGetBrands);
 app.get('/brands', authenticateToken, handleGetBrands);
 
+app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
+  const productId = Number(req.params.id);
+  if (!productId) return res.status(400).json({ error: 'Invalid product ID' });
+
+  const { short_name, name, brand, category, full_model_list, model, sale_price, wholesale_price, purchase_price, official_price, description, colours } = req.body;
+
+  try {
+    await runTransaction(async (tx) => {
+      await tx.execute(`
+        UPDATE products SET
+          short_name = COALESCE(?, short_name),
+          name = COALESCE(?, name),
+          brand = COALESCE(?, brand),
+          category = COALESCE(?, category),
+          full_model_list = COALESCE(?, full_model_list),
+          model = COALESCE(?, model),
+          sale_price = COALESCE(?, sale_price),
+          wholesale_price = COALESCE(?, wholesale_price),
+          purchase_price = COALESCE(?, purchase_price),
+          official_price = COALESCE(?, official_price),
+          description = COALESCE(?, description),
+          colours = COALESCE(?, colours),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [
+        short_name || null,
+        name || short_name || null,
+        brand || null,
+        category || null,
+        full_model_list || null,
+        model || null,
+        sale_price !== undefined ? Number(sale_price) : null,
+        wholesale_price !== undefined ? Number(wholesale_price) : null,
+        purchase_price !== undefined ? Number(purchase_price) : null,
+        official_price !== undefined ? Number(official_price) : null,
+        description || null,
+        colours || null,
+        productId
+      ]);
+    });
+
+    res.json({ success: true, message: 'Product updated successfully' });
+  } catch (error) {
+    console.error('[ProductsAPI] Error updating product:', error);
+    res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
 app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, res) => {
   const rows = Array.isArray(req.body.rows) ? req.body.rows : [];
   if (!rows.length) return res.status(400).json({ error: 'Import file has no rows.' });

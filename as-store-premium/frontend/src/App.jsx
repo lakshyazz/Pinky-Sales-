@@ -3784,6 +3784,10 @@ function App() {
                 search={modelSearch}
                 onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setModelSearch(value); }}
                 role={role}
+                session={session}
+                api={api}
+                setGlobalToast={showToast}
+                onProductUpdated={loadCore}
                 pager={productPager}
                 loading={productPageLoading}
                 onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
