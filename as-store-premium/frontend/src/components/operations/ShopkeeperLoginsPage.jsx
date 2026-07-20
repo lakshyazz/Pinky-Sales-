@@ -128,19 +128,16 @@ export default function ShopkeeperLoginsPage({
               <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
                 Staff Full Name *
               </label>
-              <div className="relative">
-                <Users className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  required
-                  maxLength={80}
-                  autoComplete="name"
-                  placeholder="e.g. Ramesh Kumar"
-                  value={shopkeeperForm.name || ''}
-                  onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, name: e.target.value } })}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
-                />
-              </div>
+              <input
+                type="text"
+                required
+                maxLength={80}
+                autoComplete="name"
+                placeholder="e.g. Ramesh Kumar"
+                value={shopkeeperForm.name || ''}
+                onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, name: e.target.value } })}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
+              />
             </div>
 
             {/* Mobile Contact */}
@@ -148,19 +145,16 @@ export default function ShopkeeperLoginsPage({
               <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
                 Mobile Number *
               </label>
-              <div className="relative">
-                <Phone className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="tel"
-                  required
-                  maxLength={30}
-                  autoComplete="tel"
-                  placeholder="e.g. 9876543210"
-                  value={shopkeeperForm.contact || ''}
-                  onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, contact: e.target.value } })}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
-                />
-              </div>
+              <input
+                type="tel"
+                required
+                maxLength={30}
+                autoComplete="tel"
+                placeholder="e.g. 9876543210"
+                value={shopkeeperForm.contact || ''}
+                onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, contact: e.target.value } })}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
+              />
             </div>
 
             {/* Username */}
@@ -168,20 +162,17 @@ export default function ShopkeeperLoginsPage({
               <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
                 Login Username *
               </label>
-              <div className="relative">
-                <AtSign className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  required
-                  minLength={3}
-                  maxLength={40}
-                  autoComplete="off"
-                  placeholder="e.g. ramesh_asstore"
-                  value={shopkeeperForm.username || ''}
-                  onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, username: e.target.value } })}
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
-                />
-              </div>
+              <input
+                type="text"
+                required
+                minLength={3}
+                maxLength={40}
+                autoComplete="off"
+                placeholder="e.g. ramesh_asstore"
+                value={shopkeeperForm.username || ''}
+                onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, username: e.target.value } })}
+                className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
+              />
             </div>
 
             {/* Password with Eye Toggle */}
@@ -190,7 +181,6 @@ export default function ShopkeeperLoginsPage({
                 Portal Password *
               </label>
               <div className="relative">
-                <Lock className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   type={showPassword ? 'text' : 'password'}
                   required
@@ -200,12 +190,12 @@ export default function ShopkeeperLoginsPage({
                   placeholder="Minimum 6 characters"
                   value={shopkeeperForm.password || ''}
                   onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, password: e.target.value } })}
-                  className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
+                  className="w-full px-4 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 placeholder-slate-400 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -217,25 +207,22 @@ export default function ShopkeeperLoginsPage({
               <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
                 Assign Retail Branch / Shop *
               </label>
-              <div className="relative">
-                <Store className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 z-10" />
-                <select
-                  required
-                  value={shopkeeperForm.shop_id || ''}
-                  onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, shop_id: e.target.value } })}
-                  className="w-full pl-10 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all appearance-none cursor-pointer"
-                >
-                  <option value="">Select branch for staff member...</option>
-                  {shopList.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} {s.area ? `(${s.area})` : ''}
-                    </option>
-                  ))}
-                  <option value="new_shop" className="font-extrabold text-teal-700 bg-teal-50">
-                    + Add New Branch / Shop
+              <select
+                required
+                value={shopkeeperForm.shop_id || ''}
+                onChange={(e) => setForms({ ...forms, shopkeeper: { ...forms.shopkeeper, shop_id: e.target.value } })}
+                className="w-full px-4 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white focus:ring-2 focus:ring-teal-500/10 transition-all appearance-none cursor-pointer"
+              >
+                <option value="">Select branch for staff member...</option>
+                {shopList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} {s.area ? `(${s.area})` : ''}
                   </option>
-                </select>
-              </div>
+                ))}
+                <option value="new_shop" className="font-extrabold text-teal-700 bg-teal-50">
+                  + Add New Branch / Shop
+                </option>
+              </select>
             </div>
           </div>
 
