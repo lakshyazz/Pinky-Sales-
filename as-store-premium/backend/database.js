@@ -144,6 +144,7 @@ export const initDatabase = async () => {
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_mode TEXT NOT NULL DEFAULT 'cash';
       ALTER TABLE sales ADD COLUMN IF NOT EXISTS price_type TEXT NOT NULL DEFAULT 'retail';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'completed';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS model TEXT;
 
       ALTER TABLE products ADD COLUMN IF NOT EXISTS short_name TEXT;
