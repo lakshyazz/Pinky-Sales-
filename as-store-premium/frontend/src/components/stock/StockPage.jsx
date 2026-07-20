@@ -859,98 +859,109 @@ export default function StockPage({
 
       {/* Stock Grid Table */}
       {stockWithOwnership.length ? (
-        <div className="table panel inventory-stock-table" style={{ border: '1px solid rgba(255,255,255,0.05)', borderRadius: '16px', overflow: 'hidden' }}>
+        <div className="table panel inventory-stock-table shadow-sm border border-slate-200/80 bg-white" style={{ borderRadius: '20px', overflow: 'hidden' }}>
           {stockWithOwnership.map((item) => {
             const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 5);
             const isOutOfStock = Number(item.quantity) === 0;
             const isWarehouseRow = item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id);
 
+            const hasSalePrice = item.sale_price !== null && item.sale_price !== undefined && item.sale_price !== '';
+            const hasPurchasePrice = item.purchase_price !== null && item.purchase_price !== undefined && item.purchase_price !== '';
+
             return (
               <div 
-                className="row" 
+                className="row hover:bg-slate-50/60 transition-all duration-300 border-b border-slate-100/90" 
                 key={item.id} 
                 style={{ 
                   display: 'grid', 
-                  gridTemplateColumns: '3fr 1.5fr 1.5fr 1.5fr 2fr 2fr 1.5fr', 
+                  gridTemplateColumns: '3.4fr 1.3fr 1.3fr 1.3fr 1.8fr 2.1fr 1.8fr', 
                   alignItems: 'center', 
-                  padding: '12px 16px', 
-                  borderBottom: '1px solid rgba(226,232,240,0.8)',
-                  transition: 'background 0.15s ease'
+                  padding: '16px 20px', 
                 }}
               >
                 
                 {/* Product Name & Brand */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                  <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'rgba(20,184,166,0.08)', color: '#14b8a6', display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'center' }}>
-                    <Smartphone size={16} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)', color: '#0d9488', display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px -2px rgba(13,148,136,0.12)' }}>
+                    <Smartphone size={18} />
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                    <b style={{ fontSize: '14px', color: 'var(--ink)', lineHeight: 1.25, overflowWrap: 'anywhere' }}>{productName(item)}</b>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <b style={{ fontSize: '14.5px', color: '#1e293b', fontWeight: '800', lineHeight: 1.3, overflowWrap: 'anywhere' }}>{productName(item)}</b>
                     {fullModelList(item) && fullModelList(item) !== productName(item) && (
                       <ExpandableText
-                        className="stock-compatible-models"
+                        className="stock-compatible-models text-slate-500 font-medium leading-relaxed"
                         text={fullModelList(item)}
                         limit={78}
                       />
                     )}
-                    <small style={{ color: 'var(--muted)', fontSize: '11px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                      <span style={{ padding: '2px 6px', background: 'rgba(15,23,42,0.06)', color: 'var(--ink-soft)', borderRadius: '4px', fontSize: '10px', fontWeight: 700 }}>{item.brand || 'No brand'}</span>
-                      {!shopId && <span style={{ opacity: 0.7 }}>· {item.shop_name}</span>}
-                    </small>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                      <span style={{ padding: '2px 8px', background: '#f8fafc', color: '#475569', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #e2e8f0' }}>{item.brand || 'No brand'}</span>
+                      {!shopId && <span style={{ color: '#94a3b8', fontSize: '10.5px', fontWeight: '500' }}>· {item.shop_name}</span>}
+                    </div>
                   </div>
                 </div>
 
                 {/* Category */}
-                <span style={{ fontSize: '13px' }}>
-                  <span className="status-badge stock-ok" style={{ background: 'rgba(99,102,241,0.08)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.2)', padding: '2px 8px', borderRadius: '4px', fontSize: '11px' }}>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 border border-teal-200/50 text-[10.5px] font-extrabold uppercase tracking-wider">
                     {item.category || 'Mobile'}
                   </span>
-                </span>
+                </div>
 
                 {/* Specific Model Code */}
-                <span style={{ fontSize: '13px', color: 'var(--ink-soft)' }}>
-                  {item.model || <span style={{ opacity: 0.4 }}>—</span>}
+                <span style={{ fontSize: '13px', color: '#475569', fontWeight: '600' }}>
+                  {item.model || <span style={{ color: '#cbd5e1', fontWeight: '400' }}>—</span>}
                 </span>
 
                 {/* Colours Tagged */}
-                <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>
+                <span style={{ fontSize: '12px' }}>
                   {Array.isArray(item.colours) && item.colours.length > 0 ? (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                       {item.colours.map((col, idx) => (
-                        <span key={idx} style={{ padding: '2px 6px', background: 'rgba(15,23,42,0.06)', border: '1px solid rgba(148,163,184,0.25)', borderRadius: '4px', fontSize: '9px', color: 'var(--ink-soft)' }}>{col}</span>
+                        <span key={idx} style={{ padding: '2px 6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '9px', fontWeight: '700', color: '#64748b' }}>{col}</span>
                       ))}
                     </div>
                   ) : (
-                    <span style={{ color: 'var(--muted)' }}>No colours</span>
+                    <span style={{ color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>No colours</span>
                   )}
                 </span>
 
                 {/* Price (Sale / Purchase Cost) */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <strong style={{ fontSize: '13px', color: '#10b981' }}>{priceLabel(item.sale_price)}</strong>
-                  {role === 'superadmin' && item.purchase_price && (
-                    <small style={{ fontSize: '10px', color: 'var(--muted)' }}>Cost: {priceLabel(item.purchase_price)}</small>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  {hasSalePrice ? (
+                    <strong style={{ fontSize: '14px', color: '#0f766e', fontWeight: '800' }}>{priceLabel(item.sale_price)}</strong>
+                  ) : (
+                    <span style={{ fontSize: '9.5px', color: '#64748b', background: '#f1f5f9', border: '1px solid #e2e8f0', padding: '2px 6px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>No Price</span>
+                  )}
+                  {role === 'superadmin' && (
+                    hasPurchasePrice ? (
+                      <small style={{ fontSize: '10px', color: '#64748b', fontWeight: '500' }}>Cost: <span style={{ color: '#334155', fontWeight: '700' }}>{priceLabel(item.purchase_price)}</span></small>
+                    ) : (
+                      <small style={{ fontSize: '9px', color: '#94a3b8', fontStyle: 'italic' }}>Cost not set</small>
+                    )
                   )}
                 </div>
 
                 {/* Stock Level with Warehousing breakdown */}
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  <span style={{ fontSize: '13px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
                     {isOutOfStock ? (
-                      <span style={{ padding: '2px 6px', background: 'rgba(239,68,68,0.15)', color: '#f87171', border: '1px solid rgba(239,68,68,0.3)', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Out of Stock</span>
+                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>Out of Stock</span>
                     ) : isLowStock ? (
-                      <span style={{ padding: '2px 6px', background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>Low Stock ({item.quantity})</span>
+                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)', color: '#d97706', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>Low Stock ({item.quantity})</span>
                     ) : (
-                      <b style={{ color: '#14b8a6' }}>{item.quantity} pcs</b>
+                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)', color: '#0d9488', border: '1px solid #99f6e4', borderRadius: '8px', fontSize: '11px', fontWeight: '800', boxShadow: '0 2px 4px rgba(13,148,136,0.04)' }}>
+                        {item.quantity} pcs
+                      </span>
                     )}
-                  </span>
-                  <small style={{ fontSize: '10px', color: 'var(--muted)', marginTop: '2px' }}>
-                    {isWarehouseRow ? 'Warehouse' : role === 'shopkeeper' ? 'Branch stock' : 'Owner'}: <b>{item.owner_quantity}</b> - {role === 'shopkeeper' ? 'My assigned' : 'Assigned'}: <b>{role === 'shopkeeper' ? item.my_quantity : item.shopkeeper_quantity}</b>
+                  </div>
+                  <small style={{ fontSize: '10px', color: '#64748b', marginTop: '2px', fontWeight: '500' }}>
+                    {isWarehouseRow ? 'Warehouse' : role === 'shopkeeper' ? 'Branch stock' : 'Owner'}: <b style={{ color: '#334155' }}>{item.owner_quantity}</b> · {role === 'shopkeeper' ? 'My assigned' : 'Assigned'}: <b style={{ color: '#334155' }}>{role === 'shopkeeper' ? item.my_quantity : item.shopkeeper_quantity}</b>
                   </small>
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
                   <button 
                     type="button" 
                     title="Set Stock Level"
@@ -965,7 +976,8 @@ export default function StockPage({
                       }));
                       window.scrollTo({ top: 120, behavior: 'smooth' });
                     }}
-                    style={{ padding: '6px 10px', fontSize: '11px', background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.24)', borderRadius: '6px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#0f766e', fontWeight: 800 }}
+                    className="hover:scale-[1.02] active:scale-[0.98] transition-all"
+                    style={{ padding: '6px 12px', fontSize: '11px', background: 'linear-gradient(to right, #0d9488, #0f766e)', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#ffffff', fontWeight: '800', boxShadow: '0 2px 6px rgba(13,148,136,0.15)' }}
                   >
                     Set Stock
                   </button>
@@ -973,7 +985,8 @@ export default function StockPage({
                     type="button" 
                     title={role === 'superadmin' ? 'Edit product price' : 'Edit product details'}
                     onClick={() => onEditProduct(item)}
-                    style={{ padding: role === 'superadmin' ? '6px 10px' : '6px', background: 'rgba(15,23,42,0.04)', border: '1px solid rgba(148,163,184,0.28)', borderRadius: '6px', cursor: 'pointer', color: 'var(--ink-soft)', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 800 }}
+                    className="hover:bg-slate-100 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                    style={{ padding: role === 'superadmin' ? '6px 12px' : '6px 8px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
                   >
                     <Edit3 size={12} />
                     {role === 'superadmin' && 'Edit Price'}
@@ -983,7 +996,8 @@ export default function StockPage({
                       type="button" 
                       title="Delete / Archive Product"
                       onClick={() => handleDeleteProductConfirm(item)}
-                      style={{ padding: '6px', background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.1)', borderRadius: '6px', cursor: 'pointer', color: '#f87171' }}
+                      className="hover:bg-rose-50 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                      style={{ padding: '6px 8px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: '8px', cursor: 'pointer', color: '#e11d48' }}
                     >
                       <Trash2 size={12} />
                     </button>
