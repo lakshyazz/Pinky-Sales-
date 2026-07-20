@@ -271,7 +271,13 @@ textarea:focus-visible {
   display: grid;
   gap: 14px;
   padding-top: 2px;
-  overflow: auto;
+  overflow-y: auto;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.sidebar nav::-webkit-scrollbar {
+  display: none; /* Chrome/Safari */
 }
 
 .nav-section {
