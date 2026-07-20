@@ -60,55 +60,46 @@ export default function ShopkeeperLoginsPage({
   return (
     <div className="space-y-6">
       
-      {/* Hero Header & Metrics Bar */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-teal-950 p-6 md:p-8 text-white shadow-2xl border border-slate-700/50">
-        <div className="absolute top-0 right-0 -mt-12 -mr-12 w-64 h-64 bg-teal-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-1/3 -mb-12 w-64 h-64 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+      {/* Metrics & Overview Row */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 bg-white border border-slate-200/80 rounded-3xl p-6 shadow-xl shadow-slate-200/40 backdrop-blur-xl">
+        <div className="lg:col-span-2 space-y-1.5 self-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-50 border border-teal-200/60 text-teal-700 text-xs font-bold uppercase tracking-wider">
+            <ShieldCheck className="w-3.5 h-3.5" /> Staff Access Panel
+          </div>
+          <h2 className="text-xl font-black text-slate-900">Shopkeeper Accounts & Credentials</h2>
+          <p className="text-xs text-slate-500 font-medium">Create and manage access credentials for your branch shopkeepers safely.</p>
+        </div>
 
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-teal-500/20 border border-teal-400/30 text-teal-300 text-xs font-bold uppercase tracking-wider">
-              <ShieldCheck className="w-3.5 h-3.5" /> Staff Management Console
+        {/* Quick Stats Grid */}
+        <div className="grid grid-cols-3 gap-3 lg:col-span-2">
+          <div className="bg-slate-50 border border-slate-200/50 p-3.5 rounded-2xl flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-500 text-[9px] uppercase font-bold tracking-wider">
+              <span>Total Staff</span>
+              <Users className="w-4 h-4 text-teal-600" />
             </div>
-            <h1 className="text-2xl md:text-3xl font-black tracking-tight text-white">
-              Shopkeeper Logins & Staff Access
-            </h1>
-            <p className="text-slate-300 text-xs md:text-sm max-w-xl font-medium leading-relaxed">
-              Create, update, and manage branch staff credentials. Ensure proper store assignment and control portal access for each shop.
-            </p>
+            <span className="text-xl font-black text-slate-900 mt-1">{(data.shopkeepers || []).length}</span>
           </div>
 
-          {/* Quick Stats Grid */}
-          <div className="grid grid-cols-3 gap-3 shrink-0">
-            <div className="bg-white/10 backdrop-blur-md border border-white/10 p-3.5 rounded-2xl flex flex-col justify-between">
-              <div className="flex items-center justify-between text-slate-300 text-[10px] uppercase font-bold tracking-wider">
-                <span>Total Staff</span>
-                <Users className="w-4 h-4 text-teal-400" />
-              </div>
-              <span className="text-2xl font-black text-white mt-1">{(data.shopkeepers || []).length}</span>
+          <div className="bg-slate-50 border border-slate-200/50 p-3.5 rounded-2xl flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-500 text-[9px] uppercase font-bold tracking-wider">
+              <span>Staffed</span>
+              <Building2 className="w-4 h-4 text-cyan-600" />
             </div>
+            <span className="text-xl font-black text-slate-900 mt-1">{staffedBranchCount}</span>
+          </div>
 
-            <div className="bg-white/10 backdrop-blur-md border border-white/10 p-3.5 rounded-2xl flex flex-col justify-between">
-              <div className="flex items-center justify-between text-slate-300 text-[10px] uppercase font-bold tracking-wider">
-                <span>Staffed Branches</span>
-                <Building2 className="w-4 h-4 text-cyan-400" />
-              </div>
-              <span className="text-2xl font-black text-white mt-1">{staffedBranchCount}</span>
+          <div className="bg-slate-50 border border-slate-200/50 p-3.5 rounded-2xl flex flex-col justify-between">
+            <div className="flex items-center justify-between text-slate-500 text-[9px] uppercase font-bold tracking-wider">
+              <span>Missing Contact</span>
+              {incompleteShopkeeperContacts > 0 ? (
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              )}
             </div>
-
-            <div className="bg-white/10 backdrop-blur-md border border-white/10 p-3.5 rounded-2xl flex flex-col justify-between">
-              <div className="flex items-center justify-between text-slate-300 text-[10px] uppercase font-bold tracking-wider">
-                <span>Missing Info</span>
-                {incompleteShopkeeperContacts > 0 ? (
-                  <AlertTriangle className="w-4 h-4 text-amber-400" />
-                ) : (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                )}
-              </div>
-              <span className={`text-2xl font-black mt-1 ${incompleteShopkeeperContacts > 0 ? 'text-amber-300' : 'text-emerald-300'}`}>
-                {incompleteShopkeeperContacts}
-              </span>
-            </div>
+            <span className={`text-xl font-black mt-1 ${incompleteShopkeeperContacts > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+              {incompleteShopkeeperContacts}
+            </span>
           </div>
         </div>
       </div>
