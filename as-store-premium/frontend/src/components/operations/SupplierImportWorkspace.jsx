@@ -133,6 +133,11 @@ export default function SupplierImportWorkspace({
   const [showLogsDrawer, setShowLogsDrawer] = useState(false);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
+  // Default values for missing/unmapped columns
+  const [defaultQuantity, setDefaultQuantity] = useState(200);
+  const [defaultBrand, setDefaultBrand] = useState('Universal');
+  const [defaultCategory, setDefaultCategory] = useState('Display');
+
   // Fetch import logs history
   const fetchImportLogs = async () => {
     setLoadingLogs(true);
@@ -224,10 +229,10 @@ export default function SupplierImportWorkspace({
 
       return {
         short_name: nameCandidate,
-        brand: String(getVal('brand') || 'Generic').trim(),
-        category: String(getVal('category') || 'General').trim(),
+        brand: String(getVal('brand') || defaultBrand || 'Generic').trim(),
+        category: String(getVal('category') || defaultCategory || 'General').trim(),
         full_model_list: modelsCandidate,
-        quantity: Math.max(1, Math.round(parseCleanNumber(getVal('quantity'), 1))),
+        quantity: Math.max(1, Math.round(parseCleanNumber(getVal('quantity'), defaultQuantity))),
         purchase_price: parseCleanNumber(getVal('purchase_price'), 0),
         wholesale_price: parseCleanNumber(getVal('wholesale_price'), 0),
         retail_price: parseCleanNumber(getVal('retail_price'), 0),
@@ -237,7 +242,7 @@ export default function SupplierImportWorkspace({
         source_key: `IMP-${fileName}-${idx}-${Date.now()}`
       };
     }).filter((r) => r.short_name || r.full_model_list);
-  }, [rawRows, fieldMapping, fileName]);
+  }, [rawRows, fieldMapping, fileName, defaultQuantity, defaultBrand, defaultCategory]);
 
   // Derived valuation metrics for Step 3
   const previewMetrics = useMemo(() => {
@@ -601,7 +606,7 @@ export default function SupplierImportWorkspace({
               <button
                 type="button"
                 onClick={() => setStep(3)}
-                disabled={!fieldMapping.short_name || !fieldMapping.quantity}
+                disabled={!fieldMapping.short_name}
                 className="px-7 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/20 disabled:opacity-50 transition-all"
               >
                 Continue to Review ({mappedRecords.length} Records) <ArrowRight className="w-4 h-4" />
@@ -640,6 +645,58 @@ export default function SupplierImportWorkspace({
                     </option>
                   ))}
                 </select>
+              </div>
+            </div>
+
+            {/* Default Values for Unmapped Columns */}
+            <div className="p-6 rounded-2xl bg-white border border-slate-200/80 shadow-md space-y-4">
+              <div>
+                <h3 className="text-sm font-black text-slate-900">Default Values for Unmapped Columns</h3>
+                <p className="text-xs text-slate-500 font-medium">Specify default values for columns that were not present or mapped in your Excel sheet.</p>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-650 mb-1.5">
+                    Default Quantity per Item
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={defaultQuantity}
+                    onChange={(e) => setDefaultQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-650 mb-1.5">
+                    Default Brand
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Universal"
+                    value={defaultBrand}
+                    onChange={(e) => setDefaultBrand(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-650 mb-1.5">
+                    Default Category
+                  </label>
+                  <select
+                    value={defaultCategory}
+                    onChange={(e) => setDefaultCategory(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-emerald-500"
+                  >
+                    <option value="General">General</option>
+                    {(data.categories || []).map((cat) => (
+                      <option key={cat.id} value={cat.name}>
+                        {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 
