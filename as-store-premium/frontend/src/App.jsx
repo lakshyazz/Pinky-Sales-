@@ -1954,8 +1954,33 @@ function App() {
     try {
       setSaving(true);
       const params = new URLSearchParams({ type, ...(shopId ? { shopId } : {}), ...filters });
-      const rows = await authedFetch(`/export-data?${params.toString()}`);
-      if (!rows.length) return showToast('No matching data to export');
+      let rows = [];
+      try {
+        const fetched = await authedFetch(`/export-data?${params.toString()}`);
+        rows = Array.isArray(fetched) ? fetched : [];
+      } catch (err) {
+        console.warn('Backend export fetch failed, falling back to local memory state', err);
+        if (type === 'products') {
+          rows = data.products || [];
+        } else {
+          rows = (data.stock || []).map((item) => ({
+            product_name: productName(item),
+            model_name: fullModelList(item) || item.model || '',
+            brand: item.brand || '',
+            category: item.category || '',
+            colour: Array.isArray(item.colours) ? item.colours.join(', ') : item.colours || '',
+            purchase_price: item.purchase_price || 0,
+            wholesale_price: item.wholesale_price || 0,
+            sale_price: item.sale_price || 0,
+            quantity: item.quantity || 0,
+            shopkeeper_name: item.shop_name || 'Main',
+            date_added: item.updated_at ? String(item.updated_at).slice(0, 10) : new Date().toISOString().slice(0, 10),
+            stock_status: Number(item.quantity) === 0 ? 'Out of Stock' : Number(item.quantity) <= 3 ? 'Low Stock' : 'In Stock'
+          }));
+        }
+      }
+
+      if (!rows || !rows.length) return showToast('No matching data to export');
 
       let columnsMapping = [];
       if (type === 'products') {
@@ -1968,6 +1993,35 @@ function App() {
           { label: 'Purchase Price', key: 'purchase_price' },
           { label: 'Wholesale Price', key: 'wholesale_price' },
           { label: 'Sale Price', key: 'sale_price' }
+        ];
+      } else if (type === 'sales') {
+        columnsMapping = [
+          { label: 'Sale ID', key: 'sale_id' },
+          { label: 'Date', key: 'sale_date' },
+          { label: 'Customer', key: 'customer_name' },
+          { label: 'Mobile', key: 'customer_mobile' },
+          { label: 'Product', key: 'product_name' },
+          { label: 'Brand', key: 'brand' },
+          { label: 'Category', key: 'category' },
+          { label: 'Quantity', key: 'quantity' },
+          { label: 'Price Type', key: 'price_type' },
+          { label: 'Total Amount', key: 'total_amount' },
+          { label: 'Paid Amount', key: 'paid_amount' },
+          { label: 'Pending Amount', key: 'pending_amount' },
+          { label: 'Payment Mode', key: 'payment_mode' },
+          { label: 'Shop', key: 'shop_name' },
+          { label: 'Due Date', key: 'due_date' }
+        ];
+      } else if (type === 'customers') {
+        columnsMapping = [
+          { label: 'Customer ID', key: 'id' },
+          { label: 'Name', key: 'name' },
+          { label: 'Mobile', key: 'mobile' },
+          { label: 'Address', key: 'address' },
+          { label: 'Shop', key: 'shop_name' },
+          { label: 'Total Purchases', key: 'total_purchases' },
+          { label: 'Pending Balance', key: 'pending_balance' },
+          { label: 'Registered Date', key: 'registered_date' }
         ];
       } else {
         columnsMapping = [
@@ -1987,15 +2041,36 @@ function App() {
       }
 
       const sampleRow = rows[0];
-      const activeColumns = columnsMapping.filter((col) => sampleRow[col.key] !== undefined);
+      const activeColumns = columnsMapping.filter((col) => {
+        let val = sampleRow[col.key];
+        if (val === undefined) {
+          if (col.key === 'short_name') val = sampleRow.name;
+          else if (col.key === 'product_name') val = sampleRow.short_name || sampleRow.name;
+          else if (col.key === 'full_model_list' || col.key === 'model_name') val = sampleRow.full_model_list || sampleRow.name;
+          else if (col.key === 'colour' || col.key === 'colours') val = sampleRow.colours || sampleRow.colour;
+        }
+        return val !== undefined;
+      });
+
+      const effectiveColumns = activeColumns.length > 0 ? activeColumns : columnsMapping;
 
       const csvRows = [
-        activeColumns.map((col) => col.label),
-        ...rows.map((row) => activeColumns.map((col) => row[col.key] ?? '')),
+        effectiveColumns.map((col) => col.label),
+        ...rows.map((row) => effectiveColumns.map((col) => {
+          let val = row[col.key];
+          if (val === undefined) {
+            if (col.key === 'short_name') val = row.name;
+            else if (col.key === 'product_name') val = row.short_name || row.name;
+            else if (col.key === 'full_model_list' || col.key === 'model_name') val = row.full_model_list || row.name;
+            else if (col.key === 'colour' || col.key === 'colours') val = row.colours || row.colour;
+          }
+          if (Array.isArray(val)) val = val.join(', ');
+          return val ?? '';
+        })),
       ];
 
       downloadCsv(`as-store-${type}-${new Date().toISOString().slice(0, 10)}.csv`, csvRows);
-      showToast('CSV export created');
+      showToast('CSV export downloaded');
     } catch (error) {
       showToast(error.message || 'Unable to export CSV file');
     } finally {
@@ -3678,11 +3753,14 @@ function App() {
               <BrandsPage
                 session={session}
                 setGlobalToast={showToast}
-                api={api}
+                api={authedFetch}
                 data={data}
                 onBrandChange={loadCore}
                 currency={currency}
                 productName={productName}
+                onAddReferenceOption={addReferenceOption}
+                onEditReferenceOption={editReferenceOption}
+                onDeleteReferenceOption={deleteReferenceOption}
               />
             </PageWrapper>
           )}

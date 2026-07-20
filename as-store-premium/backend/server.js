@@ -2545,6 +2545,167 @@ app.get('/api/catalog', async (req, res) => {
   res.json(rows);
 });
 
+app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const { type = 'stock', shopId: queryShopId, brand, category, colour, status } = req.query;
+    const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : (queryShopId ? Number(queryShopId) : null);
+
+    if (type === 'products') {
+      const rows = await allRecords(`
+        SELECT 
+          p.id,
+          COALESCE(p.short_name, p.name) AS short_name,
+          COALESCE(p.full_model_list, p.model) AS full_model_list,
+          p.brand,
+          p.category,
+          array_to_string(p.colours, ', ') AS colours,
+          p.purchase_price,
+          p.wholesale_price,
+          p.sale_price,
+          p.retail_price
+        FROM products p
+        WHERE p.is_active = 1
+        ORDER BY p.brand, COALESCE(p.short_name, p.name)
+      `);
+      return res.json(rows);
+    }
+
+    if (type === 'sales') {
+      const params = [];
+      const where = [];
+      if (shopId) {
+        where.push('sa.shop_id = ?');
+        params.push(shopId);
+      }
+      if (isShopStaffRole(req.user.role)) {
+        where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
+        params.push(req.user.id);
+      }
+
+      const rows = await allRecords(`
+        SELECT
+          sa.id AS sale_id,
+          sa.sale_date,
+          c.name AS customer_name,
+          c.mobile AS customer_mobile,
+          COALESCE(p.short_name, p.name) AS product_name,
+          p.brand,
+          p.category,
+          sa.quantity,
+          sa.price_type,
+          sa.total_amount,
+          sa.paid_amount,
+          sa.pending_amount,
+          sa.payment_mode,
+          sh.name AS shop_name,
+          sa.due_date
+        FROM sales sa
+        JOIN products p ON p.id = sa.product_id
+        JOIN customers c ON c.id = sa.customer_id
+        JOIN shops sh ON sh.id = sa.shop_id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        ORDER BY sa.sale_date DESC, sa.id DESC
+      `, params);
+      return res.json(rows);
+    }
+
+    if (type === 'customers') {
+      const params = [];
+      const where = [];
+      if (shopId) {
+        where.push('c.shop_id = ?');
+        params.push(shopId);
+      }
+
+      const rows = await allRecords(`
+        SELECT
+          c.id,
+          c.name,
+          c.mobile,
+          c.address,
+          sh.name AS shop_name,
+          COALESCE(SUM(sa.total_amount), 0) AS total_purchases,
+          COALESCE(SUM(sa.pending_amount), 0) AS pending_balance,
+          c.created_at AS registered_date
+        FROM customers c
+        JOIN shops sh ON sh.id = c.shop_id
+        LEFT JOIN sales sa ON sa.customer_id = c.id
+        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+        GROUP BY c.id, sh.name
+        ORDER BY c.name
+      `, params);
+      return res.json(rows);
+    }
+
+    // Default: 'stock'
+    const params = [];
+    const where = ['p.is_active = 1'];
+
+    if (shopId) {
+      where.push('st.shop_id = ?');
+      params.push(shopId);
+    }
+
+    if (brand && String(brand).trim()) {
+      where.push('p.brand = ?');
+      params.push(String(brand).trim());
+    }
+
+    if (category && String(category).trim()) {
+      where.push('LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
+      params.push(String(category).trim());
+    }
+
+    if (colour && String(colour).trim()) {
+      where.push(`EXISTS (
+        SELECT 1 FROM UNNEST(p.colours) AS product_colour
+        WHERE LOWER(TRIM(product_colour)) = LOWER(TRIM(?))
+      )`);
+      params.push(String(colour).trim());
+    }
+
+    if (status === 'low') {
+      where.push('st.quantity > 0 AND st.quantity <= 3');
+    } else if (status === 'out') {
+      where.push('st.quantity = 0');
+    } else if (status === 'in') {
+      where.push('st.quantity > 0');
+    }
+
+    const rows = await allRecords(`
+      SELECT 
+        p.id AS product_id,
+        COALESCE(p.short_name, p.name) AS product_name,
+        COALESCE(p.full_model_list, p.model) AS model_name,
+        p.brand,
+        p.category,
+        array_to_string(p.colours, ', ') AS colour,
+        p.purchase_price,
+        p.wholesale_price,
+        p.sale_price,
+        st.quantity,
+        sh.name AS shopkeeper_name,
+        st.updated_at AS date_added,
+        CASE 
+          WHEN st.quantity = 0 THEN 'Out of Stock'
+          WHEN st.quantity <= 3 THEN 'Low Stock'
+          ELSE 'In Stock'
+        END AS stock_status
+      FROM stock st
+      JOIN products p ON p.id = st.product_id
+      JOIN shops sh ON sh.id = st.shop_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY p.brand, COALESCE(p.short_name, p.name), sh.name
+    `, params);
+
+    res.json(rows);
+  } catch (error) {
+    console.error('[ExportAPI] Error exporting data:', error);
+    res.status(500).json({ error: error.message || 'Failed to export CSV data.' });
+  }
+});
+
+
 app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
   const pagination = parsePagination(req.query);
