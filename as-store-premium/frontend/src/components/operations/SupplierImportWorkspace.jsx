@@ -113,6 +113,29 @@ const parseCleanNumber = (val, fallback = 0) => {
   return Number.isNaN(num) ? fallback : num;
 };
 
+const detectBrand = (name, fullModelList, defaultBrand = 'Universal') => {
+  const brandVal = String(name || '').trim();
+  const modelsVal = String(fullModelList || '').trim();
+  const text = `${brandVal} ${modelsVal}`.toLowerCase();
+
+  if (text.includes('oneplus') || text.includes('1+') || text.includes('one plus')) return 'OnePlus';
+  if (text.includes('realme') || text.includes('rmx') || text.includes('realm')) return 'Realme';
+  if (text.includes('redmi') || text.includes('xiaomi') || /\bmi\b/i.test(text)) return 'Redmi';
+  if (text.includes('poco')) return 'Poco';
+  if (text.includes('motorola') || text.includes('moto')) return 'Motorola';
+  if (text.includes('samsung') || text.includes('galaxy')) return 'Samsung';
+  if (text.includes('infinix')) return 'Infinix';
+  if (text.includes('iqoo')) return 'IQOO';
+  if (text.includes('lava')) return 'Lava';
+  if (text.includes('oppo')) return 'Oppo';
+  if (text.includes('vivo')) return 'Vivo';
+  if (text.includes('tecno')) return 'Tecno';
+  if (text.includes('apple') || text.includes('iphone')) return 'Apple';
+  if (text.includes('nokia')) return 'Nokia';
+
+  return defaultBrand === 'Generic' ? 'Universal' : defaultBrand;
+};
+
 // Generate transformed payload from current field mappings
 export default function SupplierImportWorkspace({
   data = {},
@@ -226,10 +249,13 @@ export default function SupplierImportWorkspace({
 
       const nameCandidate = String(getVal('short_name') || getVal('full_model_list') || '').trim();
       const modelsCandidate = String(getVal('full_model_list') || getVal('short_name') || '').trim();
+      
+      const rawBrand = String(getVal('brand') || '').trim();
+      const detectedBrand = rawBrand || detectBrand(nameCandidate, modelsCandidate, defaultBrand);
 
       return {
         short_name: nameCandidate,
-        brand: String(getVal('brand') || defaultBrand || 'Generic').trim(),
+        brand: detectedBrand,
         category: String(getVal('category') || defaultCategory || 'General').trim(),
         full_model_list: modelsCandidate,
         quantity: Math.max(1, Math.round(parseCleanNumber(getVal('quantity'), defaultQuantity))),

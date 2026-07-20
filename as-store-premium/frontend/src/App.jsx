@@ -880,6 +880,7 @@ function App() {
   });
   const globalSearchBlurRef = useRef(null);
   const stockLoadSequenceRef = useRef(0);
+  const productLoadSequenceRef = useRef(0);
 
   // Reset to Light Mode on mount
   useEffect(() => {
@@ -1354,6 +1355,7 @@ function App() {
 
   const loadProductPage = async ({ tab = active, page = productPager.page, search = productSearchForTab(tab) } = {}) => {
     if (!token || role === 'customer') return;
+    const requestId = ++productLoadSequenceRef.current;
     setProductPageLoading(true);
     try {
       const params = new URLSearchParams({
@@ -1363,11 +1365,15 @@ function App() {
       const cleanSearch = search.trim();
       if (cleanSearch) params.set('search', cleanSearch);
       const response = await authedFetch(`/products?${params.toString()}`);
+      if (requestId !== productLoadSequenceRef.current) return;
       updateProductPage(response, page);
     } catch (error) {
+      if (requestId !== productLoadSequenceRef.current) return;
       handleLoadError(error, 'Unable to load products right now.');
     } finally {
-      setProductPageLoading(false);
+      if (requestId === productLoadSequenceRef.current) {
+        setProductPageLoading(false);
+      }
     }
   };
 

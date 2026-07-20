@@ -2767,6 +2767,29 @@ app.delete('/api/reports/audit', authenticateToken, requireSuperAdmin, async (re
     res.status(500).json({ error: 'Failed to clear audit logs.' });
   }
 });
+const detectBrand = (name, fullModelList, defaultBrand = 'Universal') => {
+  const brandVal = String(name || '').trim();
+  const modelsVal = String(fullModelList || '').trim();
+  const text = `${brandVal} ${modelsVal}`.toLowerCase();
+
+  if (text.includes('oneplus') || text.includes('1+') || text.includes('one plus')) return 'OnePlus';
+  if (text.includes('realme') || text.includes('rmx') || text.includes('realm')) return 'Realme';
+  if (text.includes('redmi') || text.includes('xiaomi') || /\bmi\b/i.test(text)) return 'Redmi';
+  if (text.includes('poco')) return 'Poco';
+  if (text.includes('motorola') || text.includes('moto')) return 'Motorola';
+  if (text.includes('samsung') || text.includes('galaxy')) return 'Samsung';
+  if (text.includes('infinix')) return 'Infinix';
+  if (text.includes('iqoo')) return 'IQOO';
+  if (text.includes('lava')) return 'Lava';
+  if (text.includes('oppo')) return 'Oppo';
+  if (text.includes('vivo')) return 'Vivo';
+  if (text.includes('tecno')) return 'Tecno';
+  if (text.includes('apple') || text.includes('iphone')) return 'Apple';
+  if (text.includes('nokia')) return 'Nokia';
+
+  const cleanDefault = String(defaultBrand || '').trim();
+  return (cleanDefault === 'Generic' || cleanDefault === '') ? 'Universal' : cleanDefault;
+};
 
 app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateToken, requireSuperAdmin, async (req, res) => {
   const { fileName, destinationShopId, defaultAssignedUserId, records = [] } = req.body;
@@ -2789,9 +2812,12 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
         const name = String(item.short_name || item.name || '').trim();
         if (!name) continue;
 
-        const brand = String(item.brand || 'Generic').trim();
-        const category = String(item.category || 'General').trim();
         const fullModelList = String(item.full_model_list || item.models || '').trim();
+        const rawBrand = String(item.brand || '').trim();
+        const brand = (rawBrand && rawBrand !== 'Generic' && rawBrand !== 'Universal')
+          ? rawBrand
+          : detectBrand(name, fullModelList, rawBrand || 'Universal');
+        const category = String(item.category || 'General').trim();
         const colour = String(item.colour || '').trim();
         const notes = String(item.notes || `Imported via ${fileName || 'Excel'}`).trim();
 

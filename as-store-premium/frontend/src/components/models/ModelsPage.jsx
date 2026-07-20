@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
+import SearchInput from '../ui/SearchInput';
 
 export default function ModelsPage({
   items = [],
@@ -260,34 +261,11 @@ export default function ModelsPage({
       </div>
 
       {/* Dedicated Large Full-Width Search Bar */}
-      <div className="w-full relative shadow-xl shadow-slate-200/50 rounded-3xl overflow-hidden bg-white border-2 border-slate-300 focus-within:border-cyan-500 focus-within:ring-4 focus-within:ring-cyan-500/10 transition-all">
-        <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-6 h-6 text-slate-400 pointer-events-none" />
-        <input
-          type="text"
-          placeholder="Search model, brand, category, or description..."
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          className="w-full bg-transparent border-none outline-none font-bold text-slate-900 placeholder-slate-400"
-          style={{
-            paddingLeft: '56px',
-            paddingRight: search ? '52px' : '24px',
-            paddingTop: '16px',
-            paddingBottom: '16px',
-            fontSize: '17px',
-            minHeight: '58px',
-            width: '100%'
-          }}
-        />
-        {search && (
-          <button
-            type="button"
-            onClick={() => onSearchChange('')}
-            className="absolute right-4 top-1/2 -translate-y-1/2 p-2 rounded-full text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        )}
-      </div>
+      <SearchInput
+        placeholder="Search model, brand, category, or description..."
+        value={search}
+        onChange={onSearchChange}
+      />
 
       {/* Category Pills Bar */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full no-scrollbar">
