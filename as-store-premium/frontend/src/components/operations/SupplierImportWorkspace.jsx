@@ -38,7 +38,7 @@ const TARGET_FIELDS = [
     label: 'Product Name / Description', 
     required: true, 
     description: 'Main model or item description',
-    aliases: ['product name', 'item description', 'particulars', 'item name', 'model', 'product', 'name', 'item', 'description', 'goods', 'material'] 
+    aliases: ['main modle', 'modle', 'main model', 'product name', 'item description', 'particulars', 'item name', 'model', 'product', 'name', 'item', 'description', 'goods', 'material'] 
   },
   { 
     key: 'brand', 
@@ -59,7 +59,7 @@ const TARGET_FIELDS = [
     label: 'Compatible Models', 
     required: false, 
     description: 'Compatible device model numbers',
-    aliases: ['compatible models', 'fits models', 'model list', 'supported devices', 'compatibility', 'models'] 
+    aliases: ['wdhd+ list super version', 'super version', 'wdhd+', 'wdhd+ list', 'compatible models', 'fits models', 'model list', 'supported devices', 'compatibility', 'models'] 
   },
   { 
     key: 'quantity', 
