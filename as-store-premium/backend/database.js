@@ -139,6 +139,13 @@ export const initDatabase = async () => {
       ALTER TABLE stock_transfers ENABLE ROW LEVEL SECURITY;
       CREATE INDEX IF NOT EXISTS stock_requests_shop_id_status_idx ON stock_requests (shop_id, status);
 
+      -- Ensure columns from baseline migrations exist in target database
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_mode TEXT NOT NULL DEFAULT 'cash';
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS price_type TEXT NOT NULL DEFAULT 'retail';
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS model TEXT;
+
       ALTER TABLE products ADD COLUMN IF NOT EXISTS short_name TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS full_model_list TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS purchase_price NUMERIC(12, 2);
