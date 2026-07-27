@@ -269,19 +269,29 @@ export default function ModelsPage({
 
       {/* Category Pills Bar */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full no-scrollbar">
-        {categories.map((cat) => (
-          <button
-            key={cat}
-            onClick={() => setSelectedCategory(cat)}
-            className={`px-4 py-2 rounded-2xl text-xs font-extrabold whitespace-nowrap transition-all ${
-              selectedCategory === cat
-                ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/20'
-                : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-            }`}
-          >
-            {cat}
-          </button>
-        ))}
+        {categories.map((cat) => {
+          const isSelected = selectedCategory === cat;
+          return (
+            <motion.button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.96 }}
+              className={`relative px-4 py-2 rounded-2xl text-xs font-extrabold whitespace-nowrap transition-colors cursor-pointer ${
+                isSelected ? 'text-white' : 'bg-white border border-slate-200/90 text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              {isSelected && (
+                <motion.div
+                  layoutId="modelsActiveCategoryPill"
+                  className="absolute inset-0 bg-slate-900 rounded-2xl shadow-lg shadow-slate-900/20"
+                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                />
+              )}
+              <span className="relative z-10">{cat}</span>
+            </motion.button>
+          );
+        })}
       </div>
 
       {/* Grid View */}

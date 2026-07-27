@@ -1,6 +1,6 @@
 import React from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Pagination({
   meta,
@@ -19,14 +19,38 @@ export default function Pagination({
 
   return (
     <motion.div 
-      initial={{ opacity: 0, y: 10 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-      className="pagination-bar panel"
+      transition={{ type: 'spring', stiffness: 320, damping: 28 }}
+      className="pagination-bar panel glass-card-premium"
     >
-      <div className="pagination-copy">
-        <span className="status-badge stock-ok">{total.toLocaleString('en-IN')} {totalLabel}</span>
-        <small>Page {page} of {totalPages}</small>
+      <div className="pagination-copy flex items-center gap-3">
+        <motion.span 
+          key={total}
+          initial={{ scale: 0.85, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          className="status-badge stock-ok glow-pill font-bold"
+        >
+          {total.toLocaleString('en-IN')} {totalLabel}
+        </motion.span>
+        
+        <div className="flex items-center gap-1 text-xs font-semibold text-slate-500">
+          <span>Page</span>
+          <AnimatePresence mode="wait">
+            <motion.strong
+              key={page}
+              initial={{ y: -6, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 6, opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="text-slate-900 font-extrabold text-sm px-1.5 py-0.5 rounded bg-slate-100/80"
+            >
+              {page}
+            </motion.strong>
+          </AnimatePresence>
+          <span>of {totalPages}</span>
+        </div>
+
         {onPageSizeChange && (
           <label className="pagination-size">
             <span>Rows</span>
@@ -41,19 +65,23 @@ export default function Pagination({
             </select>
           </label>
         )}
+        
         {loading && (
-          <motion.small 
-            animate={{ opacity: [0.4, 1, 0.4] }}
-            transition={{ repeat: Infinity, duration: 1.5 }}
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="flex items-center gap-1.5 text-xs text-cyan-600 font-bold ml-2"
           >
-            Loading...
-          </motion.small>
+            <Loader2 size={14} className="animate-spin text-cyan-500" />
+            <span>Updating...</span>
+          </motion.div>
         )}
       </div>
-      <div className="pagination-actions">
+
+      <div className="pagination-actions flex items-center gap-2">
         <motion.button 
-          whileHover={{ scale: page <= 1 || loading ? 1 : 1.03 }}
-          whileTap={{ scale: page <= 1 || loading ? 1 : 0.97 }}
+          whileHover={{ scale: page <= 1 || loading ? 1 : 1.05 }}
+          whileTap={{ scale: page <= 1 || loading ? 1 : 0.95 }}
           className="soft" 
           type="button" 
           disabled={loading || page <= 1} 
@@ -61,9 +89,10 @@ export default function Pagination({
         >
           <ChevronLeft size={16} /> Previous
         </motion.button>
+
         <motion.button 
-          whileHover={{ scale: page >= totalPages || loading ? 1 : 1.03 }}
-          whileTap={{ scale: page >= totalPages || loading ? 1 : 0.97 }}
+          whileHover={{ scale: page >= totalPages || loading ? 1 : 1.05 }}
+          whileTap={{ scale: page >= totalPages || loading ? 1 : 0.95 }}
           className="soft" 
           type="button" 
           disabled={loading || page >= totalPages} 
@@ -75,3 +104,4 @@ export default function Pagination({
     </motion.div>
   );
 }
+

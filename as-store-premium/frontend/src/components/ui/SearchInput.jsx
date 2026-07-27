@@ -1,5 +1,5 @@
-import React from 'react';
-import { Search, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Search, X, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function SearchInput({
@@ -9,13 +9,34 @@ export default function SearchInput({
   ariaLabel,
   className = '',
 }) {
+  const [isFocused, setIsFocused] = useState(false);
+
   return (
-    <div className={`group w-full relative flex items-center gap-3 bg-white/95 border border-slate-200/90 focus-within:border-cyan-500 rounded-2xl shadow-lg shadow-slate-200/30 backdrop-blur-xl transition-all duration-300 min-h-[54px] px-4 sm:px-5 focus-within:ring-4 focus-within:ring-cyan-500/10 ${className}`.trim()}>
-      <Search className="text-slate-400 group-focus-within:text-cyan-600 shrink-0 transition-colors duration-200" size={20} />
+    <motion.div 
+      initial={false}
+      animate={{
+        scale: isFocused ? 1.01 : 1,
+        boxShadow: isFocused 
+          ? '0 12px 30px -10px rgba(6, 182, 212, 0.25), 0 0 0 4px rgba(6, 182, 212, 0.12)' 
+          : '0 8px 24px -8px rgba(15, 23, 42, 0.08)'
+      }}
+      transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+      className={`group w-full relative flex items-center gap-3 bg-white/95 border ${
+        isFocused ? 'border-cyan-500/80 active-border-beam' : 'border-slate-200/90 hover:border-slate-300'
+      } rounded-2xl backdrop-blur-xl transition-colors duration-200 min-h-[54px] px-4 sm:px-5 ${className}`.trim()}
+    >
+      <motion.div
+        animate={{ scale: isFocused ? 1.15 : 1, rotate: isFocused ? [0, -10, 10, 0] : 0 }}
+        transition={{ duration: 0.3 }}
+      >
+        <Search className={`${isFocused ? 'text-cyan-600' : 'text-slate-400 group-hover:text-slate-600'} shrink-0 transition-colors duration-200`} size={20} />
+      </motion.div>
       <input
         aria-label={ariaLabel || placeholder}
         placeholder={placeholder}
         value={value}
+        onFocus={() => setIsFocused(true)}
+        onBlur={() => setIsFocused(false)}
         onChange={(event) => onChange(event.target.value, event)}
         style={{
           border: 'none',
@@ -31,18 +52,21 @@ export default function SearchInput({
       <AnimatePresence>
         {value && (
           <motion.button
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            transition={{ duration: 0.12 }}
+            initial={{ opacity: 0, scale: 0.5, rotate: -90 }}
+            animate={{ opacity: 1, scale: 1, rotate: 0 }}
+            exit={{ opacity: 0, scale: 0.5, rotate: 90 }}
+            whileHover={{ scale: 1.15, rotate: 90 }}
+            whileTap={{ scale: 0.9 }}
+            transition={{ type: 'spring', stiffness: 500, damping: 25 }}
             type="button"
-            className="p-1.5 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-all shrink-0 ml-1"
+            className="p-1.5 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-colors shrink-0 ml-1"
             onClick={(e) => onChange('', e)}
           >
             <X size={18} />
           </motion.button>
         )}
       </AnimatePresence>
-    </div>
+    </motion.div>
   );
 }
+

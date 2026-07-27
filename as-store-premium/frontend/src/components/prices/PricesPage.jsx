@@ -1,5 +1,6 @@
 import React from 'react';
 import { Download, IndianRupee, Trash2 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import Pagination from '../ui/Pagination';
 import SearchInput from '../ui/SearchInput';
 import ExpandableText from '../shared/ExpandableText';
@@ -32,7 +33,7 @@ export default function PricesPage({
   fullModelList = (p) => p?.full_model_list || p?.model || '',
   priceLabel = (val) => `₹${Number(val || 0).toLocaleString('en-IN')}`,
   FormPanel = ({ children, title, action, onSubmit }) => (
-    <form onSubmit={onSubmit} className="panel space-y-4">
+    <form onSubmit={onSubmit} className="panel space-y-4 glass-card-premium">
       <h3 className="text-base font-bold text-slate-900">{title}</h3>
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">{children}</div>
       <button type="submit" className="primary mt-4">{action}</button>
@@ -56,9 +57,14 @@ export default function PricesPage({
     items.length ? (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {items.map((item) => (
-          <div key={item.id} className="panel p-4 flex flex-col justify-between">
+          <motion.div 
+            key={item.id} 
+            whileHover={{ y: -4, scale: 1.01 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+            className="panel p-4 flex flex-col justify-between glass-card-premium cursor-pointer"
+          >
             {render(item)}
-          </div>
+          </motion.div>
         ))}
       </div>
     ) : (
