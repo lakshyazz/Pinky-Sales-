@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { MotionConfig } from 'framer-motion';
 import App from './App.jsx';
 import './index.css';
+import './components/ui/SkeletonLoader.css';
 
 class ErrorBoundary extends React.Component {
   constructor(props) {

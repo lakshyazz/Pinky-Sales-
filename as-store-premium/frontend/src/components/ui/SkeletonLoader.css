@@ -1,0 +1,208 @@
+/* ==========================================================================
+   OPTIMIZED UX SKELETON LOADER & SHIMMER WAVE ANIMATION
+   ========================================================================== */
+
+:root {
+  --sk-bg-base: #e2e8f0;
+  --sk-shimmer-color: rgba(255, 255, 255, 0.75);
+  --sk-card-bg: #ffffff;
+  --sk-border: #cbd5e1;
+  --sk-radius: 8px;
+  --sk-speed: 1.8s;
+}
+
+.dark {
+  --sk-bg-base: #1e293b;
+  --sk-shimmer-color: rgba(255, 255, 255, 0.08);
+  --sk-card-bg: #0f172a;
+  --sk-border: #334155;
+}
+
+/* --------------------------------------------------------------------------
+   1. Left-to-Right Shimmer Wave Gradient Animation
+   -------------------------------------------------------------------------- */
+.skeleton-box {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--sk-bg-base);
+  display: inline-block;
+  vertical-align: middle;
+  transition: background-color 0.3s ease;
+}
+
+/**
+ * Pseudo-element shimmer wave mask:
+ * Sweeps a high-brightness linear gradient smoothly from X = -100% to X = +100%
+ * Research shows L-to-R motion perceived as significantly faster by users.
+ */
+.skeleton-box::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--sk-shimmer-color) 45%,
+    var(--sk-shimmer-color) 55%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: shimmer-wave var(--sk-speed) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  will-change: transform;
+}
+
+@keyframes shimmer-wave {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   2. Layout Matching Containers (Zero CLS)
+   -------------------------------------------------------------------------- */
+.skeleton-layout-wrapper {
+  width: 100%;
+  animation: fadeInSkeleton 0.25s ease-out;
+}
+
+@keyframes fadeInSkeleton {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Table Row Skeleton Layout */
+.skeleton-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0 8px;
+}
+
+.skeleton-table-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  background: var(--sk-card-bg);
+  border: 1px solid var(--sk-border);
+  border-radius: var(--sk-radius);
+  margin-bottom: 8px;
+}
+
+.skeleton-table-cell {
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+/* Card Skeleton Layout */
+.skeleton-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  width: 100%;
+}
+
+.skeleton-card-container {
+  background: var(--sk-card-bg);
+  border: 1px solid var(--sk-border);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.skeleton-card-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.skeleton-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   3. 3-Second Timeout Fallback Loader UX Switch
+   -------------------------------------------------------------------------- */
+.skeleton-fallback-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 220px;
+  width: 100%;
+  padding: 32px 24px;
+  animation: fadeInFallback 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes fadeInFallback {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.skeleton-fallback-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 420px;
+  background: var(--sk-card-bg);
+  border: 1px solid var(--sk-border);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01);
+  padding: 32px 28px;
+  border-radius: 16px;
+}
+
+/* Premium Rotating Progress Ring */
+.skeleton-spinner-ring {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 3.5px solid rgba(99, 102, 241, 0.15);
+  border-top-color: #6366f1;
+  animation: spinRing 0.85s linear infinite;
+  margin-bottom: 20px;
+}
+
+@keyframes spinRing {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.skeleton-fallback-title {
+  margin: 0 0 6px 0;
+  font-size: 1.1rem;
+  font-weight: 650;
+  color: #1e293b;
+  letter-spacing: -0.01em;
+}
+
+.dark .skeleton-fallback-title {
+  color: #f8fafc;
+}
+
+.skeleton-fallback-subtext {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #64748b;
+  line-height: 1.5;
+}
+
+.dark .skeleton-fallback-subtext {
+  color: #94a3b8;
+}

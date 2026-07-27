@@ -43,6 +43,7 @@ import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import BrandsPage from './components/brands/BrandsPage';
 import Pagination from './components/ui/Pagination';
+import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './components/ui/SkeletonLoader';
 import SearchInput from './components/ui/SearchInput';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
@@ -602,25 +603,30 @@ function BillSummary({ sale }) {
   );
 }
 
-function SkeletonPage({ type = 'list' }) {
-  const rows = type === 'dashboard' ? 4 : 6;
-  return (
+function SkeletonPage({ type = 'list', timeoutMs = 3000 }) {
+  const layout = (
     <section className={`skeleton-page ${type === 'dashboard' ? 'dashboard-skeleton' : ''}`} aria-hidden="true">
-      {type === 'dashboard' && (
-        <div className="skeleton-stats">
-          {[0, 1, 2, 3, 4, 5].map((item) => <div className="skeleton-card" key={item} />)}
-        </div>
-      )}
-      <div className="skeleton-panel">
-        {Array.from({ length: rows }).map((_, index) => (
-          <div className="skeleton-row" key={index}>
-            <span />
-            <span />
-            <span />
+      {type === 'dashboard' ? (
+        <>
+          <CardSkeleton count={4} />
+          <div style={{ marginTop: '20px' }}>
+            <TableRowSkeleton columns={4} rows={4} />
           </div>
-        ))}
-      </div>
+        </>
+      ) : (
+        <TableRowSkeleton columns={5} rows={6} />
+      )}
     </section>
+  );
+
+  return (
+    <SmartSkeletonWrapper
+      isLoading={true}
+      timeoutMs={timeoutMs}
+      skeletonLayout={layout}
+      fallbackMessage="Just a moment..."
+      fallbackSubtext="Fetching high-speed data. If your connection is slow, we'll get everything ready shortly."
+    />
   );
 }
 
