@@ -355,44 +355,60 @@ export default function SupplierImportWorkspace({
   return (
     <div className="space-y-8 pb-12">
       
-      {/* Top Hero Banner */}
-      <div className="relative overflow-hidden rounded-3xl bg-slate-950 p-6 md:p-10 text-white shadow-2xl border border-slate-800">
-        {/* Glow Accents */}
-        <div className="absolute -top-24 -left-24 w-96 h-96 bg-emerald-500/15 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -right-24 w-96 h-96 bg-teal-500/15 rounded-full blur-3xl pointer-events-none" />
+      {/* Top Hero Banner - Vibrant Light Theme */}
+      <motion.div 
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-50/90 via-white to-teal-50/80 p-6 md:p-10 text-slate-900 shadow-xl shadow-emerald-950/5 border border-emerald-200/80 backdrop-blur-sm"
+      >
+        {/* Animated Ambient Light Spheres */}
+        <motion.div 
+          animate={{ scale: [1, 1.15, 1], opacity: [0.3, 0.55, 0.3] }}
+          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute -top-24 -left-24 w-96 h-96 bg-emerald-400/25 rounded-full blur-3xl pointer-events-none" 
+        />
+        <motion.div 
+          animate={{ scale: [1, 1.2, 1], opacity: [0.25, 0.5, 0.25] }}
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut", delay: 1 }}
+          className="absolute -bottom-24 -right-24 w-96 h-96 bg-teal-400/25 rounded-full blur-3xl pointer-events-none" 
+        />
         
         <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
           <div className="space-y-3 max-w-2xl">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-xs font-bold uppercase tracking-wider shadow-sm">
-              <Zap className="w-3.5 h-3.5 text-emerald-400 animate-pulse" /> AI-Assisted Supplier Ingestion
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-100/90 border border-emerald-300/80 text-emerald-800 text-xs font-black uppercase tracking-wider shadow-sm">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600 animate-pulse" /> AI-Assisted Supplier Ingestion
             </div>
-            <h1 className="text-2xl md:text-4xl font-black tracking-tight text-white leading-tight">
-              Supplier Excel & CSV Batch Ingestion
+            <h1 className="text-2xl md:text-4xl font-black tracking-tight text-slate-900 leading-tight">
+              Supplier Excel & CSV <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">Batch Ingestion</span>
             </h1>
-            <p className="text-slate-300 text-xs md:text-sm font-medium leading-relaxed">
+            <p className="text-slate-600 text-xs md:text-sm font-medium leading-relaxed">
               Upload supplier stock sheets in any custom format. Our intelligent fuzzy engine automatically transforms column headers into AS Store FIFO inventory, catalog models, and valuation records.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-3 shrink-0">
-            <button
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
               type="button"
               onClick={handleDownloadTemplate}
-              className="px-5 py-3 rounded-2xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 text-white font-bold text-xs flex items-center gap-2.5 transition-all shadow-lg hover:shadow-emerald-900/20 active:scale-95"
+              className="px-5 py-3 rounded-2xl bg-white hover:bg-emerald-50/80 border border-emerald-200/90 text-slate-800 font-bold text-xs flex items-center gap-2.5 transition-all shadow-md shadow-emerald-500/5 hover:border-emerald-400"
             >
-              <Download className="w-4 h-4 text-emerald-400" /> Download Sample Excel
-            </button>
+              <Download className="w-4 h-4 text-emerald-600" /> Download Sample Excel
+            </motion.button>
 
-            <button
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
               type="button"
               onClick={() => setShowLogsDrawer(true)}
-              className="px-5 py-3 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 font-bold text-xs flex items-center gap-2.5 transition-all shadow-lg active:scale-95"
+              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs flex items-center gap-2.5 transition-all shadow-lg shadow-emerald-600/25"
             >
-              <History className="w-4 h-4 text-emerald-400" /> View Import Audit History
-            </button>
+              <History className="w-4 h-4 text-white" /> View Import Audit History
+            </motion.button>
           </div>
         </div>
-      </div>
+      </motion.div>
 
       {/* Main Interactive Container */}
       <div className="bg-white border border-slate-200/90 rounded-3xl shadow-2xl shadow-slate-200/60 p-6 md:p-10 space-y-8">
@@ -523,30 +539,32 @@ export default function SupplierImportWorkspace({
             exit={{ opacity: 0, y: -15 }}
             className="space-y-6"
           >
-            {/* Header info */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-slate-900 text-white shadow-lg">
+            {/* Header info - Light Theme */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-r from-emerald-50/90 via-teal-50/70 to-cyan-50/80 border border-emerald-200/80 text-slate-900 shadow-md">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-400 flex items-center justify-center shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-emerald-600/20">
                   <Sliders className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-black text-white">Intelligent Column Auto-Matching</h3>
-                  <p className="text-xs text-slate-400 font-medium">Verify or adjust mapped spreadsheet headers before importing.</p>
+                  <h3 className="text-base font-black text-slate-900">Intelligent Column Auto-Matching</h3>
+                  <p className="text-xs text-slate-600 font-medium">Verify or adjust mapped spreadsheet headers before importing.</p>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 shrink-0">
-                <span className="px-3 py-1.5 rounded-xl bg-slate-800 text-emerald-400 font-extrabold text-xs border border-slate-700">
+                <span className="px-3 py-1.5 rounded-xl bg-white text-emerald-800 font-extrabold text-xs border border-emerald-200 shadow-sm">
                   📁 {fileName} ({rawRows.length} rows)
                 </span>
-                <button
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
                   type="button"
                   onClick={() => autoDetectColumns(rawHeaders)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs flex items-center gap-1 border border-slate-700 transition-all"
+                  className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-50 text-slate-700 font-bold text-xs flex items-center gap-1.5 border border-slate-200 shadow-sm transition-all"
                   title="Re-run auto matcher"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" /> Re-Match
-                </button>
+                  <RefreshCw className="w-3.5 h-3.5 text-emerald-600" /> Re-Match
+                </motion.button>
               </div>
             </div>
 
@@ -649,21 +667,21 @@ export default function SupplierImportWorkspace({
             exit={{ opacity: 0, y: -15 }}
             className="space-y-6"
           >
-            {/* Branch Allocation Banner */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-slate-900 to-emerald-950 text-white shadow-xl border border-slate-800">
+            {/* Branch Allocation Banner - Light Theme */}
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 rounded-2xl bg-gradient-to-r from-emerald-50/90 via-teal-50/70 to-cyan-50/80 text-slate-900 shadow-md border border-emerald-200/80">
               <div className="space-y-1">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-black uppercase tracking-wider">
-                  <Store className="w-3 h-3" /> Branch Allocation
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-100/90 text-emerald-800 text-[10px] font-black uppercase tracking-wider">
+                  <Store className="w-3 h-3 text-emerald-600" /> Branch Allocation
                 </div>
-                <h3 className="text-lg font-black text-white">Target Shop / Warehouse Selection</h3>
-                <p className="text-xs text-slate-300 font-medium">Choose which branch inventory registry will receive these imported stock batches.</p>
+                <h3 className="text-lg font-black text-slate-900">Target Shop / Warehouse Selection</h3>
+                <p className="text-xs text-slate-600 font-medium">Choose which branch inventory registry will receive these imported stock batches.</p>
               </div>
 
               <div className="flex items-center gap-3 shrink-0">
                 <select
                   value={destinationShopId}
                   onChange={(e) => setDestinationShopId(Number(e.target.value))}
-                  className="px-4 py-2.5 bg-white text-slate-900 font-black text-xs rounded-xl border-0 outline-none shadow-lg"
+                  className="px-4 py-2.5 bg-white text-slate-900 font-black text-xs rounded-xl border border-emerald-200/90 outline-none shadow-md focus:ring-2 focus:ring-emerald-500/20 transition-all"
                 >
                   {(data.shops || []).map((s) => (
                     <option key={s.id} value={s.id}>
@@ -896,21 +914,21 @@ export default function SupplierImportWorkspace({
               exit={{ opacity: 0, scale: 0.95, y: 20 }}
               className="bg-white border border-slate-200 rounded-3xl shadow-2xl max-w-4xl w-full max-h-[85vh] flex flex-col overflow-hidden"
             >
-              {/* Drawer Header */}
-              <div className="p-6 bg-slate-950 text-white flex items-center justify-between border-b border-slate-800">
+              {/* Drawer Header - Light Theme */}
+              <div className="p-6 bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 text-white flex items-center justify-between shadow-md">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+                  <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur-md text-white flex items-center justify-center shadow-inner">
                     <History className="w-5 h-5" />
                   </div>
                   <div>
                     <h3 className="text-base font-black">Supplier Import Audit History</h3>
-                    <p className="text-xs text-slate-400">Review past bulk inventory ingestion logs and total valuations.</p>
+                    <p className="text-xs text-emerald-100 font-medium">Review past bulk inventory ingestion logs and total valuations.</p>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowLogsDrawer(false)}
-                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                  className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
