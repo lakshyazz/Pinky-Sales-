@@ -42,7 +42,7 @@ function convertSql(sql) {
   let converted = sql.replace(/\?/g, () => `$${index++}`);
   
   // Append RETURNING id to INSERT statements to fetch new row IDs
-  if (converted.trim().toUpperCase().startsWith('INSERT') && !converted.toUpperCase().includes('RETURNING')) {
+  if (converted.trim().toUpperCase().startsWith('INSERT') && !converted.toUpperCase().includes('RETURNING') && !converted.toUpperCase().includes('SCHEMA_MIGRATIONS')) {
     converted += ' RETURNING id';
   }
   return converted;
