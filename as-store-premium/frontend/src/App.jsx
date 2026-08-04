@@ -2507,6 +2507,8 @@ function App() {
           if (selectedProductDetails?.id === product.id) setSelectedProductDetails(null);
           showToast(`${name} was deleted`);
           await loadCore();
+          if (active === 'stock') await loadTab('stock', shopId);
+          if (active === 'models' || active === 'prices') await loadProductPage({ tab: active, page: productPager.page });
         } catch (error) {
           showToast(error.message || 'Unable to delete this product');
         } finally {
