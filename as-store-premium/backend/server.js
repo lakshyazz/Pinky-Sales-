@@ -1489,11 +1489,12 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     manufacturing_brand_id
   } = req.body;
   let compatibilityModels = String(full_model_list || name || '').trim();
-  const displayName = String(short_name || compatibilityModels).trim();
-  if (!compatibilityModels) compatibilityModels = displayName;
-  
+  let displayName = String(short_name || '').trim();
   if (!displayName) {
-    return res.status(400).json({ error: 'Short name is required.' });
+    displayName = compatibilityModels || 'Unnamed Product';
+  }
+  if (!compatibilityModels) {
+    compatibilityModels = displayName;
   }
 
   const parsePrice = (val, fallback = null) => {
@@ -1580,11 +1581,12 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     manufacturing_brand_id
   } = req.body;
   let compatibilityModels = String(full_model_list || name || '').trim();
-  const displayName = String(short_name || compatibilityModels).trim();
-  if (!compatibilityModels) compatibilityModels = displayName;
-
+  let displayName = String(short_name || '').trim();
   if (!displayName) {
-    return res.status(400).json({ error: 'Short name is required.' });
+    displayName = compatibilityModels || 'Unnamed Product';
+  }
+  if (!compatibilityModels) {
+    compatibilityModels = displayName;
   }
 
   const parsePrice = (val, fallback = null) => {

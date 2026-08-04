@@ -2419,19 +2419,7 @@ function App() {
     };
 
     if (!payload.short_name) {
-      showToast('Short display name is required');
-      setTimeout(() => {
-        const inputEl = Array.from(document.querySelectorAll('input')).find(
-          (el) => el.placeholder?.includes('iPhone 13 Battery Original') || 
-                  (el.labels && Array.from(el.labels).some(l => /Short display name/i.test(l.textContent))) ||
-                  (el.closest('label') && /Short display name/i.test(el.closest('label').textContent))
-        );
-        if (inputEl) {
-          inputEl.focus();
-          inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-      }, 50);
-      return;
+      payload.short_name = payload.full_model_list || payload.model || 'Unnamed Product';
     }
 
     if (!payload.full_model_list) {
@@ -3922,6 +3910,7 @@ function App() {
                 api={api}
                 setGlobalToast={showToast}
                 onProductUpdated={loadCore}
+                onDeleteProduct={deleteProduct}
                 pager={productPager}
                 loading={productPageLoading}
                 onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}

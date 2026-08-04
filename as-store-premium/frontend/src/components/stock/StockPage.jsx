@@ -409,7 +409,6 @@ export default function StockPage({
                   <div className="stock-product-grid stock-product-grid--identity">
                     <Input 
                       label="Short Display Name (Visible to Users)" 
-                      required 
                       placeholder="Example: iPhone 13 Battery Original"
                       value={forms.product.short_name} 
                       onChange={(v) => handleProductNameChange(v, 'short_name')} 

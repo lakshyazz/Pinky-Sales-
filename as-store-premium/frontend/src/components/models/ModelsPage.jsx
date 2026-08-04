@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus } from 'lucide-react';
+import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus, Trash2 } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
 import SearchInput from '../ui/SearchInput';
@@ -14,6 +14,7 @@ export default function ModelsPage({
   api,
   setGlobalToast,
   onProductUpdated,
+  onDeleteProduct,
   pager = {},
   loading = false,
   onPageChange,
@@ -407,6 +408,19 @@ export default function ModelsPage({
                     >
                       <Eye className="w-4 h-4" />
                     </button>
+                    {isSuperAdmin && onDeleteProduct && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteProduct(product);
+                        }}
+                        className="p-2.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                        title="Delete Product"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </motion.div>
@@ -489,6 +503,15 @@ export default function ModelsPage({
                         >
                           <Eye className="w-3.5 h-3.5" /> Specs
                         </button>
+                        {isSuperAdmin && onDeleteProduct && (
+                          <button
+                            type="button"
+                            onClick={() => onDeleteProduct(product)}
+                            className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white font-bold transition-all text-xs inline-flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" /> Delete
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -738,7 +761,6 @@ export default function ModelsPage({
                     <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Display Name</label>
                     <input
                       type="text"
-                      required
                       value={editForm.short_name}
                       onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
                       placeholder="e.g. iPhone 13 Display Original"
