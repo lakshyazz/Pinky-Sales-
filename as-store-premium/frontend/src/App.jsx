@@ -121,7 +121,11 @@ const compactModelName = (value) => {
   const firstModel = name.split('/')[0].trim();
   return firstModel.length <= 60 ? firstModel : `${firstModel.slice(0, 57)}...`;
 };
-const productName = (item) => compactModelName(item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name || item?.model_name);
+const productName = (item) => {
+  const baseName = compactModelName(item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name || item?.model_name);
+  const mfg = item?.manufacturing_brand_name || item?.mfg_brand_name || item?.manufacturing_brand;
+  return mfg ? `${baseName} (Mfg: ${mfg})` : baseName;
+};
 const fullModelList = (item) => item?.full_model_list || item?.name || item?.product_name || item?.model_name || '';
 const priceLabel = (value) => Number(value) > 0 ? currency(value) : 'Price not set';
 const normalizedText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
