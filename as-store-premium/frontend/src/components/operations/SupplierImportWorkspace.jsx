@@ -55,6 +55,13 @@ const TARGET_FIELDS = [
     aliases: ['category', 'product type', 'group', 'type', 'cat', 'dept', 'department'] 
   },
   { 
+    key: 'manufacturing_brand', 
+    label: 'Manufacturing Brand', 
+    required: false, 
+    description: 'LCD / screen manufacturer (e.g. AS CARE, Kaiku, GX)',
+    aliases: ['manufacturing brand', 'manufacturing_brand', 'mfg brand', 'mfg_brand', 'maker', 'screen manufacturer', 'manufacturer brand'] 
+  },
+  { 
     key: 'full_model_list', 
     label: 'Compatible Models', 
     required: false, 
@@ -160,6 +167,7 @@ export default function SupplierImportWorkspace({
   const [defaultQuantity, setDefaultQuantity] = useState(200);
   const [defaultBrand, setDefaultBrand] = useState('Universal');
   const [defaultCategory, setDefaultCategory] = useState('Display');
+  const [defaultManufacturingBrandId, setDefaultManufacturingBrandId] = useState('');
 
   // Fetch import logs history
   const fetchImportLogs = async () => {
@@ -256,6 +264,7 @@ export default function SupplierImportWorkspace({
       return {
         short_name: nameCandidate,
         brand: detectedBrand,
+        manufacturing_brand: String(getVal('manufacturing_brand') || '').trim(),
         category: String(getVal('category') || defaultCategory || 'General').trim(),
         full_model_list: modelsCandidate,
         quantity: Math.max(1, Math.round(parseCleanNumber(getVal('quantity'), defaultQuantity))),
@@ -294,6 +303,7 @@ export default function SupplierImportWorkspace({
           fileName,
           destinationShopId,
           defaultAssignedUserId: defaultAssignedUserId || null,
+          default_manufacturing_brand_id: defaultManufacturingBrandId ? Number(defaultManufacturingBrandId) : null,
           records: mappedRecords
         })
       });
@@ -699,7 +709,7 @@ export default function SupplierImportWorkspace({
                 <p className="text-xs text-slate-500 font-medium">Specify default values for columns that were not present or mapped in your Excel sheet.</p>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
                   <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-650 mb-1.5">
                     Default Quantity per Item
@@ -737,6 +747,23 @@ export default function SupplierImportWorkspace({
                     {(data.categories || []).map((cat) => (
                       <option key={cat.id} value={cat.name}>
                         {cat.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-extrabold uppercase tracking-wider text-slate-650 mb-1.5">
+                    Default Manufacturing Brand
+                  </label>
+                  <select
+                    value={defaultManufacturingBrandId}
+                    onChange={(e) => setDefaultManufacturingBrandId(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-900 outline-none focus:border-emerald-500"
+                  >
+                    <option value="">-- Choose Manufacturing Brand --</option>
+                    {(data.reference?.manufacturingBrands || []).map((mb) => (
+                      <option key={mb.id} value={mb.id}>
+                        {mb.name}
                       </option>
                     ))}
                   </select>
@@ -779,6 +806,7 @@ export default function SupplierImportWorkspace({
                     <tr className="bg-slate-100/80 border-b border-slate-200 text-slate-600 font-extrabold uppercase">
                       <th className="p-3.5">Product Name</th>
                       <th className="p-3.5">Brand</th>
+                      <th className="p-3.5">Mfg Brand</th>
                       <th className="p-3.5">Category</th>
                       <th className="p-3.5">Compatible Models</th>
                       <th className="p-3.5 text-right">Quantity</th>
@@ -794,6 +822,19 @@ export default function SupplierImportWorkspace({
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-800 text-[11px] font-bold">
                             {row.brand}
                           </span>
+                        </td>
+                        <td className="p-3.5">
+                          {row.manufacturing_brand ? (
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-250 text-[11px] font-bold">
+                              {row.manufacturing_brand}
+                            </span>
+                          ) : defaultManufacturingBrandId ? (
+                            <span className="text-slate-400 italic">
+                              {(data.reference?.manufacturingBrands || []).find(mb => String(mb.id) === String(defaultManufacturingBrandId))?.name || 'Default'}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 italic">Unknown</span>
+                          )}
                         </td>
                         <td className="p-3.5">{row.category}</td>
                         <td className="p-3.5 max-w-xs truncate text-slate-500">{row.full_model_list || 'N/A'}</td>

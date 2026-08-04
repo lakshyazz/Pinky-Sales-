@@ -274,41 +274,65 @@ const getPriceVisibility = async () => {
 };
 const productColumnsForRole = async (role) => {
   const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'category', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'is_active', 'updated_at'];
-  if (role === 'superadmin') return [...base, 'official_price', 'purchase_price', 'wholesale_price'].join(', ');
-  const visibility = await getPriceVisibility();
-  if (visibility.show_official_price_shopkeeper) base.push('official_price');
-  if (visibility.show_wholesale_price_shopkeeper) base.push('wholesale_price');
-  if (visibility.show_purchase_price_shopkeeper) base.push('purchase_price');
-  return base.join(', ');
+  let cols = [...base];
+  if (role === 'superadmin') cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
+  else {
+    const visibility = await getPriceVisibility();
+    if (visibility.show_official_price_shopkeeper) cols.push('official_price');
+    if (visibility.show_wholesale_price_shopkeeper) cols.push('wholesale_price');
+    if (visibility.show_purchase_price_shopkeeper) cols.push('purchase_price');
+  }
+  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model`;
 };
 const getReferenceData = () => getCached('reference-data', 300_000, async () => {
-  const [categories, colours, brands] = await Promise.all([
+  const [categories, colours, brands, manufacturingBrands] = await Promise.all([
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM colours WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM brands WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM manufacturing_brands ORDER BY LOWER(TRIM(name)), id'),
   ]);
-  return { categories, colours, brands };
+  return { categories, colours, brands, manufacturingBrands };
 });
 const getProductsForRole = async (role, query = {}) => {
   const columns = await productColumnsForRole(role);
   const pagination = parsePagination(query);
   const params = [];
-  const where = ['is_active = 1', 'name IS NOT NULL'];
+  const where = ['p.is_active = 1', 'p.name IS NOT NULL'];
   appendSearchFilter(where, params, query.search, [
-    'name',
-    "COALESCE(short_name, '')",
-    "COALESCE(full_model_list, '')",
-    "COALESCE(brand, '')",
-    "COALESCE(category, '')",
-    "COALESCE(model, '')",
-    "COALESCE(description, '')",
-    "COALESCE(array_to_string(colours, ','), '')",
+    'p.name',
+    "COALESCE(p.short_name, '')",
+    "COALESCE(p.full_model_list, '')",
+    "COALESCE(p.brand, '')",
+    "COALESCE(p.category, '')",
+    "COALESCE(p.model, '')",
+    "COALESCE(p.description, '')",
+    "COALESCE(array_to_string(p.colours, ','), '')",
+    "COALESCE(mb.name, '')",
+    "COALESCE(b.name, '')",
   ]);
-  appendExactFilter(where, params, query.brand, 'brand = ?');
-  appendExactFilter(where, params, query.category, 'LOWER(TRIM(category)) = LOWER(TRIM(?))');
+  
+  if (hasQueryValue(query.brand)) {
+    if (/^\d+$/.test(query.brand)) {
+      where.push('p.company_brand_id = ?');
+      params.push(Number(query.brand));
+    } else {
+      where.push('LOWER(TRIM(p.brand)) = LOWER(TRIM(?))');
+      params.push(String(query.brand).trim());
+    }
+  }
+
+  if (hasQueryValue(query.manufacturingBrandId)) {
+    where.push('p.manufacturing_brand_id = ?');
+    params.push(Number(query.manufacturingBrandId));
+  } else if (hasQueryValue(query.manufacturingBrand)) {
+    where.push('LOWER(TRIM(mb.name)) = LOWER(TRIM(?))');
+    params.push(String(query.manufacturingBrand).trim());
+  }
+
+  appendExactFilter(where, params, query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
   if (hasQueryValue(query.colour)) {
     where.push(`EXISTS (
-      SELECT 1 FROM UNNEST(colours) AS product_colour
+      SELECT 1 FROM UNNEST(p.colours) AS product_colour
       WHERE LOWER(TRIM(product_colour)) = LOWER(TRIM(?))
     )`);
     params.push(String(query.colour).trim());
@@ -316,17 +340,23 @@ const getProductsForRole = async (role, query = {}) => {
   const minPrice = hasQueryValue(query.min) ? Number(query.min) : hasQueryValue(query.minPrice) ? Number(query.minPrice) : null;
   const maxPrice = hasQueryValue(query.max) ? Number(query.max) : hasQueryValue(query.maxPrice) ? Number(query.maxPrice) : null;
   if (Number.isFinite(minPrice)) {
-    where.push('COALESCE(retail_price, sale_price, official_price, 0) >= ?');
+    where.push('COALESCE(p.retail_price, p.sale_price, p.official_price, 0) >= ?');
     params.push(minPrice);
   }
   if (Number.isFinite(maxPrice)) {
-    where.push('COALESCE(retail_price, sale_price, official_price, 0) <= ?');
+    where.push('COALESCE(p.retail_price, p.sale_price, p.official_price, 0) <= ?');
     params.push(maxPrice);
   }
   const whereSql = where.join(' AND ');
   return runPaginatedList({
-    dataSql: `SELECT ${columns} FROM products WHERE ${whereSql} ORDER BY brand, COALESCE(short_name, name)`,
-    countSql: `SELECT COUNT(*) AS total FROM products WHERE ${whereSql}`,
+    dataSql: `SELECT ${columns} FROM products p 
+              LEFT JOIN brands b ON b.id = p.company_brand_id
+              LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+              WHERE ${whereSql} ORDER BY p.brand, COALESCE(p.short_name, p.name)`,
+    countSql: `SELECT COUNT(*) AS total FROM products p 
+               LEFT JOIN brands b ON b.id = p.company_brand_id
+               LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+               WHERE ${whereSql}`,
     params,
     pagination,
     totalKey: 'totalProducts',
@@ -635,6 +665,50 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     return trendDays.map((day) => valuesByDay.get(day) || 0);
   };
 
+  const mfgProducts = await allRecords(`
+    SELECT mb.id, mb.name, COUNT(DISTINCT p.id) AS products_count
+    FROM manufacturing_brands mb
+    LEFT JOIN products p ON p.manufacturing_brand_id = mb.id AND p.is_active = 1
+    WHERE mb.is_active = TRUE
+    GROUP BY mb.id, mb.name
+    ORDER BY products_count DESC
+  `);
+
+  const mfgStockAndValue = await allRecords(`
+    SELECT mb.id, mb.name,
+      COALESCE(SUM(ib.quantity_remaining), 0) AS stock_qty,
+      COALESCE(SUM(ib.quantity_remaining * COALESCE(ib.purchase_price, p.purchase_price, 0)), 0) AS inventory_value
+    FROM manufacturing_brands mb
+    LEFT JOIN products p ON p.manufacturing_brand_id = mb.id AND p.is_active = 1
+    LEFT JOIN inventory_batches ib ON ib.product_id = p.id AND ib.quantity_remaining > 0 ${shopId ? 'AND ib.shop_id = ?' : ''} ${visibleBatchAccess}
+    WHERE mb.is_active = TRUE
+    GROUP BY mb.id, mb.name
+    ORDER BY stock_qty DESC, inventory_value DESC
+  `, shopId ? [shopId] : []);
+
+  const mfgMostSold = await allRecords(`
+    SELECT mb.id, mb.name, COALESCE(SUM(sa.quantity), 0) AS quantity_sold
+    FROM manufacturing_brands mb
+    LEFT JOIN sales sa ON sa.manufacturing_brand_id = mb.id ${shopId ? 'AND sa.shop_id = ?' : ''}
+    WHERE mb.is_active = TRUE
+    GROUP BY mb.id, mb.name
+    ORDER BY quantity_sold DESC
+    LIMIT 6
+  `, shopId ? [shopId] : []);
+
+  const mfgLowStock = await allRecords(`
+    SELECT mb.id, mb.name, COUNT(DISTINCT p.id) AS low_stock_count
+    FROM manufacturing_brands mb
+    LEFT JOIN products p ON p.manufacturing_brand_id = mb.id AND p.is_active = 1
+    LEFT JOIN stock st ON st.product_id = p.id ${shopId ? 'AND st.shop_id = ?' : ''}
+    LEFT JOIN shops sh ON sh.id = st.shop_id
+    WHERE mb.is_active = TRUE 
+      AND st.quantity > 0 
+      AND st.quantity <= sh.low_stock_threshold
+    GROUP BY mb.id, mb.name
+    ORDER BY low_stock_count DESC
+  `, shopId ? [shopId] : []);
+
   res.json({
     totals,
     lowStock,
@@ -645,6 +719,12 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       sales: trendValues(salesTrendRows),
       pending: trendValues(pendingTrendRows),
     },
+    mfgBrandStats: {
+      products: mfgProducts,
+      stockAndValue: mfgStockAndValue,
+      mostSold: mfgMostSold,
+      lowStock: mfgLowStock
+    }
   });
 });
 
@@ -825,7 +905,7 @@ app.get('/api/reference-data', async (_req, res) => {
 });
 
 app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async (req, res) => {
-  const tables = { categories: 'categories', colours: 'colours', brands: 'brands' };
+  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands' };
   const table = tables[req.params.type];
   const name = String(req.body.name || '').trim();
   if (!table || !name) return res.status(400).json({ error: 'Choose a valid reference type and enter a name.' });
@@ -836,13 +916,13 @@ app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async
   }
   
   const reference = await ensureReference(table, name);
-  const singularType = { categories: 'category', colours: 'colour', brands: 'brand' }[req.params.type];
+  const singularType = { categories: 'category', colours: 'colour', brands: 'brand', 'manufacturing-brands': 'manufacturing_brand' }[req.params.type];
   await audit(req, `Added ${singularType}`, singularType, reference.id, reference.name);
   res.status(201).json(reference);
 });
 
 app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, async (req, res) => {
-  const tables = { categories: 'categories', colours: 'colours', brands: 'brands' };
+  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands' };
   const table = tables[req.params.type];
   const name = String(req.body.name || '').trim();
   const id = Number(req.params.id);
@@ -860,8 +940,14 @@ app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, as
   const oldItem = await getRecord(`SELECT name FROM ${table} WHERE id = ?`, [id]);
   if (!oldItem) return res.status(404).json({ error: 'Reference item not found.' });
 
+  const is_active = req.body.is_active !== undefined ? Boolean(req.body.is_active) : null;
   await runTransaction(async (tx) => {
-    await tx.runQuery(`UPDATE ${table} SET name = ? WHERE id = ?`, [name, id]);
+    if (name) {
+      await tx.runQuery(`UPDATE ${table} SET name = ? WHERE id = ?`, [name, id]);
+    }
+    if (is_active !== null) {
+      await tx.runQuery(`UPDATE ${table} SET is_active = ? WHERE id = ?`, [is_active, id]);
+    }
     if (table === 'brands') {
       await tx.runQuery('UPDATE products SET brand = ? WHERE brand = ?', [name, oldItem.name]);
     } else if (table === 'categories') {
@@ -878,7 +964,7 @@ app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, as
 });
 
 app.delete('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, async (req, res) => {
-  const tables = { categories: 'categories', colours: 'colours', brands: 'brands' };
+  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands' };
   const table = tables[req.params.type];
   const id = Number(req.params.id);
   if (!table || isNaN(id)) return res.status(400).json({ error: 'Invalid reference delete request.' });
@@ -891,10 +977,25 @@ app.delete('/api/reference-data/:type/:id', authenticateToken, requireShopStaff,
   const item = await getRecord(`SELECT name FROM ${table} WHERE id = ?`, [id]);
   if (!item) return res.status(404).json({ error: 'Reference item not found.' });
 
-  await runTransaction(async (tx) => {
-    // Soft-delete: set is_active = FALSE
-    await tx.runQuery(`UPDATE ${table} SET is_active = FALSE WHERE id = ?`, [id]);
-  });
+  if (table === 'manufacturing_brands') {
+    const referenced = await getRecord(`
+      SELECT 
+        (SELECT COUNT(*) FROM products WHERE manufacturing_brand_id = ?) AS product_count,
+        (SELECT COUNT(*) FROM sales WHERE manufacturing_brand_id = ?) AS sale_count,
+        (SELECT COUNT(*) FROM inventory_batches WHERE manufacturing_brand_id = ?) AS batch_count
+    `, [id, id, id]);
+    const totalRefs = Number(referenced?.product_count || 0) + Number(referenced?.sale_count || 0) + Number(referenced?.batch_count || 0);
+    if (totalRefs > 0) {
+      return res.status(400).json({ error: 'This Manufacturing Brand is linked to existing products or transaction records. It cannot be permanently deleted. Mark it as Inactive instead.' });
+    }
+    await runTransaction(async (tx) => {
+      await tx.runQuery(`DELETE FROM ${table} WHERE id = ?`, [id]);
+    });
+  } else {
+    await runTransaction(async (tx) => {
+      await tx.runQuery(`UPDATE ${table} SET is_active = FALSE WHERE id = ?`, [id]);
+    });
+  }
 
   invalidateCache('reference-data');
   await audit(req, `Archived ${req.params.type.slice(0, -1)}`, req.params.type.slice(0, -1), id, item.name);
@@ -1024,7 +1125,9 @@ app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, 
   const officialPrice = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
   const rows = await allRecords(`
     SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category, p.model,
-      p.sale_price, p.retail_price, p.description, p.colours, p.updated_at
+      p.sale_price, p.retail_price, p.description, p.colours, p.updated_at,
+      p.company_brand_id, b.name AS company_brand_name,
+      p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
       ${officialPrice}${extraPrices},
       COALESCE(SUM(ib.quantity_remaining), 0) AS quantity,
       COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS owner_quantity,
@@ -1033,9 +1136,11 @@ app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, 
       MAX(ib.received_date) AS last_stocked_at,
       STRING_AGG(DISTINCT NULLIF(TRIM(ib.colour), ''), ', ') FILTER (WHERE NULLIF(TRIM(ib.colour), '') IS NOT NULL) AS stock_colours
     FROM products p
+    LEFT JOIN brands b ON b.id = p.company_brand_id
+    LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
     LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${scope.sql}
     WHERE p.is_active = 1 AND LOWER(TRIM(p.brand)) = LOWER(TRIM(?))
-    GROUP BY p.id
+    GROUP BY p.id, b.id, mb.id
     ORDER BY COALESCE(p.short_name, p.name)
   `, [...scope.params, brand]);
   res.json(rows);
@@ -1048,6 +1153,7 @@ const buildImportProductPayload = (row, rowNumber) => {
   const detectedBrand = detectBrandFromProductText(`${shortName} ${fullModelList} ${model}`);
   const brand = cleanImportText(getImportValue(row, ['brand', 'company', 'mobile_brand', 'mobile brand']), 120) || detectedBrand;
   const category = cleanImportText(getImportValue(row, ['category', 'product_category', 'product category', 'type']), 120) || 'Displays';
+  const manufacturing_brand = cleanImportText(getImportValue(row, ['manufacturing_brand', 'manufacturing brand', 'mfg_brand', 'mfg brand', 'maker']), 120);
   const colour = cleanImportText(getImportValue(row, ['colour', 'color', 'shade']), 120);
   const quantity = parseImportInteger(getImportValue(row, ['quantity', 'qty', 'stock', 'opening_stock', 'opening stock', 'pieces', 'pcs']), 0);
   const salePrice = parseImportNumber(getImportValue(row, ['sale_price', 'sale price', 'selling_price', 'selling price', 'retail_price', 'retail price', 'price', 'mrp']), null);
@@ -1072,6 +1178,7 @@ const buildImportProductPayload = (row, rowNumber) => {
     fullModelList,
     brand,
     category,
+    manufacturing_brand,
     model,
     colour,
     colours,
@@ -1108,7 +1215,8 @@ const resolveImportShopId = async (tx, req, row, fallbackShopId, rowNumber, need
 const findImportProduct = async (tx, payload) => tx.getRecord(`
   SELECT * FROM products
   WHERE is_active = 1
-    AND LOWER(TRIM(brand)) = LOWER(TRIM(?))
+    AND company_brand_id = ?
+    AND manufacturing_brand_id = ?
     AND (
       LOWER(TRIM(short_name)) = LOWER(TRIM(?))
       OR LOWER(TRIM(name)) = LOWER(TRIM(?))
@@ -1116,7 +1224,7 @@ const findImportProduct = async (tx, payload) => tx.getRecord(`
       OR (? <> '' AND LOWER(TRIM(model)) = LOWER(TRIM(?)))
     )
   ORDER BY id LIMIT 1
-`, [payload.brand, payload.shortName, payload.shortName, payload.fullModelList, payload.model, payload.model]);
+`, [payload.company_brand_id, payload.manufacturing_brand_id, payload.shortName, payload.shortName, payload.fullModelList, payload.model || '', payload.model || '']);
 
 const handleGetBrands = async (req, res) => {
   try {
@@ -1147,7 +1255,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const isShopkeeper = req.user.role === 'shopkeeper' || req.user.role === 'admin' || req.user.role === 'shop_staff';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
 
-  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id } = req.body;
+  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id } = req.body;
 
   // Shopkeepers and Superadmins can update selling price (sale_price). Cost and wholesale are superadmin only.
   const targetSalePrice = sale_price ?? retail_price;
@@ -1157,6 +1265,32 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;
 
   try {
+    const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [productId]);
+    if (!oldProduct) return res.status(404).json({ error: 'Product not found.' });
+
+    const brandRef = brand ? await ensureReference('brands', brand) : null;
+    const companyBrandId = brandRef ? brandRef.id : oldProduct.company_brand_id;
+    const targetMfgBrandId = manufacturing_brand_id !== undefined ? manufacturing_brand_id : oldProduct.manufacturing_brand_id;
+
+    if (targetMfgBrandId) {
+      const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ?', [targetMfgBrandId]);
+      if (!mfgBrand) return res.status(400).json({ error: 'Selected manufacturing brand is invalid.' });
+    }
+
+    // Check duplicate
+    const duplicate = await getRecord(
+      `SELECT id FROM products 
+       WHERE company_brand_id = ? 
+         AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
+         AND manufacturing_brand_id = ?
+         AND is_active = 1
+         AND id <> ?`,
+      [companyBrandId || null, model !== undefined ? (model || '') : (oldProduct.model || ''), targetMfgBrandId, productId]
+    );
+    if (duplicate) {
+      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, and Manufacturing Brand already exists.' });
+    }
+
     await runTransaction(async (tx) => {
       await tx.execute(`
         UPDATE products SET
@@ -1173,6 +1307,8 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           official_price = COALESCE(?, official_price),
           description = COALESCE(?, description),
           colours = COALESCE(?, colours),
+          company_brand_id = COALESCE(?, company_brand_id),
+          manufacturing_brand_id = COALESCE(?, manufacturing_brand_id),
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `, [
@@ -1189,6 +1325,8 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         newOfficialPrice,
         description || null,
         colours || null,
+        companyBrandId,
+        targetMfgBrandId,
         productId
       ]);
 
@@ -1240,6 +1378,19 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
         const shopId = await resolveImportShopId(tx, req, row, req.body.shop_id || req.body.shopId, rowNumber, payload.quantity > 0);
         const categoryRef = await ensureReferenceInTransaction(tx, 'categories', payload.category);
         const brandRef = await ensureReferenceInTransaction(tx, 'brands', payload.brand);
+        const companyBrandId = brandRef ? brandRef.id : null;
+
+        let mfgBrandId = null;
+        if (payload.manufacturing_brand) {
+          const mfgRef = await ensureReferenceInTransaction(tx, 'manufacturing_brands', payload.manufacturing_brand);
+          mfgBrandId = mfgRef ? mfgRef.id : null;
+        } else if (req.body.default_manufacturing_brand_id) {
+          mfgBrandId = Number(req.body.default_manufacturing_brand_id);
+        } else {
+          const unknownMfgBrand = await tx.getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
+          mfgBrandId = unknownMfgBrand ? unknownMfgBrand.id : 1;
+        }
+
         const canonicalColours = [];
         for (const colour of payload.colours) {
           const colourRef = await ensureReferenceInTransaction(tx, 'colours', colour);
@@ -1248,7 +1399,7 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
 
         const canonicalBrand = brandRef?.name || payload.brand;
         const canonicalCategory = categoryRef?.name || payload.category;
-        const productPayload = { ...payload, brand: canonicalBrand, category: canonicalCategory, colours: canonicalColours };
+        const productPayload = { ...payload, brand: canonicalBrand, category: canonicalCategory, colours: canonicalColours, company_brand_id: companyBrandId, manufacturing_brand_id: mfgBrandId };
         const existing = await findImportProduct(tx, productPayload);
         let productId = existing?.id;
         const existingSalePrice = parseImportNumber(existing?.sale_price ?? existing?.official_price ?? existing?.retail_price, null);
@@ -1260,12 +1411,13 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
             `UPDATE products SET
               name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, model = ?,
               official_price = ?, purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
-              description = ?, colours = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+              description = ?, colours = ?, is_active = 1, company_brand_id = ?, manufacturing_brand_id = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?`,
             [
               productPayload.fullModelList, productPayload.shortName, productPayload.fullModelList, canonicalBrand, canonicalCategory, productPayload.model,
               salePrice, productPayload.purchasePrice ?? existing.purchase_price, salePrice, productPayload.wholesalePrice ?? existing.wholesale_price,
-              salePrice, productPayload.description || existing.description || '', canonicalColours.length ? canonicalColours : existing.colours || [], productId,
+              salePrice, productPayload.description || existing.description || '', canonicalColours.length ? canonicalColours : existing.colours || [], 
+              companyBrandId, mfgBrandId, productId,
             ]
           );
           updatedProductIds.add(Number(productId));
@@ -1273,11 +1425,13 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
           const inserted = await tx.runQuery(
             `INSERT INTO products (
               name, short_name, full_model_list, brand, category, model, official_price,
-              purchase_price, sale_price, wholesale_price, retail_price, description, colours
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              purchase_price, sale_price, wholesale_price, retail_price, description, colours,
+              company_brand_id, manufacturing_brand_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               productPayload.fullModelList, productPayload.shortName, productPayload.fullModelList, canonicalBrand, canonicalCategory, productPayload.model,
               salePrice, productPayload.purchasePrice, salePrice, productPayload.wholesalePrice, salePrice, productPayload.description, canonicalColours,
+              companyBrandId, mfgBrandId
             ]
           );
           productId = inserted.id;
@@ -1293,13 +1447,13 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
           await tx.runQuery(
             `INSERT INTO inventory_batches (
               shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
-              colour, quantity_received, quantity_remaining, received_date, notes, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               shopId, productId, isShopStaffRole(req.user.role) ? req.user.id : null,
               productPayload.purchasePrice ?? existing?.purchase_price, productPayload.wholesalePrice ?? existing?.wholesale_price,
               salePrice, salePrice, productPayload.colour || null, payload.quantity, payload.quantity,
-              productPayload.receivedDate, productPayload.description || 'CSV stock import', req.user.id,
+              productPayload.receivedDate, productPayload.description || 'CSV stock import', req.user.id, mfgBrandId,
             ]
           );
           await syncStockFromBatches(tx, shopId, productId);
@@ -1327,52 +1481,88 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   const {
     name, short_name, full_model_list, brand, category, model, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours,
+    manufacturing_brand_id
   } = req.body;
   let compatibilityModels = String(full_model_list || name || '').trim();
   const displayName = String(short_name || compatibilityModels).trim();
   if (!compatibilityModels) compatibilityModels = displayName;
   
+  if (!displayName) {
+    return res.status(400).json({ error: 'Short name is required.' });
+  }
+
   const parsePrice = (val, fallback = null) => {
     if (val === '' || val === null || val === undefined) return fallback;
     const num = Number(val);
     return isNaN(num) ? fallback : num;
   };
   
-  const salePriceNum = Number(sale_price ?? official_price);
-  if (!displayName || !brand || !category || isNaN(salePriceNum) || salePriceNum <= 0) {
-    return res.status(400).json({ error: 'Short name, brand, category and a valid sale price are required.' });
+  const effectiveBrand = String(brand || '').trim() || 'Generic';
+  const effectiveCategory = String(category || '').trim() || 'Other';
+  
+  let effectiveMfgBrandId = manufacturing_brand_id ? Number(manufacturing_brand_id) : null;
+  if (!effectiveMfgBrandId) {
+    const unknownMfg = await getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
+    if (unknownMfg) {
+      effectiveMfgBrandId = unknownMfg.id;
+    }
   }
 
+  const salePriceNum = sale_price !== undefined && sale_price !== '' && sale_price !== null ? Number(sale_price) : 0;
   const purchasePriceNum = parsePrice(purchase_price, null);
   const wholesalePriceNum = parsePrice(wholesale_price, null);
   const officialPriceNum = salePriceNum;
   const retailPriceNum = salePriceNum;
 
-  const categoryRef = await ensureReference('categories', category);
-  const brandRef = await ensureReference('brands', brand);
+  const categoryRef = await ensureReference('categories', effectiveCategory);
+  const brandRef = await ensureReference('brands', effectiveBrand);
+  
+  if (effectiveMfgBrandId) {
+    const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ? AND is_active = TRUE', [effectiveMfgBrandId]);
+    if (!mfgBrand) {
+      return res.status(400).json({ error: 'Selected manufacturing brand is invalid or inactive.' });
+    }
+  }
+
   const canonicalColours = [];
   for (const colour of normalizeColours(colours)) {
     const colRef = await ensureReference('colours', colour);
     if (colRef) canonicalColours.push(colRef.name);
   }
-  const canonicalBrand = brandRef ? brandRef.name : brand.trim();
-  const canonicalCategory = categoryRef ? categoryRef.name : category.trim();
+  const canonicalBrand = brandRef ? brandRef.name : effectiveBrand.trim();
+  const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
+  const companyBrandId = brandRef ? brandRef.id : null;
+
+  // Check duplicate
+  const duplicate = await getRecord(
+    `SELECT id FROM products 
+     WHERE company_brand_id = ? 
+       AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
+       AND manufacturing_brand_id = ?
+       AND is_active = 1`,
+    [companyBrandId, model || '', effectiveMfgBrandId]
+  );
+  if (duplicate) {
+    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, and Manufacturing Brand already exists.' });
+  }
 
   const result = await runQuery(
     `INSERT INTO products (
       name, short_name, full_model_list, brand, category, model, official_price,
-      purchase_price, sale_price, wholesale_price, retail_price, description, colours
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      purchase_price, sale_price, wholesale_price, retail_price, description, colours,
+      company_brand_id, manufacturing_brand_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, model || '', officialPriceNum,
       purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
+      companyBrandId, effectiveMfgBrandId
     ]
   );
   const shops = await allRecords('SELECT id FROM shops');
   for (const shop of shops) {
     await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, 0) ON CONFLICT(shop_id, product_id) DO NOTHING', [shop.id, result.id]);
   }
-  await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${official_price}`);
+  await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
   res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
 });
 
@@ -1382,10 +1572,15 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
   const {
     name, short_name, full_model_list, brand, category, model, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
+    manufacturing_brand_id
   } = req.body;
   let compatibilityModels = String(full_model_list || name || '').trim();
   const displayName = String(short_name || compatibilityModels).trim();
   if (!compatibilityModels) compatibilityModels = displayName;
+
+  if (!displayName) {
+    return res.status(400).json({ error: 'Short name is required.' });
+  }
 
   const parsePrice = (val, fallback = null) => {
     if (val === '' || val === null || val === undefined) return fallback;
@@ -1393,38 +1588,67 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     return isNaN(num) ? fallback : num;
   };
   
-  const salePriceNum = Number(sale_price ?? official_price);
-  if (!displayName || !brand || !category || isNaN(salePriceNum) || salePriceNum <= 0) {
-    return res.status(400).json({ error: 'Short name, brand, category and a valid sale price are required.' });
+  const effectiveBrand = String(brand || '').trim() || 'Generic';
+  const effectiveCategory = String(category || '').trim() || 'Other';
+  
+  let effectiveMfgBrandId = manufacturing_brand_id ? Number(manufacturing_brand_id) : null;
+  if (!effectiveMfgBrandId && manufacturing_brand_id === '') {
+    const unknownMfg = await getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
+    if (unknownMfg) {
+      effectiveMfgBrandId = unknownMfg.id;
+    }
   }
 
+  const salePriceNum = sale_price !== undefined && sale_price !== '' && sale_price !== null ? Number(sale_price) : 0;
   const purchasePriceNum = parsePrice(purchase_price, null);
   const wholesalePriceNum = parsePrice(wholesale_price, null);
   const officialPriceNum = salePriceNum;
   const retailPriceNum = salePriceNum;
 
-  const categoryRef = await ensureReference('categories', category);
-  const brandRef = await ensureReference('brands', brand);
+  const categoryRef = await ensureReference('categories', effectiveCategory);
+  const brandRef = await ensureReference('brands', effectiveBrand);
   const canonicalColours = [];
   for (const colour of normalizeColours(colours)) {
     const colRef = await ensureReference('colours', colour);
     if (colRef) canonicalColours.push(colRef.name);
   }
-  const canonicalBrand = brandRef ? brandRef.name : brand.trim();
-  const canonicalCategory = categoryRef ? categoryRef.name : category.trim();
+  const canonicalBrand = brandRef ? brandRef.name : effectiveBrand.trim();
+  const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
+  const companyBrandId = brandRef ? brandRef.id : oldProduct.company_brand_id;
+  const targetMfgBrandId = effectiveMfgBrandId !== null ? effectiveMfgBrandId : oldProduct.manufacturing_brand_id;
+
+  if (targetMfgBrandId) {
+    const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ?', [targetMfgBrandId]);
+    if (!mfgBrand) return res.status(400).json({ error: 'Selected manufacturing brand is invalid.' });
+  }
+
+  // Check duplicate
+  const duplicate = await getRecord(
+    `SELECT id FROM products 
+     WHERE company_brand_id = ? 
+       AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
+       AND manufacturing_brand_id = ?
+       AND is_active = 1
+       AND id <> ?`,
+    [companyBrandId, model !== undefined ? (model || '') : (oldProduct.model || ''), targetMfgBrandId, req.params.id]
+  );
+  if (duplicate) {
+    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, and Manufacturing Brand already exists.' });
+  }
 
   await runQuery(
     `UPDATE products SET
       name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, model = ?, official_price = ?,
       purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
-      description = ?, colours = ?, is_active = ?, updated_at = CURRENT_TIMESTAMP
+      description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
     [
       compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, model || '', officialPriceNum,
-      purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours, is_active, req.params.id,
+      purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours, is_active,
+      companyBrandId, targetMfgBrandId, req.params.id,
     ]
   );
-  await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${official_price}`);
+  await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${officialPriceNum}`);
   res.json({ success: true });
 });
 
@@ -1588,8 +1812,10 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
       FROM inventory_batches ib
       JOIN products p ON p.id = ib.product_id
       JOIN shops sh ON sh.id = ib.shop_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
       WHERE ${where.length ? where.join(' AND ') : '1 = 1'}
-      GROUP BY ib.shop_id, sh.id, p.id
+      GROUP BY ib.shop_id, sh.id, p.id, b.id, mb.id
       ${having.length ? `HAVING ${having.join(' AND ')}` : ''}
     `;
     const params = whereParams;
@@ -1602,7 +1828,8 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     const rows = await runPaginatedList({
       dataSql: `
       SELECT MIN(ib.id) AS id, ib.shop_id, sh.name AS shop_name, sh.location_type, p.id AS product_id, p.name, p.short_name, p.full_model_list,
-        p.brand, p.category, p.model, p.sale_price, p.retail_price, p.description, p.colours
+        p.brand, p.category, p.model, p.sale_price, p.retail_price, p.description, p.colours,
+        p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
         ${officialPrice}${extraPrices},
         ${stockQuantitySql} AS quantity,
         COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS owner_quantity,
@@ -1688,16 +1915,16 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
       );
       let delta = stockQuantity - Number(current?.quantity || 0);
       if (delta > 0) {
-        const product = await tx.getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price FROM products WHERE id = ?', [product_id]);
+        const product = await tx.getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price, manufacturing_brand_id FROM products WHERE id = ?', [product_id]);
         await tx.runQuery(
           `INSERT INTO inventory_batches (
             shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
-            colour, quantity_received, quantity_remaining, received_date, notes, created_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
             official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
-            delta, delta, received_date || today(), notes || 'Stock quantity increase', req.user.id,
+            delta, delta, received_date || today(), notes || 'Stock quantity increase', req.user.id, product?.manufacturing_brand_id,
           ]
         );
       } else if (delta < 0) {
@@ -1799,13 +2026,16 @@ app.get('/api/inventory-batches', authenticateToken, requireShopStaff, async (re
       JOIN products p ON p.id = ib.product_id
       JOIN shops sh ON sh.id = ib.shop_id
       LEFT JOIN users u ON u.id = ib.assigned_user_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = ib.manufacturing_brand_id
       WHERE ${where.length ? where.join(' AND ') : '1 = 1'}
     `;
     const rows = await runPaginatedList({
       dataSql: `
       SELECT ib.id, ib.shop_id, ib.product_id, ib.assigned_user_id, ${costs}${official}
         ib.retail_price, ib.colour, ib.quantity_received, ib.quantity_remaining, ib.received_date, ib.notes, ib.created_at,
-        p.name, p.short_name, p.full_model_list, p.brand, p.category, sh.name AS shop_name, sh.location_type, u.name AS assigned_user_name
+        p.name, p.short_name, p.full_model_list, p.brand, p.category, sh.name AS shop_name, sh.location_type, u.name AS assigned_user_name,
+        p.company_brand_id, b.name AS company_brand_name, ib.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
       ${baseSql}
       ORDER BY p.brand, COALESCE(p.short_name, p.name), ib.received_date, ib.id
     `,
@@ -1837,7 +2067,7 @@ app.post('/api/inventory-batches', authenticateToken, requireShopStaff, async (r
       if (!assigned) return res.status(400).json({ error: 'Assigned shopkeeper must belong to the selected shop.' });
     }
     const result = await runTransaction(async (tx) => {
-      const product = await tx.getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price FROM products WHERE id = ?', [product_id]);
+      const product = await tx.getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price, manufacturing_brand_id FROM products WHERE id = ?', [product_id]);
       if (!product) {
         const error = new Error('Product not found.');
         error.status = 404;
@@ -1846,12 +2076,12 @@ app.post('/api/inventory-batches', authenticateToken, requireShopStaff, async (r
       const inserted = await tx.runQuery(
         `INSERT INTO inventory_batches (
           shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
-          colour, quantity_received, quantity_remaining, received_date, notes, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           shopId, product_id, effectiveAssignedUserId, purchase_price ?? product.purchase_price, wholesale_price ?? product.wholesale_price,
           official_price ?? product.official_price, retail_price ?? product.retail_price, colour || null,
-          batchQuantity, batchQuantity, received_date || today(), notes || '', req.user.id,
+          batchQuantity, batchQuantity, received_date || today(), notes || '', req.user.id, product.manufacturing_brand_id,
         ]
       );
       await syncStockFromBatches(tx, shopId, product_id);
@@ -1983,13 +2213,16 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     JOIN products p ON p.id = sa.product_id
     JOIN shops sh ON sh.id = sa.shop_id
     LEFT JOIN customers c ON c.id = sa.customer_id
+    LEFT JOIN brands b ON b.id = p.company_brand_id
+    LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
     WHERE ${where.join(' AND ')}
   `;
   const rows = await runPaginatedList({
     dataSql: `
     SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address,
-      sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+      sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
+      p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
     ${baseSql}
     ORDER BY sa.id DESC
   `,
@@ -2025,11 +2258,14 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
     let query = `
       SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
         c.name AS customer_name, c.mobile, c.address,
-        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
+        p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
       FROM sales sa
       JOIN products p ON p.id = sa.product_id
       JOIN customers c ON c.id = sa.customer_id
       JOIN shops sh ON sh.id = sa.shop_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
       WHERE sa.shop_id = ? AND c.mobile = ?
     `;
     if (isShopStaffRole(req.user.role)) {
@@ -2089,7 +2325,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           error.status = 400;
           throw error;
         }
-        const product = await tx.getRecord('SELECT short_name, name, sale_price, wholesale_price FROM products WHERE id = ?', [item.product_id]);
+        const product = await tx.getRecord('SELECT short_name, name, sale_price, wholesale_price, manufacturing_brand_id FROM products WHERE id = ?', [item.product_id]);
         const unitPrice = money(item.price_type === 'wholesale' ? product?.wholesale_price : product?.sale_price);
         if (!product || unitPrice <= 0) {
           const error = new Error(`${item.price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price is not set for ${product?.short_name || product?.name || 'this product'}.`);
@@ -2141,8 +2377,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         const pending = Math.max(item.saleTotal - itemPaid, 0);
         totalPending += pending;
         const insertResult = await tx.runQuery(
-          'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [shopId, item.product_id, customer_id, item.saleQuantity, item.saleTotal, itemPaid, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id, payment_mode, item.price_type]
+          'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type, manufacturing_brand_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [shopId, item.product_id, customer_id, item.saleQuantity, item.saleTotal, itemPaid, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id, payment_mode, item.price_type, product.manufacturing_brand_id]
         );
         saleIds.push(insertResult.id);
         let remaining = item.saleQuantity;
@@ -2531,13 +2767,17 @@ app.get('/api/catalog', async (req, res) => {
   const querySql = `
     SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category,
       p.retail_price, p.description, p.colours,
+      p.company_brand_id, b.name AS company_brand_name,
+      p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model,
       STRING_AGG(CASE WHEN st.quantity > 0 THEN sh.name || ' (' || st.quantity || ')' END, ', ') AS available_shops,
       COALESCE(SUM(st.quantity), 0) AS total_available
     FROM products p
+    LEFT JOIN brands b ON b.id = p.company_brand_id
+    LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
     LEFT JOIN stock st ON st.product_id = p.id ${shopId ? 'AND st.shop_id = ?' : ''}
     LEFT JOIN shops sh ON sh.id = st.shop_id
     WHERE ${where.join(' AND ')}
-    GROUP BY p.id
+    GROUP BY p.id, b.id, mb.id
     ORDER BY p.brand, COALESCE(p.short_name, p.name)
   `;
 
@@ -2562,8 +2802,14 @@ app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaf
           p.purchase_price,
           p.wholesale_price,
           p.sale_price,
-          p.retail_price
+          p.retail_price,
+          p.company_brand_id,
+          b.name AS company_brand_name,
+          p.manufacturing_brand_id,
+          mb.name AS manufacturing_brand_name
         FROM products p
+        LEFT JOIN brands b ON b.id = p.company_brand_id
+        LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
         WHERE p.is_active = 1
         ORDER BY p.brand, COALESCE(p.short_name, p.name)
       `);
@@ -2598,11 +2844,17 @@ app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaf
           sa.pending_amount,
           sa.payment_mode,
           sh.name AS shop_name,
-          sa.due_date
+          sa.due_date,
+          p.company_brand_id,
+          b.name AS company_brand_name,
+          sa.manufacturing_brand_id,
+          mb.name AS manufacturing_brand_name
         FROM sales sa
         JOIN products p ON p.id = sa.product_id
         JOIN customers c ON c.id = sa.customer_id
         JOIN shops sh ON sh.id = sa.shop_id
+        LEFT JOIN brands b ON b.id = p.company_brand_id
+        LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY sa.sale_date DESC, sa.id DESC
       `, params);
@@ -2690,10 +2942,16 @@ app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaf
           WHEN st.quantity = 0 THEN 'Out of Stock'
           WHEN st.quantity <= 3 THEN 'Low Stock'
           ELSE 'In Stock'
-        END AS stock_status
+        END AS stock_status,
+        p.company_brand_id,
+        b.name AS company_brand_name,
+        p.manufacturing_brand_id,
+        mb.name AS manufacturing_brand_name
       FROM stock st
       JOIN products p ON p.id = st.product_id
       JOIN shops sh ON sh.id = st.shop_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
       WHERE ${where.join(' AND ')}
       ORDER BY p.brand, COALESCE(p.short_name, p.name), sh.name
     `, params);
@@ -2740,11 +2998,15 @@ app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) =>
     FROM stock st
     JOIN products p ON p.id = st.product_id
     JOIN shops sh ON sh.id = st.shop_id
+    LEFT JOIN brands b ON b.id = p.company_brand_id
+    LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
     WHERE ${availabilityWhere.join(' AND ')}
   `;
   const availability = await runPaginatedList({
     dataSql: `
-    SELECT p.name, p.short_name, p.full_model_list, p.brand, sh.name AS shop_name, st.quantity
+    SELECT p.name, p.short_name, p.full_model_list, p.brand, sh.name AS shop_name, st.quantity,
+      p.company_brand_id, b.name AS company_brand_name,
+      p.manufacturing_brand_id, mb.name AS manufacturing_brand_name
     ${availabilityBaseSql}
     ORDER BY p.name, sh.name
   `,
@@ -2859,17 +3121,36 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
           );
         }
 
+        const brandRef = await ensureReferenceInTransaction(tx, 'brands', brand);
+        const companyBrandId = brandRef ? brandRef.id : null;
+
+        const rawMfgBrandName = String(item.manufacturing_brand || '').trim();
+        let mfgBrandId = null;
+        if (rawMfgBrandName) {
+          const mfgBrandRef = await ensureReferenceInTransaction(tx, 'manufacturing_brands', rawMfgBrandName);
+          mfgBrandId = mfgBrandRef ? mfgBrandRef.id : null;
+        } else if (req.body.default_manufacturing_brand_id) {
+          mfgBrandId = Number(req.body.default_manufacturing_brand_id);
+        } else {
+          const unknownMfgBrand = await tx.getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
+          mfgBrandId = unknownMfgBrand ? unknownMfgBrand.id : 1;
+        }
+
         // 2. Find or Create Product Catalog Entry
         let product = await tx.getRecord(
-          'SELECT id, sale_price, purchase_price, wholesale_price FROM products WHERE LOWER(TRIM(short_name)) = LOWER(TRIM(?)) OR LOWER(TRIM(name)) = LOWER(TRIM(?)) LIMIT 1',
-          [name, name]
+          `SELECT id, sale_price, purchase_price, wholesale_price FROM products 
+           WHERE company_brand_id = ? 
+             AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
+             AND manufacturing_brand_id = ? 
+             AND is_active = 1 LIMIT 1`,
+          [companyBrandId, item.model || '', mfgBrandId]
         );
 
         let productId;
         if (!product) {
           const insertRes = await tx.runQuery(
-            `INSERT INTO products (name, short_name, brand, category, full_model_list, purchase_price, wholesale_price, official_price, sale_price, description, colours)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO products (name, short_name, brand, category, full_model_list, purchase_price, wholesale_price, official_price, sale_price, description, colours, company_brand_id, manufacturing_brand_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               name,
               name,
@@ -2881,7 +3162,9 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
               officialPrice,
               retailPrice,
               `Imported item from supplier file ${fileName || ''}`,
-              colour ? [colour] : []
+              colour ? [colour] : [],
+              companyBrandId,
+              mfgBrandId
             ]
           );
           productId = insertRes.id;
@@ -2895,9 +3178,11 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
                 wholesale_price = COALESCE(NULLIF(?, 0), wholesale_price),
                 sale_price = COALESCE(NULLIF(?, 0), sale_price),
                 brand = COALESCE(NULLIF(?, 'Generic'), brand),
-                category = COALESCE(NULLIF(?, 'General'), category)
+                category = COALESCE(NULLIF(?, 'General'), category),
+                company_brand_id = COALESCE(?, company_brand_id),
+                manufacturing_brand_id = COALESCE(?, manufacturing_brand_id)
                WHERE id = ?`,
-              [purchasePrice, wholesalePrice, retailPrice, brand, category, productId]
+              [purchasePrice, wholesalePrice, retailPrice, brand, category, companyBrandId, mfgBrandId, productId]
             );
           }
         }
@@ -2906,8 +3191,8 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
         await tx.runQuery(
           `INSERT INTO inventory_batches (
             shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
-            colour, quantity_received, quantity_remaining, received_date, notes, source_key, created_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            colour, quantity_received, quantity_remaining, received_date, notes, source_key, created_by, manufacturing_brand_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT (source_key) DO NOTHING`,
           [
             shopId,
@@ -2923,7 +3208,8 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
             dateIn,
             notes,
             sourceKey,
-            userId
+            userId,
+            mfgBrandId
           ]
         );
 

@@ -42,6 +42,7 @@ import ModelsPage from './components/models/ModelsPage';
 import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import BrandsPage from './components/brands/BrandsPage';
+import ManufacturingBrandsPage from './components/manufacturing-brands/ManufacturingBrandsPage';
 import Pagination from './components/ui/Pagination';
 import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './components/ui/SkeletonLoader';
 import SearchInput from './components/ui/SearchInput';
@@ -49,13 +50,10 @@ import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
 
-const isVercelEnvironment = typeof window !== 'undefined' && (window.location.hostname.endsWith('vercel.app') || window.location.hostname === 'localhost');
+const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
-const productionApiBase = isVercelEnvironment ? '/api' : (configuredApiBase || '/api');
 const API_BASE = (
-  import.meta.env.PROD
-    ? productionApiBase
-    : configuredApiBase || '/api'
+  configuredApiBase || (isLocalhost ? 'http://localhost:5000/api' : '/api')
 ).replace(/\/$/, '');
 
 class ApiError extends Error {
@@ -151,6 +149,7 @@ const cleanReferenceData = (reference = {}) => ({
   categories: uniqueNamedItems(reference.categories),
   colours: uniqueNamedItems(reference.colours),
   brands: uniqueNamedItems(reference.brands),
+  manufacturingBrands: uniqueNamedItems(reference.manufacturingBrands),
 });
 const combineLowStockAlerts = (items = []) => {
   const combined = new Map();
@@ -237,6 +236,7 @@ const navByRole = {
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
     ['brands', 'Brands', Tags],
+    ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
@@ -253,6 +253,7 @@ const navByRole = {
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
     ['brands', 'Brands', Tags],
+    ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
@@ -273,13 +274,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'models', 'prices', 'categories'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'import', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'models', 'prices', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'models', 'prices', 'categories'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -320,6 +321,11 @@ const pageMetaById = {
     group: 'Inventory',
     title: 'Brands',
     description: 'Browse company cards and drill into every product grouped under that brand.',
+  },
+  'manufacturing-brands': {
+    group: 'Inventory',
+    title: 'Manufacturing Brands',
+    description: 'Browse LCD/display manufacturers (e.g. AS CARE, Kaiku, GX) and view stock statistics.',
   },
   models: {
     group: 'Inventory',
@@ -823,7 +829,7 @@ function App() {
         warehouse_quantity: 0,
       },
     },
-    reference: { categories: [], colours: [], brands: [] },
+    reference: { categories: [], colours: [], brands: [], manufacturingBrands: [] },
     priceVisibility: {
       show_official_price_shopkeeper: true,
       show_wholesale_price_shopkeeper: false,
@@ -3675,6 +3681,82 @@ function App() {
                     </motion.div>
                   </section>
                 </div>
+
+                {role === 'superadmin' && data.dashboard.mfgBrandStats && (
+                  <section className="panel mfg-brand-analytics" style={{ marginTop: '24px' }}>
+                    <div className="flex items-center justify-between mb-6">
+                      <div>
+                        <span className="stock-eyebrow">Manufacturing Insights</span>
+                        <h2>Manufacturing Brand Performance</h2>
+                        <p className="text-xs text-slate-500 font-medium mt-0.5">Distribution of catalog items, stock quantities, valuation and sales performance by manufacturer.</p>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                      
+                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
+                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4 flex items-center justify-between">
+                          <span>Stock Valuation</span>
+                          <span className="text-[10px] text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full font-bold">FIFO Cost</span>
+                        </h3>
+                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
+                          {data.dashboard.mfgBrandStats.stockAndValue?.length ? data.dashboard.mfgBrandStats.stockAndValue.map(item => (
+                            <div key={item.id} className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-700">{item.name}</span>
+                              <div className="text-right">
+                                <strong className="block text-slate-900">{currency(item.inventory_value)}</strong>
+                                <small className="text-slate-400 font-semibold">{item.stock_qty || 0} pcs</small>
+                              </div>
+                            </div>
+                          )) : <div className="text-slate-400 italic text-[11px] py-4">No active stock valuation</div>}
+                        </div>
+                      </div>
+
+                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
+                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4">Catalog Models</h3>
+                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
+                          {data.dashboard.mfgBrandStats.products?.length ? data.dashboard.mfgBrandStats.products.map(item => (
+                            <div key={item.id} className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-700">{item.name}</span>
+                              <span className="px-2 py-0.5 rounded-full bg-slate-100 font-extrabold text-[10px] text-slate-700">{item.products_count || 0} models</span>
+                            </div>
+                          )) : <div className="text-slate-400 italic text-[11px] py-4">No catalog models registered</div>}
+                        </div>
+                      </div>
+
+                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
+                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4 flex items-center justify-between">
+                          <span>Most Sold (Qty)</span>
+                          <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">Sales</span>
+                        </h3>
+                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
+                          {data.dashboard.mfgBrandStats.mostSold?.length ? data.dashboard.mfgBrandStats.mostSold.map(item => (
+                            <div key={item.id} className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-700">{item.name}</span>
+                              <span className="font-black text-emerald-650">{item.quantity_sold || 0} sold</span>
+                            </div>
+                          )) : <div className="text-slate-400 italic text-[11px] py-4">No sales recorded yet</div>}
+                        </div>
+                      </div>
+
+                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
+                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4 flex items-center justify-between">
+                          <span>Low Stock Models</span>
+                          <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-bold">Urgent</span>
+                        </h3>
+                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
+                          {data.dashboard.mfgBrandStats.lowStock?.length ? data.dashboard.mfgBrandStats.lowStock.map(item => (
+                            <div key={item.id} className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-700">{item.name}</span>
+                              <span className="font-extrabold text-amber-600">{item.low_stock_count || 0} items</span>
+                            </div>
+                          )) : <div className="text-slate-400 italic text-[11px] py-4">All models sufficiently stocked</div>}
+                        </div>
+                      </div>
+
+                    </div>
+                  </section>
+                )}
               </section>
             </PageWrapper>
           )}
@@ -3773,6 +3855,20 @@ function App() {
                 onAddReferenceOption={addReferenceOption}
                 onEditReferenceOption={editReferenceOption}
                 onDeleteReferenceOption={deleteReferenceOption}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'manufacturing-brands' && role !== 'customer' && (
+            <PageWrapper activeKey="manufacturing-brands" key="manufacturing-brands">
+              <ManufacturingBrandsPage
+                session={session}
+                setGlobalToast={showToast}
+                api={authedFetch}
+                data={data}
+                onBrandChange={loadCore}
+                currency={currency}
+                productName={productName}
               />
             </PageWrapper>
           )}

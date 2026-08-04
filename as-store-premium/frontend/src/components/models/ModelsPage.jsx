@@ -27,6 +27,7 @@ export default function ModelsPage({
       {title || 'No matching models found'}
     </div>
   ),
+  reference = { manufacturingBrands: [] },
 }) {
   const isSuperAdmin = role === 'superadmin';
   const isShopkeeper = role === 'shopkeeper' || role === 'admin';
@@ -93,6 +94,7 @@ export default function ModelsPage({
       purchase_price: product.purchase_price !== undefined && product.purchase_price !== null ? String(product.purchase_price) : '',
       full_model_list: product.full_model_list || product.model || '',
       description: product.description || '',
+      manufacturing_brand_id: product.manufacturing_brand_id !== undefined && product.manufacturing_brand_id !== null ? String(product.manufacturing_brand_id) : '',
     });
   };
 
@@ -177,6 +179,7 @@ export default function ModelsPage({
         purchase_price: editForm.purchase_price ? Number(editForm.purchase_price) : 0,
         full_model_list: editForm.full_model_list,
         description: editForm.description,
+        manufacturing_brand_id: editForm.manufacturing_brand_id ? Number(editForm.manufacturing_brand_id) : null,
       };
 
       if (api) {
@@ -194,6 +197,7 @@ export default function ModelsPage({
       }
 
       // Mutate local item properties for immediate UI reactivity
+      const mfgBrandObject = reference?.manufacturingBrands?.find(mb => Number(mb.id) === Number(payload.manufacturing_brand_id));
       Object.assign(editingProduct, {
         short_name: payload.short_name,
         name: payload.short_name,
@@ -204,6 +208,8 @@ export default function ModelsPage({
         purchase_price: payload.purchase_price,
         full_model_list: payload.full_model_list,
         description: payload.description,
+        manufacturing_brand_id: payload.manufacturing_brand_id,
+        manufacturing_brand_name: mfgBrandObject ? mfgBrandObject.name : editingProduct.manufacturing_brand_name,
       });
 
       if (setGlobalToast) setGlobalToast('Product details & pricing updated successfully', 'success');
@@ -316,9 +322,16 @@ export default function ModelsPage({
                     <span className="px-2.5 py-1 rounded-lg bg-cyan-50 text-cyan-700 border border-cyan-200/60 text-[11px] font-bold">
                       {product.category || 'General'}
                     </span>
-                    <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold">
-                      {product.brand || 'Generic'}
-                    </span>
+                    <div className="flex gap-1.5">
+                      <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold">
+                        {product.brand || 'Generic'}
+                      </span>
+                      {product.manufacturing_brand_name && (
+                        <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold">
+                          {product.manufacturing_brand_name}
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   <h3 className="text-base font-black text-slate-900 group-hover:text-cyan-700 transition-colors line-clamp-1">
@@ -428,9 +441,16 @@ export default function ModelsPage({
                   <tr key={product.id} className="hover:bg-slate-50/80 transition-colors">
                     <td className="p-4 font-bold text-slate-900">{productName(product)}</td>
                     <td className="p-4">
-                      <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold">
-                        {product.brand || 'Generic'}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold self-start">
+                          {product.brand || 'Generic'}
+                        </span>
+                        {product.manufacturing_brand_name && (
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold self-start">
+                            {product.manufacturing_brand_name}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="p-4">
                       <span className="px-2.5 py-1 rounded-lg bg-cyan-50 text-cyan-700 border border-cyan-200/60 font-bold">
@@ -503,7 +523,7 @@ export default function ModelsPage({
                   </div>
                   <div>
                     <h3 className="text-lg font-black text-slate-900">{productName(inspectProduct)}</h3>
-                    <p className="text-xs text-slate-500 font-semibold">{inspectProduct.brand || 'Generic'} · {inspectProduct.category || 'General'}</p>
+                    <p className="text-xs text-slate-500 font-semibold">{inspectProduct.brand || 'Generic'} · {inspectProduct.manufacturing_brand_name && `Mfg: ${inspectProduct.manufacturing_brand_name} · `}{inspectProduct.category || 'General'}</p>
                   </div>
                 </div>
                 <button onClick={() => setInspectProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
@@ -603,7 +623,7 @@ export default function ModelsPage({
               <div className="my-4 p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
                 <div>
                   <span className="font-extrabold text-slate-900 text-sm block">{productName(addStockProduct)}</span>
-                  <span className="text-slate-500 font-semibold">{addStockProduct.brand || 'Generic'} · {addStockProduct.category || 'General'}</span>
+                  <span className="text-slate-500 font-semibold">{addStockProduct.brand || 'Generic'} · {addStockProduct.manufacturing_brand_name && `Mfg: ${addStockProduct.manufacturing_brand_name} · `}{addStockProduct.category || 'General'}</span>
                 </div>
                 <span className="px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 font-black text-xs">
                   {priceLabel(addStockProduct.sale_price)}
@@ -830,6 +850,24 @@ export default function ModelsPage({
                       placeholder="e.g. iPhone 13, iPhone 13 Pro, A2633"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
                     />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
+                    <select
+                      value={editForm.manufacturing_brand_id}
+                      onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    >
+                      <option value="">Choose Manufacturing Brand</option>
+                      {(reference?.manufacturingBrands || [])
+                        .filter(mb => mb.is_active || String(mb.id) === String(editForm.manufacturing_brand_id))
+                        .map((mb) => (
+                          <option key={mb.id} value={mb.id}>{mb.name}</option>
+                        ))}
+                    </select>
                   </div>
                 </div>
 

@@ -428,21 +428,30 @@ export default function StockPage({
                     />
                   </div>
 
-                  {/* Grid 2: Brand and Category */}
+                   {/* Grid 2: Brand and Category */}
                   <div className="stock-product-grid stock-product-grid--taxonomy">
                     <Select 
-                      label="Mobile Brand" 
-                      required
+                      label="Brand" 
                       value={forms.product.brand} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, brand: v } }))} 
                       options={[['', 'Choose Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
                     />
                     <Select 
                       label="Product Category" 
-                      required
                       value={forms.product.category} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, category: v } }))} 
                       options={[['', 'Choose Category'], ...data.reference.categories.map(c => [c.name, c.name])]}
+                    />
+                    <Select 
+                      label="Manufacturing Brand" 
+                      value={forms.product.manufacturing_brand_id || ''} 
+                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, manufacturing_brand_id: v } }))} 
+                      options={[
+                        ['', 'Choose Manufacturing Brand'], 
+                        ...(data.reference.manufacturingBrands || [])
+                          .filter(mb => mb.is_active || String(mb.id) === String(forms.product.manufacturing_brand_id))
+                          .map(mb => [mb.id, mb.name])
+                      ]}
                     />
                   </div>
 
@@ -450,7 +459,6 @@ export default function StockPage({
                   <div className="stock-product-grid stock-product-grid--pricing">
                     <Input 
                       label="Selling / Retail Price (Sale)" 
-                      required
                       type="number" 
                       placeholder="₹0"
                       value={forms.product.sale_price} 
@@ -896,6 +904,9 @@ export default function StockPage({
                     )}
                     <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
                       <span style={{ padding: '2px 8px', background: '#f8fafc', color: '#475569', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #e2e8f0' }}>{item.brand || 'No brand'}</span>
+                      {item.manufacturing_brand_name && (
+                        <span style={{ padding: '2px 8px', background: '#f0fdf4', color: '#166534', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #bbf7d0' }}>Mfg: {item.manufacturing_brand_name}</span>
+                      )}
                       {!shopId && <span style={{ color: '#94a3b8', fontSize: '10.5px', fontWeight: '500' }}>· {item.shop_name}</span>}
                     </div>
                   </div>

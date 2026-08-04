@@ -8,7 +8,7 @@ import ExpandableText from '../shared/ExpandableText';
 export default function PricesPage({
   role,
   forms = { product: {} },
-  reference = { categories: [], colours: [], brands: [] },
+  reference = { categories: [], colours: [], brands: [], manufacturingBrands: [] },
   priceVisibility = {},
   newReference = {},
   editingProductId,
@@ -92,6 +92,18 @@ export default function PricesPage({
             onChange={(value) => value === '__new__' ? onNewReferenceChange({ type: 'categories', name: '' }) : onProductFieldChange('category', value)}
             options={[...(reference?.categories || []).map((item) => [item.name, item.name]), ['__new__', '+ Add New Category']]}
           />
+          <Select
+            label="Manufacturing Brand"
+            className="md:col-span-1"
+            value={productForm.manufacturing_brand_id || ''}
+            onChange={(value) => onProductFieldChange('manufacturing_brand_id', value)}
+            options={[
+              ['', 'Choose Manufacturing Brand'],
+              ...(reference?.manufacturingBrands || [])
+                .filter(mb => mb.is_active || String(mb.id) === String(productForm.manufacturing_brand_id))
+                .map((mb) => [mb.id, mb.name])
+            ]}
+          />
           {newReference.type === 'categories' && (
             <div className="inline-reference-control md:col-span-2">
               <Input label="New category" value={newReference.name} onChange={(name) => onNewReferenceChange({ type: 'categories', name })} />
@@ -154,7 +166,12 @@ export default function PricesPage({
             <div className="card-icon-wrapper indigo !mb-0">
               <IndianRupee size={18} />
             </div>
-            <span className="status-badge stock-ok">{product.category}</span>
+            <div className="flex gap-1">
+              <span className="status-badge stock-ok">{product.category}</span>
+              {product.manufacturing_brand_name && (
+                <span className="status-badge due !bg-emerald-50 !text-emerald-700 !border-emerald-200">Mfg: {product.manufacturing_brand_name}</span>
+              )}
+            </div>
           </div>
           <div className="price-product-copy">
             <h3 className="product-title" title={fullModelList(product)}>{productName(product)}</h3>
@@ -168,7 +185,7 @@ export default function PricesPage({
               emptyText="No compatible models listed"
               limit={92}
             />
-            <p className="text-xs text-slate-500">{product.brand}{product.colours?.length ? ` \u00b7 ${product.colours.join(', ')}` : ''}</p>
+            <p className="text-xs text-slate-500">{product.brand} {product.manufacturing_brand_name && `\u00b7 Mfg: ${product.manufacturing_brand_name}`}{product.colours?.length ? ` \u00b7 ${product.colours.join(', ')}` : ''}</p>
           </div>
           <div className="price-stack">
             <span><small>Sale</small><strong>{priceLabel(product.sale_price)}</strong></span>
