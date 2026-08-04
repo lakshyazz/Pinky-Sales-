@@ -2419,7 +2419,19 @@ function App() {
     };
 
     if (!payload.short_name) {
-      return showToast('Short display name is required');
+      showToast('Short display name is required');
+      setTimeout(() => {
+        const inputEl = Array.from(document.querySelectorAll('input')).find(
+          (el) => el.placeholder?.includes('iPhone 13 Battery Original') || 
+                  (el.labels && Array.from(el.labels).some(l => /Short display name/i.test(l.textContent))) ||
+                  (el.closest('label') && /Short display name/i.test(el.closest('label').textContent))
+        );
+        if (inputEl) {
+          inputEl.focus();
+          inputEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 50);
+      return;
     }
 
     if (!payload.full_model_list) {
