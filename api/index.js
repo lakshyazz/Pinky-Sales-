@@ -1,9 +1,5 @@
-let appPromise;
+import app from '../as-store-premium/backend/server.js';
 
-export default async function handler(req, res) {
-  if (!appPromise) {
-    appPromise = import('../as-store-premium/backend/server.js').then((m) => m.default || m);
-  }
-  const app = await appPromise;
+export default function handler(req, res) {
   return app(req, res);
 }

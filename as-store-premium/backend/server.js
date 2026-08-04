@@ -1570,6 +1570,8 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   }
   await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
   res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
+});
+
 app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
   try {
     const product = await getRecord(`
