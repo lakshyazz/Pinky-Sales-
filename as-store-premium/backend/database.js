@@ -111,6 +111,46 @@ const seedUser = async ({ username, password, role, name, contact = '', shopId =
 export const initDatabase = async () => {
   console.log('[Database] Connecting to PostgreSQL database on Supabase...');
   await pool.query('SELECT 1');
+
+  // Run schema migrations automatically on startup!
+  try {
+    const fs = await import('node:fs/promises');
+    const migrationsUrl = new URL('./migrations/', import.meta.url);
+    const files = (await fs.readdir(migrationsUrl))
+      .filter((file) => file.endsWith('.sql'))
+      .sort();
+      
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        name TEXT PRIMARY KEY,
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    for (const file of files) {
+      const applied = await pool.query('SELECT 1 FROM schema_migrations WHERE name = $1', [file]);
+      if (applied.rowCount) continue;
+      
+      const sql = await fs.readFile(new URL(`./migrations/${file}`, import.meta.url), 'utf8');
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(sql);
+        await client.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
+        await client.query('COMMIT');
+        console.log(`[Migration] Applied ${file}`);
+      } catch (error) {
+        await client.query('ROLLBACK');
+        console.warn(`[Migration] Warning on ${file}: ${error.message}`);
+        await pool.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
+      } finally {
+        client.release();
+      }
+    }
+  } catch (migErr) {
+    console.error('[Migration] Migration error on startup:', migErr);
+  }
+
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS stock_requests (
