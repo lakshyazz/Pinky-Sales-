@@ -74,7 +74,13 @@ const api = async (path, options = {}, token = '') => {
     },
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new ApiError(data.error || 'Something went wrong.', response.status);
+  if (!response.ok) {
+    const rawError = data.error || data.message || data;
+    const errorMessage = typeof rawError === 'string'
+      ? rawError
+      : rawError?.message || (typeof rawError === 'object' && Object.keys(rawError).length ? JSON.stringify(rawError) : '') || 'Something went wrong.';
+    throw new ApiError(errorMessage, response.status);
+  }
   return data;
 };
 
