@@ -3530,7 +3530,7 @@ function App() {
             </div>
           )}
           <div className="topbar-actions">
-            {role !== 'customer' && (
+            {role !== 'customer' && lowStockAlerts.length > 0 && (
               <button type="button" className="notification-button" onClick={() => setActivePage('stock')} title="View low stock alerts">
                 <AlertTriangle size={16} />
                 <span>{lowStockAlerts.length}</span>
