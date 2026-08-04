@@ -49,6 +49,7 @@ import SearchInput from './components/ui/SearchInput';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
+import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
 
 const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
@@ -3559,217 +3560,24 @@ function App() {
         <AnimatePresence mode="wait">
           {active === 'dashboard' && data.dashboard && (
             <PageWrapper activeKey="dashboard" key="dashboard">
-              <section className="space">
-                <div className="stats-grid">
-                  <StatCard
-                    icon={ShoppingBag}
-                    label="Sales"
-                    value={currency(data.dashboard.totals.today_sales)}
-                    helper="Today"
-                    tone="cyan"
-                    sparklineTone="green"
-                    trend={data.dashboard.trends?.sales || trendFromValue(data.dashboard.totals.today_sales)}
-                  />
-                  <StatCard
-                    icon={CreditCard}
-                    label="Pending"
-                    value={currency(data.dashboard.totals.pending_payments)}
-                    helper="Customer dues"
-                    tone="amber"
-                    sparklineTone="amber"
-                    trend={data.dashboard.trends?.pending || trendFromValue(data.dashboard.totals.pending_payments, 'pending')}
-                  />
-                  <StatCard
-                    icon={Package}
-                    label="Stock"
-                    value={data.dashboard.totals.total_stock}
-                    helper="Units"
-                    tone="green"
-                  />
-                  <StatCard
-                    icon={Building2}
-                    label="Warehouse"
-                    value={dashboardWarehouseStock}
-                    helper="Main units"
-                    tone="blue"
-                  />
-                  <StatCard
-                    icon={AlertTriangle}
-                    label="Low stock"
-                    value={lowStockAlerts.length}
-                    helper="Alert items"
-                    tone="amber"
-                  />
-                  <StatCard
-                    icon={Store}
-                    label="Shops"
-                    value={dashboardShopCount}
-                    helper="Locations"
-                    tone="cyan"
-                  />
-                </div>
-                <div className="two-col">
-                  <section className="panel performance-panel">
-                    <h2>Shop performance</h2>
-                    <motion.div 
-                      variants={listVariants}
-                      initial="hidden"
-                      whileInView="visible"
-                      viewport={{ once: true, margin: "-10px" }}
-                      className="performance-list"
-                    >
-                      {dashboardBranchPerformance.length ? dashboardBranchPerformance.map((shop) => (
-                        <motion.div 
-                          variants={itemVariants} 
-                          className="performance-item" 
-                          key={shop.id}
-                          whileHover={{ y: -2 }}
-                        >
-                          <div className="performance-shop-info">
-                            <div className="performance-shop-icon">
-                              <Store size={18} />
-                            </div>
-                            <div className="performance-shop-name">
-                              <b>{shop.name}</b>
-                              <small>{shop.area}</small>
-                            </div>
-                          </div>
-                          <div className="performance-metrics-grid">
-                            <div className="performance-metric">
-                              <span className="metric-label">Stock</span>
-                              <span className="metric-value">{shop.stock} pcs</span>
-                            </div>
-                            <div className="performance-metric">
-                              <span className="metric-label">Pending</span>
-                              <span className={`metric-value ${Number(shop.pending) > 0 ? 'text-rose-600 font-bold' : ''}`}>
-                                {currency(shop.pending)}
-                              </span>
-                            </div>
-                            <div className="performance-metric highlight">
-                              <span className="metric-label">Sales Today</span>
-                              <strong className="metric-value text-teal">
-                                {currency(shop.sales_today)}
-                              </strong>
-                            </div>
-                          </div>
-                        </motion.div>
-                      )) : <Empty title="No branch shops registered yet" />}
-                    </motion.div>
-                  </section>
-                  <section className="panel">
-                    <h2>Low stock alerts</h2>
-                    <motion.div 
-                      variants={listVariants}
-                      initial="hidden"
-                      whileInView="visible"
-                      viewport={{ once: true, margin: "-10px" }}
-                      className="alert-list"
-                    >
-                      {lowStockAlerts.length ? lowStockAlerts.map((item) => (
-                        <motion.div 
-                          variants={itemVariants} 
-                          className="alert-item" 
-                          key={item.id}
-                          whileHover={{ y: -2 }}
-                        >
-                          <div className="alert-item-info">
-                            <div className={`alert-item-icon ${item.quantity <= 1 ? 'critical' : 'warning'}`}>
-                              <AlertTriangle size={17} />
-                            </div>
-                            <div className="alert-item-details">
-                              <b className="clamp-title" title={item.product_name}>{productName(item)}</b>
-                              <small>{joinUniqueText([item.shop_name, item.brand], 'No brand')}</small>
-                              <button className="soft text-[10px] !min-h-[22px] !py-0.5 !px-2 mt-1 self-start font-bold" type="button" onClick={() => {
-                                const prod = data.products.find(p => Number(p.id) === Number(item.product_id));
-                                setSelectedProductDetails(prod || { ...item, id: item.product_id, name: item.product_name });
-                              }}>View Details</button>
-                            </div>
-                          </div>
-                          <span className={`alert-badge ${item.quantity <= 1 ? 'critical' : 'warning'}`}>
-                            {item.quantity} left
-                          </span>
-                        </motion.div>
-                      )) : <Empty title="No low stock items" />}
-                    </motion.div>
-                  </section>
-                </div>
-
-                {role === 'superadmin' && data.dashboard.mfgBrandStats && (
-                  <section className="panel mfg-brand-analytics" style={{ marginTop: '24px' }}>
-                    <div className="flex items-center justify-between mb-6">
-                      <div>
-                        <span className="stock-eyebrow">Manufacturing Insights</span>
-                        <h2>Manufacturing Brand Performance</h2>
-                        <p className="text-xs text-slate-500 font-medium mt-0.5">Distribution of catalog items, stock quantities, valuation and sales performance by manufacturer.</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                      
-                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
-                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4 flex items-center justify-between">
-                          <span>Stock Valuation</span>
-                          <span className="text-[10px] text-teal-600 bg-teal-50 px-2 py-0.5 rounded-full font-bold">FIFO Cost</span>
-                        </h3>
-                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
-                          {data.dashboard.mfgBrandStats.stockAndValue?.length ? data.dashboard.mfgBrandStats.stockAndValue.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs">
-                              <span className="font-bold text-slate-700">{item.name}</span>
-                              <div className="text-right">
-                                <strong className="block text-slate-900">{currency(item.inventory_value)}</strong>
-                                <small className="text-slate-400 font-semibold">{item.stock_qty || 0} pcs</small>
-                              </div>
-                            </div>
-                          )) : <div className="text-slate-400 italic text-[11px] py-4">No active stock valuation</div>}
-                        </div>
-                      </div>
-
-                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
-                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4">Catalog Models</h3>
-                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
-                          {data.dashboard.mfgBrandStats.products?.length ? data.dashboard.mfgBrandStats.products.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs">
-                              <span className="font-bold text-slate-700">{item.name}</span>
-                              <span className="px-2 py-0.5 rounded-full bg-slate-100 font-extrabold text-[10px] text-slate-700">{item.products_count || 0} models</span>
-                            </div>
-                          )) : <div className="text-slate-400 italic text-[11px] py-4">No catalog models registered</div>}
-                        </div>
-                      </div>
-
-                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
-                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4 flex items-center justify-between">
-                          <span>Most Sold (Qty)</span>
-                          <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full font-bold">Sales</span>
-                        </h3>
-                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
-                          {data.dashboard.mfgBrandStats.mostSold?.length ? data.dashboard.mfgBrandStats.mostSold.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs">
-                              <span className="font-bold text-slate-700">{item.name}</span>
-                              <span className="font-black text-emerald-650">{item.quantity_sold || 0} sold</span>
-                            </div>
-                          )) : <div className="text-slate-400 italic text-[11px] py-4">No sales recorded yet</div>}
-                        </div>
-                      </div>
-
-                      <div className="mfg-analytic-card panel" style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.05)', padding: '20px', borderRadius: '16px' }}>
-                        <h3 className="text-xs uppercase font-extrabold tracking-wider text-slate-400 mb-4 flex items-center justify-between">
-                          <span>Low Stock Models</span>
-                          <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-bold">Urgent</span>
-                        </h3>
-                        <div className="space-y-3.5 max-h-[220px] overflow-y-auto pr-1">
-                          {data.dashboard.mfgBrandStats.lowStock?.length ? data.dashboard.mfgBrandStats.lowStock.map(item => (
-                            <div key={item.id} className="flex justify-between items-center text-xs">
-                              <span className="font-bold text-slate-700">{item.name}</span>
-                              <span className="font-extrabold text-amber-600">{item.low_stock_count || 0} items</span>
-                            </div>
-                          )) : <div className="text-slate-400 italic text-[11px] py-4">All models sufficiently stocked</div>}
-                        </div>
-                      </div>
-
-                    </div>
-                  </section>
-                )}
-              </section>
+              <RedesignedDashboard
+                session={session}
+                role={role}
+                data={data}
+                dashboardWarehouseStock={dashboardWarehouseStock}
+                dashboardShopCount={dashboardShopCount}
+                lowStockAlerts={lowStockAlerts}
+                dashboardBranchPerformance={dashboardBranchPerformance}
+                currency={currency}
+                productName={productName}
+                joinUniqueText={joinUniqueText}
+                setSelectedProductDetails={setSelectedProductDetails}
+                setActivePage={setActivePage}
+                trendFromValue={trendFromValue}
+                onAddProduct={() => setActivePage('stock')}
+                onCreateSale={() => setActivePage('sales')}
+                onImportStock={() => setActivePage('supplier-import')}
+              />
             </PageWrapper>
           )}
 

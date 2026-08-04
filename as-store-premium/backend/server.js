@@ -1570,6 +1570,20 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   }
   await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
   res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
+app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
+  try {
+    const product = await getRecord(`
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      WHERE p.id = ?
+    `, [req.params.id]);
+    if (!product) return res.status(404).json({ error: 'Product not found.' });
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to fetch product.' });
+  }
 });
 
 app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, res) => {
