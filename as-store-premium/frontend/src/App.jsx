@@ -415,7 +415,7 @@ const initialForms = {
   product: {
     short_name: '', full_model_list: '', brand: '', category: 'Display', model: '',
     official_price: '', purchase_price: '', sale_price: '', wholesale_price: '', retail_price: '',
-    opening_stock: '', description: '', colours: '',
+    opening_stock: '', description: '', colours: '', manufacturing_brand_id: '',
   },
   stock: { product_id: '', quantity: '', colour: '' },
   customer: { name: '', mobile: '', address: '', notes: '' },
@@ -2400,27 +2400,34 @@ function App() {
   const submitProduct = async () => {
     const openingStock = forms.product.opening_stock === '' ? 0 : Number(forms.product.opening_stock);
     const openingStockLocationId = shopId || data.warehouse?.id;
-    const numericPrice = (value) => value === '' ? null : Number(value);
+    const numericPrice = (value) => value === '' || value === null || value === undefined ? null : Number(value);
     const payload = {
-      short_name: forms.product.short_name.trim(),
-      full_model_list: forms.product.full_model_list.trim(),
-      name: forms.product.full_model_list.trim(),
-      brand: forms.product.brand.trim(),
-      category: forms.product.category.trim(),
-      model: forms.product.model.trim(),
+      short_name: (forms.product.short_name || '').trim(),
+      full_model_list: (forms.product.full_model_list || '').trim(),
+      name: (forms.product.full_model_list || '').trim(),
+      brand: (forms.product.brand || '').trim(),
+      category: (forms.product.category || '').trim(),
+      model: (forms.product.model || '').trim(),
       official_price: numericPrice(forms.product.sale_price),
       purchase_price: numericPrice(forms.product.purchase_price),
       sale_price: numericPrice(forms.product.sale_price),
       wholesale_price: numericPrice(forms.product.wholesale_price),
       retail_price: numericPrice(forms.product.sale_price),
-      description: forms.product.description.trim(),
-      colours: forms.product.colours.split(',').map((colour) => colour.trim()).filter(Boolean),
+      description: (forms.product.description || '').trim(),
+      colours: (forms.product.colours || '').split(',').map((colour) => colour.trim()).filter(Boolean),
+      manufacturing_brand_id: forms.product.manufacturing_brand_id ? Number(forms.product.manufacturing_brand_id) : null,
     };
 
-    if (!payload.short_name || !payload.full_model_list || !payload.brand || !payload.category || !Number.isFinite(payload.sale_price) || payload.sale_price <= 0) {
-      return showToast('Enter short name, compatible models, brand, category, and a valid sale price');
+    if (!payload.short_name) {
+      return showToast('Short display name is required');
     }
-    const optionalPrices = [payload.purchase_price, payload.wholesale_price].filter((price) => price !== null);
+
+    if (!payload.full_model_list) {
+      payload.full_model_list = payload.short_name;
+      payload.name = payload.short_name;
+    }
+
+    const optionalPrices = [payload.purchase_price, payload.wholesale_price, payload.sale_price].filter((price) => price !== null);
     if (optionalPrices.some((price) => !Number.isFinite(price) || price < 0)) return showToast('All entered prices must be 0 or more');
     if (!Number.isInteger(openingStock) || openingStock < 0) {
       return showToast('Opening stock must be 0 or more');
@@ -2469,6 +2476,7 @@ function App() {
         opening_stock: '',
         description: product.description || '',
         colours: Array.isArray(product.colours) ? product.colours.join(', ') : '',
+        manufacturing_brand_id: product.manufacturing_brand_id || '',
       },
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
