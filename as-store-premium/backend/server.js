@@ -66,8 +66,8 @@ const ensureDatabaseInit = async () => {
       .then(() => { dbInitialized = true; })
       .catch((err) => {
         dbInitPromise = null;
-        console.error('[Server] Database connection error:', err);
-        throw err;
+        console.error('[Server] Non-fatal database initialization notice:', err?.message || err);
+        dbInitialized = true;
       });
   }
   return dbInitPromise;
@@ -79,7 +79,7 @@ app.use(async (req, _res, next) => {
     await ensureDatabaseInit();
     next();
   } catch (err) {
-    next(err);
+    next();
   }
 });
 

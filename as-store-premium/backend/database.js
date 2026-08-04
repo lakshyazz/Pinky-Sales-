@@ -14,9 +14,12 @@ const rawConnectionString =
   process.env.STORAGE_PRISMA_URL ||
   process.env.SUPABASE_POSTGRES_URL ||
   process.env.SUPABASE_URL ||
-  'postgres://postgres.hnntlrycgywhstbqqmfo:J3H14Vo7XVbdXPNx@aws-0-us-east-1.pooler.supabase.com:5432/postgres';
+  'postgres://postgres.hnntlrycgywhstbqqmfo:J3H14Vo7XVbdXPNx@aws-0-us-east-1.pooler.supabase.com:6543/postgres';
 
-const connectionString = rawConnectionString ? rawConnectionString.replace(/([?&])sslmode=[^&]*(&?)/gi, '$1').replace(/\?$/, '') : '';
+let connectionString = rawConnectionString ? rawConnectionString.replace(/([?&])sslmode=[^&]*(&?)/gi, '$1').replace(/\?$/, '') : '';
+if (connectionString.includes('pooler.supabase.com:5432')) {
+  connectionString = connectionString.replace('pooler.supabase.com:5432', 'pooler.supabase.com:6543');
+}
 
 if (!connectionString) {
   throw new Error('Database connection URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables.');
@@ -25,10 +28,10 @@ if (!connectionString) {
 const pool = new Pool({
   connectionString,
   ssl: { rejectUnauthorized: false },
-  max: Number(process.env.PG_POOL_MAX || 5),
+  max: Number(process.env.PG_POOL_MAX || (process.env.VERCEL === '1' ? 3 : 10)),
   idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 10_000,
-  query_timeout: 20_000,
+  connectionTimeoutMillis: 15_000,
+  query_timeout: 25_000,
   keepAlive: true,
 });
 
