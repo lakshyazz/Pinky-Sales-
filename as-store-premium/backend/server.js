@@ -47,8 +47,13 @@ const wrapRouteHandler = (handler) => {
   };
 });
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
+app.get('/api/health', async (_req, res) => {
+  try {
+    const dbInfo = await getRecord("SELECT current_database() AS db, current_user AS usr");
+    res.json({ status: 'ok', database: dbInfo?.db, user: dbInfo?.usr });
+  } catch (err) {
+    res.json({ status: 'error', error: err.message });
+  }
 });
 
 let dbInitialized = false;
