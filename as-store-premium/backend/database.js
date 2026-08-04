@@ -115,6 +115,10 @@ export const initDatabase = async () => {
   console.log('[Database] Connecting to PostgreSQL database on Supabase...');
   await pool.query('SELECT 1');
 
+  if (process.env.VERCEL === '1') {
+    return;
+  }
+
   // Run schema migrations automatically on startup!
   try {
     const fs = await import('node:fs/promises');
