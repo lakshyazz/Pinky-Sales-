@@ -922,6 +922,7 @@ app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async
   
   const reference = await ensureReference(table, name);
   const singularType = { categories: 'category', colours: 'colour', brands: 'brand', 'manufacturing-brands': 'manufacturing_brand' }[req.params.type];
+  invalidateCache('reference-data');
   await audit(req, `Added ${singularType}`, singularType, reference.id, reference.name);
   res.status(201).json(reference);
 });
