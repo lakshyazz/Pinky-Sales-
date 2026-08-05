@@ -820,6 +820,7 @@ function App() {
     shopkeepers: [],
     products: [],
     brandSummary: [],
+    manufacturingBrandSummary: [],
     stock: [],
     customers: [],
     sales: [],
@@ -895,6 +896,7 @@ function App() {
   const [productPageLoading, setProductPageLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState({
     brands: false,
+    'manufacturing-brands': false,
     stock: false,
     customers: false,
     sales: false,
@@ -1260,6 +1262,20 @@ function App() {
     }
   };
 
+  const loadManufacturingBrandsPage = async (currentShop = shopId) => {
+    setPageLoading((prev) => ({ ...prev, 'manufacturing-brands': true }));
+    try {
+      const params = scopedParams(currentShop);
+      const query = params.toString();
+      const response = await authedFetch(`/manufacturing-brands${query ? `?${query}` : ''}`).catch(() => []);
+      setData((prev) => ({ ...prev, manufacturingBrandSummary: response || [] }));
+    } catch (error) {
+      console.warn('Unable to load manufacturing brands summary', error);
+    } finally {
+      setPageLoading((prev) => ({ ...prev, 'manufacturing-brands': false }));
+    }
+  };
+
   const selectBrand = async (brand) => {
     const cleanBrand = String(brand || '').trim();
     setSelectedBrand(cleanBrand);
@@ -1495,6 +1511,7 @@ function App() {
         });
       }
       if (tab === 'brands') await loadBrandsPage(currentShop);
+      if (tab === 'manufacturing-brands') await loadManufacturingBrandsPage(currentShop);
       if (tab === 'customers') {
         const dependencyParams = scopedParams(currentShop);
         dependencyParams.set('page', '1');
@@ -3677,6 +3694,8 @@ function App() {
                 setGlobalToast={showToast}
                 api={authedFetch}
                 data={data}
+                brands={data.brandSummary}
+                loading={pageLoading.brands}
                 onBrandChange={loadCore}
                 currency={currency}
                 productName={productName}
@@ -3694,6 +3713,8 @@ function App() {
                 setGlobalToast={showToast}
                 api={authedFetch}
                 data={data}
+                brands={data.manufacturingBrandSummary}
+                loading={pageLoading['manufacturing-brands']}
                 onBrandChange={loadCore}
                 currency={currency}
                 productName={productName}

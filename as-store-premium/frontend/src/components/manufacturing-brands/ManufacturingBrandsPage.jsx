@@ -18,6 +18,7 @@ export default function ManufacturingBrandsPage({
   onBrandChange,
   currency = formatCurrency,
   productName = (p) => p?.name || p?.short_name || p?.product_name || 'Product',
+  brands: propBrands,
   products: propProducts,
   search: propSearch = '',
   loading = false,
@@ -106,10 +107,23 @@ export default function ManufacturingBrandsPage({
   }, [data.reference?.manufacturingBrands, allProducts]);
 
   const brandList = React.useMemo(() => {
+    if (propBrands && Array.isArray(propBrands) && propBrands.length > 0) {
+      return propBrands.map((b) => ({
+        id: b.id,
+        rawName: b.brand || b.name,
+        name: capitalizeBrand(b.brand || b.name),
+        is_active: b.is_active !== undefined ? Boolean(b.is_active) : true,
+        products: [],
+        totalStock: Number(b.quantity || 0),
+        stockValue: Number(b.stock_value || 0),
+        productCount: Number(b.product_count || 0)
+      })).filter((b) => !searchVal || b.name.toLowerCase().includes(searchVal.toLowerCase()));
+    }
+
     return Array.from(brandStatsMap.values()).filter((item) =>
       !searchVal || item.name.toLowerCase().includes(searchVal.toLowerCase())
     );
-  }, [brandStatsMap, searchVal]);
+  }, [propBrands, brandStatsMap, searchVal]);
 
   const activeBrandData = activeBrandName ? brandStatsMap.get(activeBrandName.toLowerCase()) : null;
   const explorerProducts = activeBrandData?.products || [];

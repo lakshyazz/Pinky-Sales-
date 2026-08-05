@@ -1118,6 +1118,26 @@ app.get('/api/brands', authenticateToken, requireShopStaff, async (req, res) => 
   res.json(rows);
 });
 
+app.get('/api/manufacturing-brands', authenticateToken, requireShopStaff, async (req, res) => {
+  const shopId = await getReadableInventoryScope(req);
+  const scope = inventoryJoinScope(req, shopId);
+  const rows = await allRecords(`
+    SELECT mb.id, mb.name AS brand, mb.is_active,
+      COUNT(DISTINCT p.id) AS product_count,
+      COALESCE(SUM(ib.quantity_remaining), 0) AS quantity,
+      COALESCE(SUM(ib.quantity_remaining * COALESCE(p.sale_price, p.retail_price, p.official_price, 0)), 0) AS stock_value,
+      COUNT(DISTINCT p.id) FILTER (WHERE ib.quantity_remaining > 0 AND ib.quantity_remaining <= sh.low_stock_threshold) AS low_stock_products,
+      MAX(ib.received_date) AS last_stocked_at
+    FROM manufacturing_brands mb
+    LEFT JOIN products p ON p.manufacturing_brand_id = mb.id AND p.is_active = 1
+    LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${scope.sql}
+    LEFT JOIN shops sh ON sh.id = ib.shop_id
+    GROUP BY mb.id, mb.name, mb.is_active
+    ORDER BY mb.name
+  `, scope.params);
+  res.json(rows);
+});
+
 app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, res) => {
   const brand = cleanQueryText(req.query.brand, 120);
   if (!brand) return res.status(400).json({ error: 'Brand is required.' });
@@ -1393,7 +1413,7 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
           mfgBrandId = Number(req.body.default_manufacturing_brand_id);
         } else {
           const unknownMfgBrand = await tx.getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
-          mfgBrandId = unknownMfgBrand ? unknownMfgBrand.id : 1;
+          mfgBrandId = unknownMfgBrand ? unknownMfgBrand.id : null;
         }
 
         const canonicalColours = [];
@@ -3156,7 +3176,7 @@ app.post(['/api/inventory/bulk-import', '/inventory/bulk-import'], authenticateT
           mfgBrandId = Number(req.body.default_manufacturing_brand_id);
         } else {
           const unknownMfgBrand = await tx.getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
-          mfgBrandId = unknownMfgBrand ? unknownMfgBrand.id : 1;
+          mfgBrandId = unknownMfgBrand ? unknownMfgBrand.id : null;
         }
 
         // 2. Find or Create Product Catalog Entry
