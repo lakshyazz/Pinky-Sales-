@@ -1,7 +1,20 @@
--- Make sure 'AsPro' exists in the table
-INSERT INTO manufacturing_brands (name, is_active)
-VALUES ('AsPro', TRUE)
-ON CONFLICT (LOWER(TRIM(name))) DO NOTHING;
+-- Seed/Ensure all 13 required manufacturing brands exist and are active
+INSERT INTO manufacturing_brands (name, is_active) VALUES
+  ('AS CARE', TRUE),
+  ('Kaiku', TRUE),
+  ('GX', TRUE),
+  ('Astor Plus', TRUE),
+  ('Queen SVC', TRUE),
+  ('AS Great', TRUE),
+  ('AsPro', TRUE),
+  ('KBS', TRUE),
+  ('Crown', TRUE),
+  ('SVC', TRUE),
+  ('WD SVC', TRUE),
+  ('YK', TRUE),
+  ('DD', TRUE)
+ON CONFLICT (LOWER(TRIM(name))) DO UPDATE 
+SET is_active = TRUE;
 
 -- Merge 'AS PRO' references to 'AsPro'
 UPDATE products
@@ -16,7 +29,7 @@ UPDATE sales
 SET manufacturing_brand_id = (SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'aspro' LIMIT 1)
 WHERE manufacturing_brand_id = (SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'as pro' LIMIT 1);
 
--- Delete 'AS PRO'
+-- Delete 'AS PRO' duplicate
 DELETE FROM manufacturing_brands
 WHERE LOWER(TRIM(name)) = 'as pro';
 
