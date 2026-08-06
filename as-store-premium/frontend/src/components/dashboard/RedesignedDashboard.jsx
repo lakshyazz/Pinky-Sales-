@@ -497,6 +497,22 @@ export default function RedesignedDashboard({
   const [searchQuery, setSearchQuery] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [liveTime, setLiveTime] = useState('');
+  const notificationRef = useRef(null);
+
+  // Close notifications dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (notificationRef.current && !notificationRef.current.contains(event.target)) {
+        setNotificationsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, []);
 
   // Update Live Clock
   useEffect(() => {
@@ -555,10 +571,8 @@ export default function RedesignedDashboard({
 
   return (
     <div className="min-h-screen space-y-8 pb-12 transition-all">
-      {/* ---------------------------------------------------- */}
-      {/* HEADER BAR (Sticky with Backdrop Blur) */}
-      {/* ---------------------------------------------------- */}
-      <header className="sticky top-0 z-30 bg-white/85 dark:bg-slate-900/85 backdrop-blur-xl border-b border-slate-200/80 dark:border-slate-800 -mx-4 sm:-mx-8 px-4 sm:px-8 py-3.5 transition-all">
+      {/* HEADER BAR (Relative with proper spacing, not fighting for sticky top spot) */}
+      <header className="relative z-20 bg-white/70 dark:bg-slate-900/70 border-b border-slate-200/80 dark:border-slate-800 -mx-4 sm:-mx-8 px-4 sm:px-8 py-4 transition-all">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           
           {/* Greeting & Date */}
@@ -567,15 +581,15 @@ export default function RedesignedDashboard({
               {userName.charAt(0)}
             </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white tracking-tight">
+              <div className="flex items-center flex-wrap gap-2">
+                <h1 className="text-base sm:text-lg font-black text-slate-900 dark:text-white tracking-tight">
                   {greeting}, {userName} 👋
                 </h1>
                 <span className="px-2 py-0.5 rounded-full bg-teal-50 dark:bg-teal-950 text-teal-600 dark:text-teal-400 font-extrabold text-[10px] border border-teal-200/60 dark:border-teal-800/60">
                   {role === 'superadmin' ? 'Owner Control' : 'Branch Staff'}
                 </span>
               </div>
-              <p className="text-xs font-bold text-slate-400 flex items-center gap-2 mt-0.5">
+              <p className="text-[10px] sm:text-xs font-bold text-slate-400 flex items-center gap-2 mt-0.5">
                 <Clock className="w-3 h-3" />
                 {liveTime || 'Aug 5, 2026'}
               </p>
@@ -583,27 +597,29 @@ export default function RedesignedDashboard({
           </div>
 
           {/* Right Header Actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 w-full md:w-auto">
             {/* Global Search Trigger */}
             <button
               type="button"
               onClick={() => setIsSearchOpen(true)}
-              className="flex items-center gap-3 px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700/80 border border-slate-200/60 dark:border-slate-700/60 text-slate-500 dark:text-slate-400 text-xs font-medium transition-all shadow-inner"
+              className="flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700/80 border border-slate-200/60 dark:border-slate-700/60 text-slate-500 dark:text-slate-400 text-xs font-bold transition-all shadow-inner flex-1 md:flex-initial min-h-[44px]"
             >
-              <Search className="w-4 h-4 text-slate-400" />
-              <span className="hidden sm:inline">Search models, brands, sales...</span>
-              <span className="sm:hidden">Search...</span>
+              <div className="flex items-center gap-2">
+                <Search className="w-4 h-4 text-slate-400" />
+                <span className="hidden sm:inline">Search models, brands, sales...</span>
+                <span className="sm:hidden">Search...</span>
+              </div>
               <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-[10px] font-black text-slate-500 dark:text-slate-400 shadow-xs">
                 ⌘K
               </kbd>
             </button>
 
             {/* Notification Bell Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={notificationRef}>
               <button
                 type="button"
                 onClick={() => setNotificationsOpen(!notificationsOpen)}
-                className="relative p-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-all border border-slate-200/60 dark:border-slate-700/60"
+                className="relative p-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-all border border-slate-200/60 dark:border-slate-700/60 min-h-[44px] min-w-[44px] flex items-center justify-center"
               >
                 <Bell className="w-4 h-4" />
                 {lowStockAlerts.length > 0 && (
@@ -617,7 +633,7 @@ export default function RedesignedDashboard({
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 mt-2 w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-4 z-50"
+                    className="absolute right-0 mt-2 w-80 max-w-[calc(100vw-32px)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl p-4 z-[35]"
                   >
                     <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3 mb-3">
                       <strong className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider">Notifications</strong>
@@ -645,7 +661,7 @@ export default function RedesignedDashboard({
             <button
               type="button"
               onClick={onAddProduct}
-              className="px-4 py-2 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-teal-600/25 transition-all active:scale-95"
+              className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-lg shadow-teal-600/25 transition-all active:scale-95 min-h-[44px]"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
               <span>Add Product</span>
@@ -711,7 +727,7 @@ export default function RedesignedDashboard({
             hidden: { opacity: 0 },
             visible: { opacity: 1, transition: { staggerChildren: 0.05 } }
           }}
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5"
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5"
         >
           {/* Card 1: Today's Sales */}
           <motion.div

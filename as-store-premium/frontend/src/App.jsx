@@ -913,6 +913,18 @@ function App() {
     localStorage.removeItem('theme');
   }, []);
 
+  // Lock body scroll when mobile sidebar is open
+  useEffect(() => {
+    if (open) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+    };
+  }, [open]);
+
   useEffect(() => {
     if (!session || authReady) return undefined;
 
@@ -3410,6 +3422,18 @@ function App() {
 
   return (
     <div className={`app-shell ${sidebarCollapsed ? 'sidebar-collapsed' : ''}`}>
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+            className="sidebar-backdrop"
+            onClick={() => setOpen(false)}
+          />
+        )}
+      </AnimatePresence>
       <aside className={`sidebar ${open ? 'show' : ''} ${sidebarCollapsed ? 'collapsed' : ''}`}>
         <div className="sidebar-head">
           <div className="brand-mark"><Store size={23} /></div>
@@ -3485,7 +3509,7 @@ function App() {
             <p>{currentPageMeta.description}</p>
           </div>
           {showGlobalSearch && (
-            <div className="global-search" onBlur={closeGlobalSearch}>
+            <div className="global-search hidden md:block" onBlur={closeGlobalSearch}>
               <div className="searchbox topbar-search">
                 <Search size={18} />
                 <input
@@ -3517,25 +3541,25 @@ function App() {
                     transition={{ duration: 0.16 }}
                   >
                     {globalSearchResults.map((result, index) => {
-                      const ResultIcon = result.icon;
-                      return (
-                        <button
-                          type="button"
-                          className="global-search-result"
-                          key={`${result.kind}-${result.item?.id || result.title}-${index}`}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                            handleGlobalSearchSelect(result);
-                          }}
-                        >
-                          <span className={`global-result-icon ${result.kind}`}><ResultIcon size={16} /></span>
-                          <span>
-                            <b>{result.title}</b>
-                            <small>{result.meta}</small>
-                          </span>
-                          <em>{result.type}</em>
-                        </button>
-                      );
+                       const ResultIcon = result.icon;
+                       return (
+                         <button
+                           type="button"
+                           className="global-search-result"
+                           key={`${result.kind}-${result.item?.id || result.title}-${index}`}
+                           onMouseDown={(event) => {
+                             event.preventDefault();
+                             handleGlobalSearchSelect(result);
+                           }}
+                         >
+                           <span className={`global-result-icon ${result.kind}`}><ResultIcon size={16} /></span>
+                           <span>
+                             <b>{result.title}</b>
+                             <small>{result.meta}</small>
+                           </span>
+                           <em>{result.type}</em>
+                         </button>
+                       );
                     })}
                     {!globalSearchResults.length && (
                       <div className="global-search-empty">
@@ -3548,7 +3572,7 @@ function App() {
               </AnimatePresence>
             </div>
           )}
-          <div className="topbar-actions">
+          <div className={`topbar-actions ${active === 'dashboard' ? 'hidden md:flex' : ''}`}>
             {role !== 'customer' && lowStockAlerts.length > 0 && (
               <button type="button" className="notification-button" onClick={() => setActivePage('stock')} title="View low stock alerts">
                 <AlertTriangle size={16} />
