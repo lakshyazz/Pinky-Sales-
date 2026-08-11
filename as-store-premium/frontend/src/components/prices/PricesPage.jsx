@@ -1,5 +1,5 @@
-import React from 'react';
-import { Download, IndianRupee, Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Download, IndianRupee, Trash2, Search, Eye, Edit3, MoreHorizontal } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Pagination from '../ui/Pagination';
 import SearchInput from '../ui/SearchInput';
@@ -72,14 +72,41 @@ export default function PricesPage({
     )
   ),
 }) {
+  const [activeMenuId, setActiveMenuId] = useState(null);
   const productForm = forms.product || {};
   const appendColour = (value) => {
     const selected = productForm.colours.split(',').map((item) => item.trim()).filter(Boolean);
     if (value && !selected.includes(value)) onProductFieldChange('colours', [...selected, value].join(', '));
   };
 
+  const SkeletonRow = () => (
+    <div className="rounded-xl bg-white border border-slate-200 p-4 animate-pulse">
+      <div className="flex flex-col lg:grid lg:grid-cols-12 gap-4 items-start lg:items-center">
+        <div className="w-full lg:col-span-5 flex items-center gap-3">
+          <div className="w-12 h-12 bg-slate-100 rounded-lg shrink-0" />
+          <div className="flex-1 space-y-2">
+            <div className="h-4 bg-slate-100 rounded w-2/3" />
+            <div className="h-3 bg-slate-100 rounded w-1/2" />
+          </div>
+        </div>
+        <div className="w-full lg:col-span-5 grid grid-cols-3 gap-4">
+          <div className="h-8 bg-slate-100 rounded" />
+          <div className="h-8 bg-slate-100 rounded" />
+          <div className="h-8 bg-slate-100 rounded" />
+        </div>
+        <div className="w-full lg:col-span-2 h-8 bg-slate-100 rounded" />
+      </div>
+    </div>
+  );
+
   return (
-    <section className="space">
+    <div className="space-y-6">
+      {/* Page Header */}
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-slate-900">Prices</h1>
+        <p className="text-xs text-slate-500 mt-1 font-medium">Manage sale, purchase and wholesale pricing for your products.</p>
+      </div>
+
       {role === 'superadmin' && (
         <FormPanel title={editingProductId ? 'Edit product and prices' : 'Add product and prices'} action={saving ? 'Saving...' : editingProductId ? 'Update product' : 'Add product'} onSubmit={onSubmitProduct} disabled={saving}>
           <Input label="Short display name" className="md:col-span-2" value={productForm.short_name} onChange={(value) => onProductFieldChange('short_name', value)} />
@@ -148,80 +175,276 @@ export default function PricesPage({
         </FormPanel>
       )}
 
-      <section className="panel product-data-tools-panel">
-        <div className="product-data-tools-copy">
-          <span className="product-data-tools-icon"><Download size={21} /></span>
+      {/* Catalog Export Box */}
+      <section className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+        <div className="flex items-center gap-3.5">
+          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-700">
+            <Download className="w-5 h-5" />
+          </div>
           <div>
-            <span className="product-data-tools-kicker">Catalog export</span>
-            <h2>Product data tools</h2>
-            <p>Download the complete product and model list as a CSV file.</p>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Data Export</span>
+            <h2 className="text-base font-bold text-slate-900 mt-0.5">Product Data Tools</h2>
+            <p className="text-xs text-slate-500 font-medium">Download the complete product and model list as a CSV file.</p>
           </div>
         </div>
-        <button className="soft" type="button" onClick={onExportProducts}><Download size={17} /> Export products/models CSV</button>
+        <button
+          className="px-3 py-2 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all text-xs font-semibold flex items-center gap-1.5 active:scale-95 shadow-sm self-start sm:self-auto"
+          type="button"
+          onClick={onExportProducts}
+        >
+          <Download className="w-3.5 h-3.5" /> Export products/models CSV
+        </button>
       </section>
 
-      <div className="catalog-toolbar panel models-toolbar">
-        <SearchInput
-          placeholder="Search model, brand, category, compatible models, colour, or price"
-          value={search}
-          onChange={onSearchChange}
-        />
-        <div className="models-summary">
-          <span className="status-badge stock-ok">{pager.loaded ? `${items.length} of ${pager.total.toLocaleString('en-IN')}` : items.length} prices</span>
-          {loading && <span className="status-badge due">Loading</span>}
+      {/* Compact Search & Counter Toolbar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl p-3 shadow-sm">
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search model, brand, category, compatible models..."
+            value={search}
+            onChange={(e) => onSearchChange(e.target.value)}
+            className="w-full h-10 pl-10 pr-4 bg-white border border-slate-200 rounded-lg text-xs font-medium text-slate-900 placeholder-slate-400 outline-none focus:border-slate-400 transition-all"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 font-semibold text-xs border border-slate-200">
+            {pager.loaded ? `${items.length} of ${pager.total.toLocaleString('en-IN')}` : items.length} Prices
+          </span>
+          {loading && (
+            <span className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-700 font-semibold text-xs border border-amber-205">
+              Loading
+            </span>
+          )}
         </div>
       </div>
 
-      <CardGrid className="product-grid compact-price-grid" items={items} emptyTitle="No matching model or price found." render={(product) => (
-        <>
-          <div className="flex items-start justify-between w-full mb-3">
-            <div className="card-icon-wrapper indigo !mb-0">
-              <IndianRupee size={18} />
-            </div>
-            <div className="flex gap-1">
-              <span className="status-badge stock-ok">{product.category}</span>
-              {product.manufacturing_brand_name && (
-                <span className="status-badge due !bg-emerald-50 !text-emerald-700 !border-emerald-200">Mfg: {product.manufacturing_brand_name}</span>
-              )}
-            </div>
-          </div>
-          <div className="price-product-copy">
-            <h3 className="product-title" title={fullModelList(product)}>{productName(product)}</h3>
-            <p className="product-description" title={product.description || 'No description provided.'}>
-              {product.description || 'No description provided.'}
-            </p>
-            <ExpandableText
-              className="price-compatible-preview"
-              label="Compatible:"
-              text={fullModelList(product)}
-              emptyText="No compatible models listed"
-              limit={92}
-            />
-            <p className="text-xs text-slate-500">{product.brand} {product.manufacturing_brand_name && `\u00b7 Mfg: ${product.manufacturing_brand_name}`}{product.colours?.length ? ` \u00b7 ${product.colours.join(', ')}` : ''}</p>
-          </div>
-          <div className="price-stack">
-            <span><small>Sale</small><strong>{priceLabel(product.sale_price)}</strong></span>
-            {(role === 'superadmin' || priceVisibility.show_purchase_price_shopkeeper) && <span><small>Purchase</small><strong>{priceLabel(product.purchase_price)}</strong></span>}
-            {(role === 'superadmin' || priceVisibility.show_wholesale_price_shopkeeper) && <span><small>Wholesale</small><strong>{priceLabel(product.wholesale_price)}</strong></span>}
-          </div>
-          <div className="flex gap-2 w-full mt-3">
-            <button className="soft flex-1 !min-h-[38px] text-xs font-bold" type="button" onClick={() => onViewDetails(product)}>View Details</button>
-            {role === 'superadmin' && <button className="soft flex-1 !min-h-[38px] text-xs font-bold" type="button" onClick={() => onEditProduct(product)}>Edit</button>}
-            {role === 'superadmin' && (
-              <button className="soft product-delete-button flex-1 !min-h-[38px] text-xs font-bold" type="button" disabled={saving} onClick={() => onDeleteProduct(product)}>
-                <Trash2 size={14} /> Delete
-              </button>
-            )}
-          </div>
-        </>
-      )} />
+      {/* Aligned Structured Table Rows */}
+      {loading && !items.length ? (
+        <div className="space-y-3">
+          {[...Array(5)].map((_, i) => <SkeletonRow key={i} />)}
+        </div>
+      ) : items.length ? (
+        <div className="space-y-3">
+          {items.map((product) => {
+            const hasPurchase = role === 'superadmin' || priceVisibility.show_purchase_price_shopkeeper;
+            const hasWholesale = role === 'superadmin' || priceVisibility.show_wholesale_price_shopkeeper;
+            return (
+              <div
+                key={product.id}
+                className="rounded-xl bg-white border border-slate-200 shadow-sm hover:border-slate-300 transition-all duration-150"
+              >
+                <div className="flex flex-col lg:grid lg:grid-cols-12 gap-4 items-stretch lg:items-center p-4">
+                  {/* Column 1: Product / Model details (lg:col-span-5) */}
+                  <div className="w-full lg:col-span-5 flex items-start gap-3">
+                    {/* Image Thumbnail Preview container */}
+                    <div className="w-12 h-12 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center text-slate-450 shrink-0 overflow-hidden">
+                      {product.image_url ? (
+                        <img src={product.image_url} alt={productName(product)} className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-sm font-semibold text-slate-500">₹</span>
+                      )}
+                    </div>
+                    
+                    {/* Info Hierarchy */}
+                    <div className="min-w-0 flex-1">
+                      <h3 
+                        className="text-sm font-semibold text-slate-900 truncate hover:text-slate-700 cursor-pointer" 
+                        onClick={() => onViewDetails(product)}
+                      >
+                        {productName(product)}
+                      </h3>
+                      
+                      <div className="text-[11px] text-slate-500 mt-0.5 font-medium flex items-center gap-1.5 flex-wrap">
+                        <span>{product.brand || 'Generic'}</span>
+                        {product.category && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span>{product.category}</span>
+                          </>
+                        )}
+                        {product.manufacturing_brand_name && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="font-semibold text-slate-600">Mfg: {product.manufacturing_brand_name}</span>
+                          </>
+                        )}
+                      </div>
 
-      <Pagination
-        meta={pager}
-        loading={loading}
-        onPageChange={onPageChange}
-        onPageSizeChange={onPageSizeChange}
-      />
-    </section>
+                      {/* Truncated Compatibility Label */}
+                      {product.full_model_list && (
+                        <div className="mt-1.5">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Compatible:</span>
+                          <ExpandableText
+                            className="text-[11px] text-slate-500 leading-relaxed font-medium"
+                            text={fullModelList(product)}
+                            emptyText="No compatible models listed"
+                            limit={75}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Column 2: Aligned Pricing details (lg:col-span-5) */}
+                  <div className="w-full lg:col-span-5 grid grid-cols-3 gap-4 text-right pr-0 lg:pr-4 border-b lg:border-b-0 pb-3 lg:pb-0 lg:border-r border-slate-200/60 h-full py-1">
+                    {/* Sale Price */}
+                    <div className="flex flex-col justify-center">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Sale</span>
+                      <span className="text-sm font-semibold text-emerald-700 mt-0.5">{priceLabel(product.sale_price)}</span>
+                    </div>
+                    
+                    {/* Purchase Price */}
+                    <div className="flex flex-col justify-center">
+                      {hasPurchase ? (
+                        <>
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Purchase</span>
+                          <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.purchase_price)}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[9px] font-bold text-slate-300 uppercase tracking-wider block">Purchase</span>
+                          <span className="text-xs text-slate-300 italic mt-0.5 block">-</span>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Wholesale Price */}
+                    <div className="flex flex-col justify-center">
+                      {hasWholesale ? (
+                        <>
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Wholesale</span>
+                          <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.wholesale_price)}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-[9px] font-bold text-slate-300 uppercase tracking-wider block">Wholesale</span>
+                          <span className="text-xs text-slate-300 italic mt-0.5 block">-</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 3: Actions controls (lg:col-span-2) */}
+                  <div className="w-full lg:col-span-2 flex items-center justify-start lg:justify-end gap-1.5 mt-2 lg:mt-0">
+                    <button
+                      type="button"
+                      onClick={() => onViewDetails(product)}
+                      className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all text-xs font-semibold shadow-sm active:scale-95"
+                    >
+                      View
+                    </button>
+                    {role === 'superadmin' && (
+                      <button
+                        type="button"
+                        onClick={() => onEditProduct(product)}
+                        className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all text-xs font-semibold shadow-sm active:scale-95"
+                      >
+                        Edit
+                      </button>
+                    )}
+                    
+                    {/* More action menu dropdown */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveMenuId(activeMenuId === product.id ? null : product.id);
+                        }}
+                        className={`p-1.5 rounded-lg border transition-all ${
+                          activeMenuId === product.id 
+                            ? 'bg-slate-50 border-slate-400 text-slate-900' 
+                            : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                        }`}
+                        title="More Actions"
+                      >
+                        <MoreHorizontal className="w-4 h-4" />
+                      </button>
+
+                      {activeMenuId === product.id && (
+                        <>
+                          <div 
+                            className="fixed inset-0 z-10" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveMenuId(null);
+                            }}
+                          />
+                          <div className="absolute right-0 bottom-full mb-1.5 w-32 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-20 text-xs text-left">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveMenuId(null);
+                                onViewDetails(product);
+                              }}
+                              className="w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 font-semibold flex items-center gap-1.5"
+                            >
+                              <Eye className="w-3.5 h-3.5" /> View Specs
+                            </button>
+                            {role === 'superadmin' && onDeleteProduct && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuId(null);
+                                  onDeleteProduct(product);
+                                }}
+                                className="w-full px-3 py-1.5 text-rose-600 hover:bg-rose-50 font-semibold flex items-center gap-1.5"
+                                disabled={saving}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" /> Delete
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="p-12 text-center text-slate-400 font-bold bg-white rounded-xl border border-slate-200">
+          No pricing records found. Try changing your search or filters.
+        </div>
+      )}
+
+      {/* Pagination */}
+      {pager.loaded && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-200 text-xs text-slate-500 font-medium">
+          <div>
+            Showing {Math.min((pager.page - 1) * pager.limit + 1, pager.total)}–{Math.min(pager.page * pager.limit, pager.total)} of {pager.total.toLocaleString('en-IN')} products
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={loading || pager.page <= 1}
+              onClick={() => onPageChange(pager.page - 1)}
+              className={`px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 font-semibold transition-all ${
+                pager.page <= 1 ? 'opacity-50 cursor-not-allowed' : 'bg-white hover:bg-slate-50'
+              }`}
+            >
+              ‹ Previous
+            </button>
+            <span className="font-bold text-slate-900 px-2.5 py-1 rounded bg-slate-50 border border-slate-200">{pager.page}</span>
+            <button
+              type="button"
+              disabled={loading || pager.page >= pager.totalPages}
+              onClick={() => onPageChange(pager.page + 1)}
+              className={`px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 font-semibold transition-all ${
+                pager.page >= pager.totalPages ? 'opacity-50 cursor-not-allowed' : 'bg-white hover:bg-slate-50'
+              }`}
+            >
+              Next ›
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
