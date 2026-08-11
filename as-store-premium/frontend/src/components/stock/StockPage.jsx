@@ -351,13 +351,24 @@ export default function StockPage({
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr md:1fr', gap: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
               <Input 
                 label={role === 'shopkeeper' ? 'New Branch Quantity' : 'New Stock Quantity'} 
                 type="number" 
                 placeholder="Example: 15"
                 value={forms.stock.quantity} 
                 onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, quantity: v } }))} 
+              />
+              <Select 
+                label="Supplier (Optional)"
+                value={forms.stock.supplier_id || ''}
+                onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, supplier_id: v } }))}
+                options={[
+                  ['', 'Choose Supplier'],
+                  ...(data.reference?.suppliers || [])
+                    .filter(s => s.is_active)
+                    .map(s => [s.id, s.name])
+                ]}
               />
             </div>
           </div>
@@ -450,6 +461,17 @@ export default function StockPage({
                         ...(data.reference.manufacturingBrands || [])
                           .filter(mb => mb.is_active || String(mb.id) === String(forms.product.manufacturing_brand_id))
                           .map(mb => [mb.id, mb.name])
+                      ]}
+                    />
+                    <Select 
+                      label="Supplier (Optional)" 
+                      value={forms.product.supplier_id || ''} 
+                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, supplier_id: v } }))} 
+                      options={[
+                        ['', 'Choose Supplier'], 
+                        ...(data.reference?.suppliers || [])
+                          .filter(s => s.is_active || String(s.id) === String(forms.product.supplier_id))
+                          .map(s => [s.id, s.name])
                       ]}
                     />
                   </div>

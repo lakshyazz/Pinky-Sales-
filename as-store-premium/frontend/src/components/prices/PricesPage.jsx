@@ -104,6 +104,18 @@ export default function PricesPage({
                 .map((mb) => [mb.id, mb.name])
             ]}
           />
+          <Select
+            label="Supplier (Optional)"
+            className="md:col-span-1"
+            value={productForm.supplier_id || ''}
+            onChange={(value) => onProductFieldChange('supplier_id', value)}
+            options={[
+              ['', 'Choose Supplier'],
+              ...(reference?.suppliers || [])
+                .filter(s => s.is_active || String(s.id) === String(productForm.supplier_id))
+                .map((s) => [s.id, s.name])
+            ]}
+          />
           {newReference.type === 'categories' && (
             <div className="inline-reference-control md:col-span-2">
               <Input label="New category" value={newReference.name} onChange={(name) => onNewReferenceChange({ type: 'categories', name })} />

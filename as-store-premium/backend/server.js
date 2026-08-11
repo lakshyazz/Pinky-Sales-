@@ -287,16 +287,17 @@ const productColumnsForRole = async (role) => {
     if (visibility.show_wholesale_price_shopkeeper) cols.push('wholesale_price');
     if (visibility.show_purchase_price_shopkeeper) cols.push('purchase_price');
   }
-  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model`;
+  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.supplier_id, s.name AS supplier_name, p.model AS display_model`;
 };
 const getReferenceData = () => getCached('reference-data', 300_000, async () => {
-  const [categories, colours, brands, manufacturingBrands] = await Promise.all([
+  const [categories, colours, brands, manufacturingBrands, suppliers] = await Promise.all([
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM colours WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM brands WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM manufacturing_brands ORDER BY LOWER(TRIM(name)), id'),
+    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM suppliers ORDER BY LOWER(TRIM(name)), id'),
   ]);
-  return { categories, colours, brands, manufacturingBrands };
+  return { categories, colours, brands, manufacturingBrands, suppliers };
 });
 const getProductsForRole = async (role, query = {}) => {
   const columns = await productColumnsForRole(role);
@@ -357,10 +358,12 @@ const getProductsForRole = async (role, query = {}) => {
     dataSql: `SELECT ${columns} FROM products p 
               LEFT JOIN brands b ON b.id = p.company_brand_id
               LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+              LEFT JOIN suppliers s ON s.id = p.supplier_id
               WHERE ${whereSql} ORDER BY p.brand, COALESCE(p.short_name, p.name)`,
     countSql: `SELECT COUNT(*) AS total FROM products p 
                LEFT JOIN brands b ON b.id = p.company_brand_id
                LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+               LEFT JOIN suppliers s ON s.id = p.supplier_id
                WHERE ${whereSql}`,
     params,
     pagination,
@@ -910,33 +913,33 @@ app.get('/api/reference-data', async (_req, res) => {
 });
 
 app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async (req, res) => {
-  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands' };
+  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands', suppliers: 'suppliers' };
   const table = tables[req.params.type];
   const name = String(req.body.name || '').trim();
   if (!table || !name) return res.status(400).json({ error: 'Choose a valid reference type and enter a name.' });
   
-  // Non-superadmins (shopkeepers) can only add colours. Brands and categories are superadmin-only.
+  // Non-superadmins (shopkeepers) can only add colours. Brands and categories and suppliers are superadmin-only.
   if (req.user.role !== 'superadmin' && req.params.type !== 'colours') {
-    return res.status(403).json({ error: 'Only the Super Admin can add categories or brands.' });
+    return res.status(403).json({ error: 'Only the Super Admin can add categories, brands, or suppliers.' });
   }
   
   const reference = await ensureReference(table, name);
-  const singularType = { categories: 'category', colours: 'colour', brands: 'brand', 'manufacturing-brands': 'manufacturing_brand' }[req.params.type];
+  const singularType = { categories: 'category', colours: 'colour', brands: 'brand', 'manufacturing-brands': 'manufacturing_brand', suppliers: 'supplier' }[req.params.type];
   invalidateCache('reference-data');
   await audit(req, `Added ${singularType}`, singularType, reference.id, reference.name);
   res.status(201).json(reference);
 });
 
 app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, async (req, res) => {
-  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands' };
+  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands', suppliers: 'suppliers' };
   const table = tables[req.params.type];
   const name = String(req.body.name || '').trim();
   const id = Number(req.params.id);
   if (!table || !name || isNaN(id)) return res.status(400).json({ error: 'Invalid reference update request.' });
 
-  // Only Super Admin can rename brands and categories. Colours can be renamed by both.
+  // Only Super Admin can rename brands, categories, and suppliers. Colours can be renamed by both.
   if (req.user.role !== 'superadmin' && table !== 'colours') {
-    return res.status(403).json({ error: 'Only the Super Admin can rename categories or brands.' });
+    return res.status(403).json({ error: 'Only the Super Admin can rename categories, brands, or suppliers.' });
   }
 
   // Case-insensitive duplicate check
@@ -970,14 +973,14 @@ app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, as
 });
 
 app.delete('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, async (req, res) => {
-  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands' };
+  const tables = { categories: 'categories', colours: 'colours', brands: 'brands', 'manufacturing-brands': 'manufacturing_brands', suppliers: 'suppliers' };
   const table = tables[req.params.type];
   const id = Number(req.params.id);
   if (!table || isNaN(id)) return res.status(400).json({ error: 'Invalid reference delete request.' });
 
-  // Only Super Admin can delete categories or brands. Colours can be deleted by both.
+  // Only Super Admin can delete categories, brands, or suppliers. Colours can be deleted by both.
   if (req.user.role !== 'superadmin' && table !== 'colours') {
-    return res.status(403).json({ error: 'Only the Super Admin can delete categories or brands.' });
+    return res.status(403).json({ error: 'Only the Super Admin can delete categories, brands, or suppliers.' });
   }
 
   const item = await getRecord(`SELECT name FROM ${table} WHERE id = ?`, [id]);
@@ -993,6 +996,16 @@ app.delete('/api/reference-data/:type/:id', authenticateToken, requireShopStaff,
     const totalRefs = Number(referenced?.product_count || 0) + Number(referenced?.sale_count || 0) + Number(referenced?.batch_count || 0);
     if (totalRefs > 0) {
       return res.status(400).json({ error: 'This Manufacturing Brand is linked to existing products or transaction records. It cannot be permanently deleted. Mark it as Inactive instead.' });
+    }
+    await runTransaction(async (tx) => {
+      await tx.runQuery(`DELETE FROM ${table} WHERE id = ?`, [id]);
+    });
+  } else if (table === 'suppliers') {
+    const referenced = await getRecord(`
+      SELECT COUNT(*) AS count FROM inventory_batches WHERE supplier_id = ?
+    `, [id]);
+    if (Number(referenced?.count || 0) > 0) {
+      return res.status(400).json({ error: 'This Supplier is linked to existing stock records. It cannot be permanently deleted. Mark it as Inactive instead.' });
     }
     await runTransaction(async (tx) => {
       await tx.runQuery(`DELETE FROM ${table} WHERE id = ?`, [id]);
@@ -1280,15 +1293,14 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const isSuperAdmin = req.user.role === 'superadmin';
   const isShopkeeper = req.user.role === 'shopkeeper' || req.user.role === 'admin' || req.user.role === 'shop_staff';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
-
-  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id } = req.body;
-
+  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id, supplier_id } = req.body;
+ 
   // Shopkeepers and Superadmins can update selling price (sale_price). Cost and wholesale are superadmin only.
   const targetSalePrice = sale_price ?? retail_price;
   const newSalePrice = canEditSellingPrice && targetSalePrice !== undefined && targetSalePrice !== null && targetSalePrice !== '' ? Number(targetSalePrice) : null;
   const newWholesalePrice = isSuperAdmin && wholesale_price !== undefined && wholesale_price !== null && wholesale_price !== '' ? Number(wholesale_price) : null;
   const newPurchasePrice = isSuperAdmin && purchase_price !== undefined && purchase_price !== null && purchase_price !== '' ? Number(purchase_price) : null;
-  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;
+  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;l;
 
   try {
     const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [productId]);
@@ -1301,6 +1313,12 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     if (targetMfgBrandId) {
       const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ?', [targetMfgBrandId]);
       if (!mfgBrand) return res.status(400).json({ error: 'Selected manufacturing brand is invalid.' });
+    }
+
+    const targetSupplierId = supplier_id !== undefined ? (supplier_id ? Number(supplier_id) : null) : oldProduct.supplier_id;
+    if (targetSupplierId) {
+      const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ?', [targetSupplierId]);
+      if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
     }
 
     // Check duplicate
@@ -1318,7 +1336,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     }
 
     await runTransaction(async (tx) => {
-      await tx.execute(`
+      await tx.runQuery(`
         UPDATE products SET
           short_name = COALESCE(?, short_name),
           name = COALESCE(?, name),
@@ -1335,6 +1353,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           colours = COALESCE(?, colours),
           company_brand_id = COALESCE(?, company_brand_id),
           manufacturing_brand_id = COALESCE(?, manufacturing_brand_id),
+          supplier_id = ?,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `, [
@@ -1353,6 +1372,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         colours || null,
         companyBrandId,
         targetMfgBrandId,
+        targetSupplierId,
         productId
       ]);
 
@@ -1360,7 +1380,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       if (newSalePrice) {
         const activeShopId = shop_id || req.user.shop_id;
         if (activeShopId) {
-          await tx.execute(`
+          await tx.runQuery(`
             UPDATE inventory_batches SET
               sale_price = ?,
               retail_price = ?,
@@ -1507,7 +1527,7 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   const {
     name, short_name, full_model_list, brand, category, model, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-    manufacturing_brand_id
+    manufacturing_brand_id, supplier_id
   } = req.body;
   let compatibilityModels = String(full_model_list || name || '').trim();
   let displayName = String(short_name || '').trim();
@@ -1551,6 +1571,14 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     }
   }
 
+  let effectiveSupplierId = supplier_id ? Number(supplier_id) : null;
+  if (effectiveSupplierId) {
+    const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ? AND is_active = TRUE', [effectiveSupplierId]);
+    if (!supplier) {
+      return res.status(400).json({ error: 'Selected supplier is invalid or inactive.' });
+    }
+  }
+
   const canonicalColours = [];
   for (const colour of normalizeColours(colours)) {
     const colRef = await ensureReference('colours', colour);
@@ -1577,12 +1605,12 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     `INSERT INTO products (
       name, short_name, full_model_list, brand, category, model, official_price,
       purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-      company_brand_id, manufacturing_brand_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      company_brand_id, manufacturing_brand_id, supplier_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, model || '', officialPriceNum,
       purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
-      companyBrandId, effectiveMfgBrandId
+      companyBrandId, effectiveMfgBrandId, effectiveSupplierId
     ]
   );
   const shops = await allRecords('SELECT id FROM shops');
@@ -1596,10 +1624,11 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
 app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
   try {
     const product = await getRecord(`
-      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name
       FROM products p
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
       WHERE p.id = ?
     `, [req.params.id]);
     if (!product) return res.status(404).json({ error: 'Product not found.' });
@@ -1615,7 +1644,7 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
   const {
     name, short_name, full_model_list, brand, category, model, official_price,
     purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
-    manufacturing_brand_id
+    manufacturing_brand_id, supplier_id
   } = req.body;
   let compatibilityModels = String(full_model_list || name || '').trim();
   let displayName = String(short_name || '').trim();
@@ -1642,6 +1671,13 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
       effectiveMfgBrandId = unknownMfg.id;
     }
   }
+
+  let effectiveSupplierId = supplier_id ? Number(supplier_id) : null;
+  if (effectiveSupplierId) {
+    const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ?', [effectiveSupplierId]);
+    if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
+  }
+  const targetSupplierId = effectiveSupplierId !== null ? effectiveSupplierId : oldProduct.supplier_id;
 
   const salePriceNum = sale_price !== undefined && sale_price !== '' && sale_price !== null ? Number(sale_price) : 0;
   const purchasePriceNum = parsePrice(purchase_price, null);
@@ -1684,12 +1720,12 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     `UPDATE products SET
       name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, model = ?, official_price = ?,
       purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
-      description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, updated_at = CURRENT_TIMESTAMP
+      description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
     [
       compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, model || '', officialPriceNum,
       purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours, is_active,
-      companyBrandId, targetMfgBrandId, req.params.id,
+      companyBrandId, targetMfgBrandId, targetSupplierId, req.params.id,
     ]
   );
   await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${officialPriceNum}`);
@@ -1944,18 +1980,26 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
 app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { product_id, quantity, purchase_price, wholesale_price, official_price, retail_price, colour, received_date, notes, assigned_user_id } = req.body;
+    const { product_id, quantity, purchase_price, wholesale_price, official_price, retail_price, colour, received_date, notes, assigned_user_id, supplier_id } = req.body;
     if (!product_id || quantity === undefined) return res.status(400).json({ error: 'Product and quantity are required.' });
     const stockQuantity = Number(quantity);
     if (!Number.isInteger(stockQuantity) || stockQuantity < 0) return res.status(400).json({ error: 'Quantity must be 0 or more.' });
     const effectiveAssignedUserId = isShopStaffRole(req.user.role) ? req.user.id : assigned_user_id || null;
     await runTransaction(async (tx) => {
-      // Shopkeepers set only their personal inventory balance. Shared owner
       // stock remains available for sales, but cannot be reduced from here.
       const accessSql = ownedBatchAccessSql(req.user);
+      let colourSql = '';
+      let colourParams = [];
+      if (colour) {
+        colourSql = 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))';
+        colourParams = [colour];
+      } else {
+        colourSql = 'AND (colour IS NULL OR TRIM(colour) = \'\')';
+      }
+
       const current = await tx.getRecord(
-        `SELECT COALESCE(SUM(quantity_remaining), 0) AS quantity FROM inventory_batches ib WHERE shop_id = ? AND product_id = ? ${accessSql}`,
-        [shopId, product_id]
+        `SELECT COALESCE(SUM(quantity_remaining), 0) AS quantity FROM inventory_batches ib WHERE shop_id = ? AND product_id = ? ${colourSql} ${accessSql}`,
+        [shopId, product_id, ...colourParams]
       );
       let delta = stockQuantity - Number(current?.quantity || 0);
       if (delta > 0) {
@@ -1963,21 +2007,22 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
         await tx.runQuery(
           `INSERT INTO inventory_batches (
             shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
-            colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
             official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
             delta, delta, received_date || today(), notes || 'Stock quantity increase', req.user.id, product?.manufacturing_brand_id,
+            supplier_id ? Number(supplier_id) : null
           ]
         );
       } else if (delta < 0) {
         let remaining = Math.abs(delta);
         const batches = await tx.allRecords(
           `SELECT id, quantity_remaining FROM inventory_batches ib
-           WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 ${accessSql}
+           WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 ${colourSql} ${accessSql}
            ORDER BY received_date ASC, id ASC`,
-          [shopId, product_id]
+          [shopId, product_id, ...colourParams]
         );
         for (const batch of batches) {
           if (remaining <= 0) break;

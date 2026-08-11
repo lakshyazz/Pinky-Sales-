@@ -43,6 +43,7 @@ import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import BrandsPage from './components/brands/BrandsPage';
 import ManufacturingBrandsPage from './components/manufacturing-brands/ManufacturingBrandsPage';
+import SuppliersPage from './components/suppliers/SuppliersPage';
 import Pagination from './components/ui/Pagination';
 import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './components/ui/SkeletonLoader';
 import SearchInput from './components/ui/SearchInput';
@@ -161,6 +162,7 @@ const cleanReferenceData = (reference = {}) => ({
   colours: uniqueNamedItems(reference.colours),
   brands: uniqueNamedItems(reference.brands),
   manufacturingBrands: uniqueNamedItems(reference.manufacturingBrands),
+  suppliers: uniqueNamedItems(reference.suppliers),
 });
 const combineLowStockAlerts = (items = []) => {
   const combined = new Map();
@@ -248,6 +250,7 @@ const navByRole = {
     ['stock', 'Stock', Package],
     ['brands', 'Brands', Tags],
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
+    ['suppliers', 'Suppliers', Users],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
@@ -265,6 +268,7 @@ const navByRole = {
     ['stock', 'Stock', Package],
     ['brands', 'Brands', Tags],
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
+    ['suppliers', 'Suppliers', Users],
     ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
@@ -285,13 +289,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'models', 'prices', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'suppliers', 'models', 'prices', 'categories'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'import', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'models', 'prices', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'suppliers', 'models', 'prices', 'categories'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -337,6 +341,11 @@ const pageMetaById = {
     group: 'Inventory',
     title: 'Manufacturing Brands',
     description: 'Browse LCD/display manufacturers (e.g. AS CARE, Kaiku, GX) and view stock statistics.',
+  },
+  suppliers: {
+    group: 'Inventory',
+    title: 'Suppliers Registry',
+    description: 'Browse supplier cards and trace stock batch sourcing.',
   },
   models: {
     group: 'Inventory',
@@ -422,9 +431,9 @@ const initialForms = {
   product: {
     short_name: '', full_model_list: '', brand: '', category: 'Display', model: '',
     official_price: '', purchase_price: '', sale_price: '', wholesale_price: '', retail_price: '',
-    opening_stock: '', description: '', colours: '', manufacturing_brand_id: '',
+    opening_stock: '', description: '', colours: '', manufacturing_brand_id: '', supplier_id: '',
   },
-  stock: { product_id: '', quantity: '', colour: '' },
+  stock: { product_id: '', quantity: '', colour: '', supplier_id: '' },
   customer: { name: '', mobile: '', address: '', notes: '' },
   sale: { product_id: '', customer_id: '', quantity: 1, total_amount: '', paid_amount: '', payment_mode: 'cash', due_date: '2026-06-15', notes: '', items: [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }] },
   payment: { sale_id: '', amount: '', note: '' },
@@ -897,6 +906,7 @@ function App() {
   const [pageLoading, setPageLoading] = useState({
     brands: false,
     'manufacturing-brands': false,
+    suppliers: false,
     stock: false,
     customers: false,
     sales: false,
@@ -1077,6 +1087,28 @@ function App() {
   useEffect(() => {
     setSearchHydrated(false);
   }, [shopId, role]);
+
+  const prevActiveRef = useRef(active);
+  useEffect(() => {
+    const prev = prevActiveRef.current;
+    if (prev !== active) {
+      if (prev === 'models') setModelSearch('');
+      if (prev === 'prices') setPriceSearch('');
+      if (prev === 'catalog') setCatalogFilters((f) => ({ ...f, search: '' }));
+      if (prev === 'stock') setStockFilters((f) => ({ ...f, search: '' }));
+      if (prev === 'brands') {
+        setBrandSearch('');
+        setSelectedBrand('');
+        setBrandProducts([]);
+      }
+      if (prev === 'shopkeepers') setShopkeeperSearch('');
+      if (prev === 'customers') setCustomerFilters((f) => ({ ...f, search: '' }));
+      if (prev === 'sales') setSalesFilters((f) => ({ ...f, search: '' }));
+      if (prev === 'payments') setPendingFilters((f) => ({ ...f, search: '' }));
+      if (prev === 'reports') setReportsFilters((f) => ({ ...f, search: '' }));
+    }
+    prevActiveRef.current = active;
+  }, [active]);
 
   const requireShopSelection = (message = 'Select a specific shop first') => {
     if (role === 'superadmin' && !shopId) {
@@ -2452,6 +2484,7 @@ function App() {
       description: (forms.product.description || '').trim(),
       colours: (forms.product.colours || '').split(',').map((colour) => colour.trim()).filter(Boolean),
       manufacturing_brand_id: forms.product.manufacturing_brand_id ? Number(forms.product.manufacturing_brand_id) : null,
+      supplier_id: forms.product.supplier_id ? Number(forms.product.supplier_id) : null,
     };
 
     if (!payload.short_name) {
@@ -2495,7 +2528,8 @@ function App() {
   };
 
   const editProduct = (product) => {
-    setEditingProductId(String(product.id));
+    const prodId = product.product_id || product.id;
+    setEditingProductId(String(prodId));
     setForms((prev) => ({
       ...prev,
       product: {
@@ -2513,6 +2547,7 @@ function App() {
         description: product.description || '',
         colours: Array.isArray(product.colours) ? product.colours.join(', ') : '',
         manufacturing_brand_id: product.manufacturing_brand_id || '',
+        supplier_id: product.supplier_id || '',
       },
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2521,6 +2556,7 @@ function App() {
   const deleteProduct = (product) => {
     if (role !== 'superadmin') return;
     const name = productName(product);
+    const productId = product.product_id || product.id;
     requestConfirmation({
       title: `Delete ${name}?`,
       message: 'If this product has sales, requests, or transfer history, it will be deactivated instead of hard-deleted so reports remain safe.',
@@ -2528,12 +2564,13 @@ function App() {
       onConfirm: async () => {
         try {
           setSaving(true);
-          await authedFetch(`/products/${product.id}`, { method: 'DELETE' });
-          if (editingProductId === String(product.id)) {
+          await authedFetch(`/products/${productId}`, { method: 'DELETE' });
+          if (editingProductId === String(productId)) {
             setEditingProductId('');
             setForms((prev) => ({ ...prev, product: initialForms.product }));
           }
-          if (selectedProductDetails?.id === product.id) setSelectedProductDetails(null);
+          const selectedId = selectedProductDetails?.product_id || selectedProductDetails?.id;
+          if (selectedId === productId) setSelectedProductDetails(null);
           showToast(`${name} was deleted`);
           await loadCore();
           if (active === 'stock') await loadTab('stock', shopId);
@@ -3746,6 +3783,18 @@ function App() {
             </PageWrapper>
           )}
 
+          {active === 'suppliers' && role !== 'customer' && (
+            <PageWrapper activeKey="suppliers" key="suppliers">
+              <SuppliersPage
+                session={session}
+                setGlobalToast={showToast}
+                api={authedFetch}
+                data={data}
+                onBrandChange={loadCore}
+              />
+            </PageWrapper>
+          )}
+
           {active === 'categories' && (
             <PageWrapper activeKey="categories" key="categories">
               <CategoriesPage
@@ -3781,6 +3830,7 @@ function App() {
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
                 Empty={Empty}
+                reference={data.reference}
               />
             </PageWrapper>
           )}
@@ -4833,6 +4883,7 @@ function App() {
                   <div className="flex-1 min-w-0">
                     <span className="text-[10px] uppercase font-black text-cyan-600 tracking-widest leading-none block mb-1">
                       {selectedProductDetails.brand || 'No Brand'} · {selectedProductDetails.category}
+                      {selectedProductDetails.manufacturing_brand_name && ` · Mfg: ${selectedProductDetails.manufacturing_brand_name}`}
                     </span>
                     <h2 id="product-details-title" className="text-xl font-extrabold text-slate-800 truncate">
                       {productName(selectedProductDetails)}
@@ -4880,6 +4931,12 @@ function App() {
                         <span className="text-sm font-bold text-slate-500">Sale Price</span>
                         <strong className="text-slate-800 font-extrabold text-base">{priceLabel(selectedProductDetails.sale_price)}</strong>
                       </div>
+                      {selectedProductDetails.manufacturing_brand_name && (
+                        <div className="flex justify-between items-center py-2.5">
+                          <span className="text-sm font-bold text-slate-500">Supplier / Brand</span>
+                          <strong className="text-slate-800 font-extrabold text-base">{selectedProductDetails.manufacturing_brand_name}</strong>
+                        </div>
+                      )}
                       {(role === 'superadmin' || data.priceVisibility.show_purchase_price_shopkeeper) && selectedProductDetails.purchase_price !== undefined && selectedProductDetails.purchase_price !== null && (
                         <div className="flex justify-between items-center py-2.5">
                           <span className="text-sm font-bold text-slate-500">Purchase Price</span>

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus, Trash2 } from 'lucide-react';
+import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus, Trash2, MoreHorizontal } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
 import SearchInput from '../ui/SearchInput';
@@ -36,6 +36,7 @@ export default function ModelsPage({
   const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'table'
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [inspectProduct, setInspectProduct] = useState(null);
+  const [activeMenuId, setActiveMenuId] = useState(null);
 
   // Edit Product Modal State
   const [editingProduct, setEditingProduct] = useState(null);
@@ -96,6 +97,7 @@ export default function ModelsPage({
       full_model_list: product.full_model_list || product.model || '',
       description: product.description || '',
       manufacturing_brand_id: product.manufacturing_brand_id !== undefined && product.manufacturing_brand_id !== null ? String(product.manufacturing_brand_id) : '',
+      supplier_id: product.supplier_id !== undefined && product.supplier_id !== null ? String(product.supplier_id) : '',
     });
   };
 
@@ -181,6 +183,7 @@ export default function ModelsPage({
         full_model_list: editForm.full_model_list,
         description: editForm.description,
         manufacturing_brand_id: editForm.manufacturing_brand_id ? Number(editForm.manufacturing_brand_id) : null,
+        supplier_id: editForm.supplier_id ? Number(editForm.supplier_id) : null,
       };
 
       if (api) {
@@ -211,6 +214,8 @@ export default function ModelsPage({
         description: payload.description,
         manufacturing_brand_id: payload.manufacturing_brand_id,
         manufacturing_brand_name: mfgBrandObject ? mfgBrandObject.name : editingProduct.manufacturing_brand_name,
+        supplier_id: payload.supplier_id,
+        supplier_name: supplierObject ? supplierObject.name : editingProduct.supplier_name,
       });
 
       if (setGlobalToast) setGlobalToast('Product details & pricing updated successfully', 'success');
@@ -227,76 +232,74 @@ export default function ModelsPage({
   return (
     <div className="space-y-6">
       {/* Header Toolbar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/90 border border-slate-200/80 rounded-3xl p-6 shadow-xl shadow-slate-200/40 backdrop-blur-xl">
-        <div className="flex items-center gap-4">
-          <div className="p-3.5 rounded-2xl bg-gradient-to-tr from-cyan-600 to-teal-500 text-white shadow-lg shadow-cyan-600/20">
-            <Smartphone className="w-6 h-6" />
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+        <div className="flex items-center gap-3.5">
+          <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-700">
+            <Smartphone className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-xs uppercase font-extrabold tracking-wider text-cyan-600">Hardware Catalog</span>
-            <h2 className="text-2xl font-black text-slate-900 mt-0.5">Product Models</h2>
-            <p className="text-xs text-slate-500 font-medium">Browse model codes, device compatibility, and price lists.</p>
+            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">Catalog</span>
+            <h2 className="text-xl font-bold text-slate-900 mt-0.5">Product Models</h2>
+            <p className="text-xs text-slate-500 font-medium">Manage your product catalog, variants, pricing and compatibility.</p>
           </div>
         </div>
 
         <div className="flex items-center gap-3 self-start sm:self-auto">
-          <div className="flex items-center gap-1 p-1 bg-slate-100/80 border border-slate-200/80 rounded-2xl">
+          <div className="flex items-center gap-1 p-1 bg-slate-50 border border-slate-200 rounded-lg">
             <button
               onClick={() => setViewMode('grid')}
-              className={`p-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
-                viewMode === 'grid' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              className={`p-1.5 px-3 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                viewMode === 'grid' ? 'bg-white text-slate-950 border border-slate-200/80 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
               title="Grid View"
             >
-              <LayoutGrid className="w-4 h-4" /> Grid
+              <LayoutGrid className="w-3.5 h-3.5" /> Grid
             </button>
             <button
               onClick={() => setViewMode('table')}
-              className={`p-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all ${
-                viewMode === 'table' ? 'bg-white text-cyan-700 shadow-sm' : 'text-slate-500 hover:text-slate-800'
+              className={`p-1.5 px-3 rounded-md text-xs font-semibold flex items-center gap-1.5 transition-all ${
+                viewMode === 'table' ? 'bg-white text-slate-950 border border-slate-200/80 shadow-sm' : 'text-slate-500 hover:text-slate-800'
               }`}
               title="Table View"
             >
-              <List className="w-4 h-4" /> Table
+              <List className="w-3.5 h-3.5" /> Table
             </button>
           </div>
 
-          <span className="px-3.5 py-2 rounded-2xl bg-cyan-50 text-cyan-700 font-extrabold text-xs border border-cyan-200/60">
+          <span className="px-3 py-1.5 rounded-lg bg-slate-50 text-slate-600 font-semibold text-xs border border-slate-200">
             {role !== 'customer' && pager.loaded ? `${filteredItems.length} of ${pager.total.toLocaleString('en-IN')}` : filteredItems.length} Models
           </span>
         </div>
       </div>
 
-      {/* Dedicated Large Full-Width Search Bar */}
-      <SearchInput
-        placeholder="Search model, brand, category, or description..."
-        value={search}
-        onChange={onSearchChange}
-      />
+      {/* Refined Search Bar */}
+      <div className="relative">
+        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <input
+          type="text"
+          placeholder="Search models, brands or categories..."
+          value={search}
+          onChange={(e) => onSearchChange(e.target.value)}
+          className="w-full h-11 pl-10 pr-4 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-900 placeholder-slate-400 outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400 transition-all shadow-sm"
+        />
+      </div>
 
       {/* Category Pills Bar */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full no-scrollbar">
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full no-scrollbar">
         {categories.map((cat) => {
           const isSelected = selectedCategory === cat;
           return (
-            <motion.button
+            <button
               key={cat}
               onClick={() => setSelectedCategory(cat)}
-              whileHover={{ scale: 1.04 }}
-              whileTap={{ scale: 0.96 }}
-              className={`relative px-4 py-2 rounded-2xl text-xs font-extrabold whitespace-nowrap transition-colors cursor-pointer ${
-                isSelected ? 'text-white' : 'bg-white border border-slate-200/90 text-slate-600 hover:bg-slate-50'
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all border ${
+                isSelected 
+                  ? 'bg-slate-900 border-slate-900 text-white shadow-sm' 
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300'
               }`}
             >
-              {isSelected && (
-                <motion.div
-                  layoutId="modelsActiveCategoryPill"
-                  className="absolute inset-0 bg-slate-900 rounded-2xl shadow-lg shadow-slate-900/20"
-                  transition={{ type: 'spring', stiffness: 380, damping: 30 }}
-                />
-              )}
-              <span className="relative z-10">{cat}</span>
-            </motion.button>
+              {cat}
+            </button>
           );
         })}
       </div>
@@ -311,119 +314,169 @@ export default function ModelsPage({
               : [];
 
             return (
-              <motion.div
+              <div
                 key={product.id}
-                whileHover={{ y: -4, scale: 1.015 }}
-                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-                className="p-5 rounded-3xl bg-white/95 border border-slate-200/90 shadow-xl shadow-slate-200/40 backdrop-blur-xl flex flex-col justify-between cursor-pointer group hover:border-cyan-300 transition-all"
-                onClick={() => handleOpenDetails(product)}
+                className="rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between overflow-hidden relative group hover:border-slate-300 transition-all duration-150"
               >
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-3">
-                    <span className="px-2.5 py-1 rounded-lg bg-cyan-50 text-cyan-700 border border-cyan-200/60 text-[11px] font-bold">
-                      {product.category || 'General'}
-                    </span>
-                    <div className="flex gap-1.5">
-                      <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-[11px] font-bold">
-                        {product.brand || 'Generic'}
+                {/* Image Area placeholder */}
+                <div 
+                  onClick={() => handleOpenDetails(product)}
+                  className="w-full h-32 bg-slate-50 border-b border-slate-100 flex items-center justify-center text-slate-300 cursor-pointer overflow-hidden relative"
+                >
+                  {product.image_url ? (
+                    <img src={product.image_url} alt={productName(product)} className="w-full h-full object-cover group-hover:scale-[1.02] transition-all duration-150" />
+                  ) : (
+                    <Smartphone className="w-8 h-8 opacity-40 text-slate-450 group-hover:scale-105 transition-all duration-150" />
+                  )}
+                </div>
+
+                <div className="p-4 flex-1 flex flex-col justify-between">
+                  <div>
+                    {/* Top Row: Category and Brand */}
+                    <div className="flex items-center justify-between gap-2 mb-2 text-[10px] uppercase font-bold text-slate-400">
+                      <span>{product.category || 'General'}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span>{product.brand || 'Generic'}</span>
+                        {product.manufacturing_brand_name && (
+                          <span className="text-slate-300">|</span>
+                        )}
+                        {product.manufacturing_brand_name && (
+                          <span className="text-slate-500 font-semibold">{product.manufacturing_brand_name}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Model Name & description */}
+                    <h3 
+                      onClick={() => handleOpenDetails(product)}
+                      className="text-sm font-semibold text-slate-900 line-clamp-1 hover:text-slate-700 cursor-pointer"
+                    >
+                      {productName(product)}
+                    </h3>
+
+                    {product.description && (
+                      <p className="text-xs text-slate-500 line-clamp-2 mt-1 font-medium leading-relaxed">
+                        {product.description}
+                      </p>
+                    )}
+
+                    {/* Device Compatibility */}
+                    <div className="mt-3.5 pt-3.5 border-t border-slate-100">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1.5">
+                        Compatible Devices
                       </span>
-                      {product.manufacturing_brand_name && (
-                        <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold">
-                          {product.manufacturing_brand_name}
-                        </span>
+                      {compatibleList.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {compatibleList.slice(0, 3).map((dev, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-medium">
+                              {dev}
+                            </span>
+                          ))}
+                          {compatibleList.length > 3 && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200/60 text-slate-500 text-[10px] font-bold">
+                              +{compatibleList.length - 3} more
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400 italic font-normal">Universal / Unspecified</span>
                       )}
                     </div>
                   </div>
 
-                  <h3 className="text-base font-black text-slate-900 group-hover:text-cyan-700 transition-colors line-clamp-1">
-                    {productName(product)}
-                  </h3>
+                  {/* Footer containing Price & Actions */}
+                  <div className="mt-4 pt-3.5 border-t border-slate-100 flex items-center justify-between relative">
+                    <div>
+                      <span className="text-[10px] uppercase font-semibold text-slate-400 block">Retail Price</span>
+                      <span className="text-base font-semibold text-emerald-700">{priceLabel(product.sale_price)}</span>
+                    </div>
 
-                  {product.description && (
-                    <p className="text-xs text-slate-500 line-clamp-2 mt-1 font-medium">
-                      {product.description}
-                    </p>
-                  )}
-
-                  {/* Device Compatibility Badges */}
-                  <div className="mt-4 pt-3 border-t border-slate-100">
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block mb-1.5">
-                      Compatible Devices
-                    </span>
-                    {compatibleList.length > 0 ? (
-                      <div className="flex flex-wrap gap-1 max-h-16 overflow-hidden">
-                        {compatibleList.slice(0, 3).map((dev, idx) => (
-                          <span key={idx} className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px] font-semibold">
-                            {dev}
-                          </span>
-                        ))}
-                        {compatibleList.length > 3 && (
-                          <span className="px-1.5 py-0.5 rounded-md bg-slate-200/70 text-slate-600 text-[10px] font-bold">
-                            +{compatibleList.length - 3} more
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-slate-400 italic font-normal">Universal / Unspecified</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between">
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-slate-400 block">Retail Price</span>
-                    <span className="text-sm font-black text-emerald-600">{priceLabel(product.sale_price)}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenAddStock(product);
-                      }}
-                      className="px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition-all text-xs font-bold flex items-center gap-1 shadow-md shadow-emerald-600/20"
-                      title="Add Stock for this Model"
-                    >
-                      <PackagePlus className="w-3.5 h-3.5" /> + Stock
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenEdit(product);
-                      }}
-                      className="px-3 py-2 rounded-xl bg-cyan-50 text-cyan-700 hover:bg-cyan-600 hover:text-white transition-all text-xs font-bold flex items-center gap-1 shadow-sm"
-                      title="Edit Product & Prices"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" /> Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleOpenDetails(product);
-                      }}
-                      className="p-2.5 rounded-xl bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all shadow-sm"
-                      title="View Specs"
-                    >
-                      <Eye className="w-4 h-4" />
-                    </button>
-                    {isSuperAdmin && onDeleteProduct && (
+                    <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          onDeleteProduct(product);
+                          handleOpenAddStock(product);
                         }}
-                        className="p-2.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
-                        title="Delete Product"
+                        className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white transition-all text-xs font-semibold flex items-center gap-1 shadow-sm shadow-emerald-600/10 active:scale-95"
+                        title="Add Stock"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <PackagePlus className="w-3.5 h-3.5" /> Stock
                       </button>
-                    )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenEdit(product);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all text-xs font-semibold flex items-center gap-1 shadow-sm active:scale-95"
+                        title="Edit Product"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" /> Edit
+                      </button>
+                      
+                      {/* More Menu Dropdown trigger */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setActiveMenuId(activeMenuId === product.id ? null : product.id);
+                          }}
+                          className={`p-1.5 rounded-lg border transition-all ${
+                            activeMenuId === product.id 
+                              ? 'bg-slate-50 border-slate-400 text-slate-900' 
+                              : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                          }`}
+                          title="More Actions"
+                        >
+                          <MoreHorizontal className="w-4 h-4" />
+                        </button>
+
+                        {activeMenuId === product.id && (
+                          <>
+                            {/* Overlay to close menu */}
+                            <div 
+                              className="fixed inset-0 z-10" 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveMenuId(null);
+                              }}
+                            />
+                            {/* Dropdown body */}
+                            <div className="absolute right-0 bottom-full mb-1.5 w-32 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-20 text-xs text-left">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuId(null);
+                                  handleOpenDetails(product);
+                                }}
+                                className="w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 font-semibold flex items-center gap-1.5"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> View Specs
+                              </button>
+                              {isSuperAdmin && onDeleteProduct && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setActiveMenuId(null);
+                                    onDeleteProduct(product);
+                                  }}
+                                  className="w-full px-3 py-1.5 text-rose-600 hover:bg-rose-50 font-semibold flex items-center gap-1.5"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" /> Delete
+                                </button>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </motion.div>
+              </div>
             );
           })}
 
@@ -437,69 +490,65 @@ export default function ModelsPage({
         </div>
       ) : (
         /* Table View */
-        <div className="bg-white/95 border border-slate-200/90 rounded-3xl shadow-xl shadow-slate-200/40 backdrop-blur-xl overflow-hidden">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-slate-100/80 border-b border-slate-200/80 text-slate-600 font-bold uppercase tracking-wider">
-                  <th className="p-4">Model / Product</th>
+                <tr className="bg-slate-50 border-b border-slate-200/80 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                  <th className="p-4 px-5">Model / Product</th>
                   <th className="p-4">Brand</th>
                   <th className="p-4">Category</th>
                   <th className="p-4">Compatible Devices</th>
                   <th className="p-4">Sale Price</th>
-                  <th className="p-4 text-right">Actions</th>
+                  <th className="p-4 px-5 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredItems.map((product) => (
-                  <tr key={product.id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="p-4 font-bold text-slate-900">{productName(product)}</td>
+                  <tr key={product.id} className="hover:bg-slate-50/50 transition-colors duration-150">
+                    <td className="p-4 px-5 font-semibold text-slate-900">{productName(product)}</td>
                     <td className="p-4">
-                      <div className="flex flex-col gap-1">
-                        <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-bold self-start">
-                          {product.brand || 'Generic'}
-                        </span>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-slate-900 font-semibold">{product.brand || 'Generic'}</span>
                         {product.manufacturing_brand_name && (
-                          <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold self-start">
-                            {product.manufacturing_brand_name}
-                          </span>
+                          <span className="text-[10px] text-slate-500 font-medium">Mfg: {product.manufacturing_brand_name}</span>
                         )}
                       </div>
                     </td>
                     <td className="p-4">
-                      <span className="px-2.5 py-1 rounded-lg bg-cyan-50 text-cyan-700 border border-cyan-200/60 font-bold">
+                      <span className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-700 text-[11px] font-semibold">
                         {product.category || 'General'}
                       </span>
                     </td>
                     <td className="p-4 max-w-xs">
                       <ExpandableText
-                        className="model-compatible-preview text-slate-600"
+                        className="model-compatible-preview text-slate-500 font-medium"
                         text={fullModelList(product)}
                         emptyText="No compatible models listed"
                         limit={90}
                       />
                     </td>
-                    <td className="p-4 font-black text-emerald-600">{priceLabel(product.sale_price)}</td>
-                    <td className="p-4 text-right">
+                    <td className="p-4 font-semibold text-emerald-700">{priceLabel(product.sale_price)}</td>
+                    <td className="p-4 px-5 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button
                           type="button"
                           onClick={() => handleOpenAddStock(product)}
-                          className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold transition-all text-xs inline-flex items-center gap-1 shadow-sm"
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95 shadow-sm shadow-emerald-600/10"
                         >
-                          <PackagePlus className="w-3.5 h-3.5" /> + Stock
+                          <PackagePlus className="w-3.5 h-3.5" /> Stock
                         </button>
                         <button
                           type="button"
                           onClick={() => handleOpenEdit(product)}
-                          className="px-3 py-1.5 rounded-xl bg-cyan-50 text-cyan-700 hover:bg-cyan-600 hover:text-white font-bold transition-all text-xs inline-flex items-center gap-1"
+                          className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95 shadow-sm"
                         >
                           <Edit3 className="w-3.5 h-3.5" /> Edit
                         </button>
                         <button
                           type="button"
                           onClick={() => handleOpenDetails(product)}
-                          className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold transition-all text-xs inline-flex items-center gap-1"
+                          className="px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95"
                         >
                           <Eye className="w-3.5 h-3.5" /> Specs
                         </button>
@@ -507,7 +556,7 @@ export default function ModelsPage({
                           <button
                             type="button"
                             onClick={() => onDeleteProduct(product)}
-                            className="px-3 py-1.5 rounded-xl bg-rose-50 text-rose-600 hover:bg-rose-600 hover:text-white font-bold transition-all text-xs inline-flex items-center gap-1"
+                            className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-rose-600 hover:bg-rose-50 font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95"
                           >
                             <Trash2 className="w-3.5 h-3.5" /> Delete
                           </button>
@@ -891,6 +940,21 @@ export default function ModelsPage({
                         ))}
                     </select>
                   </div>
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Supplier (Optional)</label>
+                    <select
+                      value={editForm.supplier_id}
+                      onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    >
+                      <option value="">Choose Supplier</option>
+                      {(reference?.suppliers || [])
+                        .filter(s => s.is_active || String(s.id) === String(editForm.supplier_id))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div>
@@ -927,14 +991,35 @@ export default function ModelsPage({
       </AnimatePresence>
 
       {/* Pagination */}
-      {role !== 'customer' && (
-        <Pagination
-          meta={pager}
-          loading={loading}
-          onPageChange={onPageChange}
-          onPageSizeChange={onPageSizeChange}
-          totalLabel="models"
-        />
+      {role !== 'customer' && pager.loaded && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-200 text-xs text-slate-500 font-medium">
+          <div>
+            Showing {Math.min((pager.page - 1) * pager.limit + 1, pager.total)}–{Math.min(pager.page * pager.limit, pager.total)} of {pager.total.toLocaleString('en-IN')} models
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              disabled={loading || pager.page <= 1}
+              onClick={() => onPageChange(pager.page - 1)}
+              className={`px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 font-semibold transition-all ${
+                pager.page <= 1 ? 'opacity-50 cursor-not-allowed' : 'bg-white hover:bg-slate-50'
+              }`}
+            >
+              ‹ Previous
+            </button>
+            <span className="font-bold text-slate-900 px-2.5 py-1 rounded bg-slate-50 border border-slate-200">{pager.page}</span>
+            <button
+              type="button"
+              disabled={loading || pager.page >= pager.totalPages}
+              onClick={() => onPageChange(pager.page + 1)}
+              className={`px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 font-semibold transition-all ${
+                pager.page >= pager.totalPages ? 'opacity-50 cursor-not-allowed' : 'bg-white hover:bg-slate-50'
+              }`}
+            >
+              Next ›
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
