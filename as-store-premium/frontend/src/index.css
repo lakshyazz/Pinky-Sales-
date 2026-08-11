@@ -598,6 +598,7 @@ input::-webkit-strong-password-auto-fill-button {
   position: absolute;
   right: 9px;
   top: 50%;
+  transform: translateY(-50%);
   width: 26px;
   height: 26px;
   min-height: 26px;
@@ -3652,7 +3653,7 @@ button:disabled {
   position: relative;
 }
 
-.searchbox svg {
+.searchbox > svg {
   position: absolute;
   left: 13px;
   top: 50%;

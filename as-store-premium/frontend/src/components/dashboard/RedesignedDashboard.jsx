@@ -9,7 +9,6 @@ import {
   Store,
   TrendingUp,
   TrendingDown,
-  Search,
   Bell,
   Plus,
   Sparkles,
@@ -39,7 +38,6 @@ import {
   PackagePlus,
   ReceiptText,
   Send,
-  X,
   Check,
   ChevronDown
 } from 'lucide-react';
@@ -493,8 +491,6 @@ export default function RedesignedDashboard({
   onImportStock
 }) {
   const [timeframe, setTimeframe] = useState('Today');
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [liveTime, setLiveTime] = useState('');
   const notificationRef = useRef(null);
@@ -529,29 +525,7 @@ export default function RedesignedDashboard({
     return () => clearInterval(interval);
   }, []);
 
-  // Keyboard shortcut for Cmd+K / Ctrl+K
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setIsSearchOpen(prev => !prev);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
-  // Filter items for command search modal
-  const searchResults = useMemo(() => {
-    if (!searchQuery.trim()) return [];
-    const query = searchQuery.toLowerCase();
-    return (data.products || []).filter(p =>
-      (p.short_name && p.short_name.toLowerCase().includes(query)) ||
-      (p.brand && p.brand.toLowerCase().includes(query)) ||
-      (p.model && p.model.toLowerCase().includes(query)) ||
-      (p.full_model_list && p.full_model_list.toLowerCase().includes(query))
-    ).slice(0, 8);
-  }, [searchQuery, data.products]);
 
   // Personalized Greeting
   const greeting = useMemo(() => {
@@ -597,22 +571,7 @@ export default function RedesignedDashboard({
           </div>
 
           {/* Right Header Actions */}
-          <div className="flex items-center gap-3 w-full md:w-auto">
-            {/* Global Search Trigger */}
-            <button
-              type="button"
-              onClick={() => setIsSearchOpen(true)}
-              className="flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200/80 dark:hover:bg-slate-700/80 border border-slate-200/60 dark:border-slate-700/60 text-slate-500 dark:text-slate-400 text-xs font-bold transition-all shadow-inner flex-1 md:flex-initial min-h-[44px]"
-            >
-              <div className="flex items-center gap-2">
-                <Search className="w-4 h-4 text-slate-400" />
-                <span className="hidden sm:inline">Search models, brands, sales...</span>
-                <span className="sm:hidden">Search...</span>
-              </div>
-              <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 text-[10px] font-black text-slate-500 dark:text-slate-400 shadow-xs">
-                ⌘K
-              </kbd>
-            </button>
+          <div className="flex items-center gap-3 w-full md:w-auto md:justify-end">
 
             {/* Notification Bell Dropdown */}
             <div className="relative" ref={notificationRef}>
@@ -1065,93 +1024,7 @@ export default function RedesignedDashboard({
         </section>
       </div>
 
-      {/* ---------------------------------------------------- */}
-      {/* 6. GLOBAL SEARCH MODAL (CMD + K) */}
-      {/* ---------------------------------------------------- */}
-      <AnimatePresence>
-        {isSearchOpen && (
-          <div className="fixed inset-0 z-50 flex items-start justify-center pt-16 px-4">
-            {/* Backdrop */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsSearchOpen(false)}
-              className="fixed inset-0 bg-slate-900/60 backdrop-blur-md"
-            />
 
-            {/* Modal Body */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: -20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: -20 }}
-              className="relative w-full max-w-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl overflow-hidden z-10"
-            >
-              {/* Input Header */}
-              <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center gap-3">
-                <Search className="w-5 h-5 text-teal-600" />
-                <input
-                  type="text"
-                  autoFocus
-                  placeholder="Search catalog models, brands, compatible devices..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-transparent text-sm font-bold text-slate-900 dark:text-white outline-none placeholder:text-slate-400 placeholder:font-medium"
-                />
-                <button
-                  type="button"
-                  onClick={() => setIsSearchOpen(false)}
-                  className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Results Container */}
-              <div className="p-4 max-h-[380px] overflow-y-auto space-y-2">
-                {searchResults.length > 0 ? (
-                  searchResults.map((item) => (
-                    <div
-                      key={item.id}
-                      onClick={() => {
-                        setSelectedProductDetails(item);
-                        setIsSearchOpen(false);
-                      }}
-                      className="p-3 rounded-2xl hover:bg-teal-50/60 dark:hover:bg-teal-950/40 border border-transparent hover:border-teal-200 dark:hover:border-teal-900 cursor-pointer transition-all flex items-center justify-between"
-                    >
-                      <div>
-                        <strong className="text-xs font-black text-slate-900 dark:text-white block">{productName(item)}</strong>
-                        <span className="text-[11px] text-slate-400 font-bold">{item.brand} · {item.category}</span>
-                      </div>
-                      <span className="text-xs font-black text-teal-600 dark:text-teal-400">{currency(item.sale_price)}</span>
-                    </div>
-                  ))
-                ) : searchQuery.trim() ? (
-                  <div className="text-center py-8 text-xs font-bold text-slate-400">
-                    No matching catalog models found for "{searchQuery}"
-                  </div>
-                ) : (
-                  <div className="py-6 space-y-3">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block px-2">Popular Suggestions</span>
-                    <div className="flex flex-wrap gap-2 px-2">
-                      {['iPhone 13', 'AS CARE', 'Battery', 'OnePlus 12', 'Kaiku'].map(tag => (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => setSearchQuery(tag)}
-                          className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-teal-50 hover:text-teal-700"
-                        >
-                          {tag}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
