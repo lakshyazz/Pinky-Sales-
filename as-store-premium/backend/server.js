@@ -1324,15 +1324,22 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     // Check duplicate
     const duplicate = await getRecord(
       `SELECT id FROM products 
-       WHERE company_brand_id = ? 
-         AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
-         AND manufacturing_brand_id = ?
+       WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         AND LOWER(TRIM(COALESCE(model, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, ''))) 
+         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+         AND LOWER(TRIM(COALESCE(category, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, '')))
          AND is_active = 1
          AND id <> ?`,
-      [companyBrandId || null, model !== undefined ? (model || '') : (oldProduct.model || ''), targetMfgBrandId, productId]
+      [
+        companyBrandId || null,
+        model !== undefined ? (model || '') : (oldProduct.model || ''),
+        targetMfgBrandId,
+        categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
+        productId
+      ]
     );
     if (duplicate) {
-      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, and Manufacturing Brand already exists.' });
+      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
     }
 
     await runTransaction(async (tx) => {
@@ -1591,14 +1598,15 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   // Check duplicate
   const duplicate = await getRecord(
     `SELECT id FROM products 
-     WHERE company_brand_id = ? 
-       AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
-       AND manufacturing_brand_id = ?
+     WHERE company_brand_id IS NOT DISTINCT FROM ? 
+       AND LOWER(TRIM(COALESCE(model, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, ''))) 
+       AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+       AND LOWER(TRIM(COALESCE(category, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, '')))
        AND is_active = 1`,
-    [companyBrandId, model || '', effectiveMfgBrandId]
+    [companyBrandId, model || '', effectiveMfgBrandId, categoryRef ? categoryRef.name : effectiveCategory]
   );
   if (duplicate) {
-    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, and Manufacturing Brand already exists.' });
+    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
   }
 
   const result = await runQuery(
@@ -1705,15 +1713,22 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
   // Check duplicate
   const duplicate = await getRecord(
     `SELECT id FROM products 
-     WHERE company_brand_id = ? 
-       AND LOWER(TRIM(COALESCE(model, ''))) = LOWER(TRIM(COALESCE(?, ''))) 
-       AND manufacturing_brand_id = ?
+     WHERE company_brand_id IS NOT DISTINCT FROM ? 
+       AND LOWER(TRIM(COALESCE(model, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, ''))) 
+       AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+       AND LOWER(TRIM(COALESCE(category, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, '')))
        AND is_active = 1
        AND id <> ?`,
-    [companyBrandId, model !== undefined ? (model || '') : (oldProduct.model || ''), targetMfgBrandId, req.params.id]
+    [
+      companyBrandId,
+      model !== undefined ? (model || '') : (oldProduct.model || ''),
+      targetMfgBrandId,
+      categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
+      req.params.id
+    ]
   );
   if (duplicate) {
-    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, and Manufacturing Brand already exists.' });
+    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
   }
 
   await runQuery(
