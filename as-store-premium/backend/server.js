@@ -1319,13 +1319,14 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const newSalePrice = canEditSellingPrice && targetSalePrice !== undefined && targetSalePrice !== null && targetSalePrice !== '' ? Number(targetSalePrice) : null;
   const newWholesalePrice = isSuperAdmin && wholesale_price !== undefined && wholesale_price !== null && wholesale_price !== '' ? Number(wholesale_price) : null;
   const newPurchasePrice = isSuperAdmin && purchase_price !== undefined && purchase_price !== null && purchase_price !== '' ? Number(purchase_price) : null;
-  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;l;
+  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;
 
   try {
     const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [productId]);
     if (!oldProduct) return res.status(404).json({ error: 'Product not found.' });
 
     const brandRef = brand ? await ensureReference('brands', brand) : null;
+    const categoryRef = category ? await ensureReference('categories', category) : null;
     const companyBrandId = brandRef ? brandRef.id : oldProduct.company_brand_id;
     const targetMfgBrandId = manufacturing_brand_id !== undefined ? manufacturing_brand_id : oldProduct.manufacturing_brand_id;
 
@@ -1340,7 +1341,24 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
     }
 
-    // Check duplicate
+    // Check duplicate short_name
+    const cleanShortName = String(short_name !== undefined ? (short_name || '') : (oldProduct.short_name || '')).trim();
+    if (cleanShortName) {
+      const duplicateShortName = await getRecord(
+        `SELECT id FROM products 
+         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+           AND LOWER(TRIM(short_name)) = LOWER(?) 
+           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+           AND is_active = 1
+           AND id <> ?`,
+        [companyBrandId || null, cleanShortName, targetMfgBrandId, productId]
+      );
+      if (duplicateShortName) {
+        return res.status(409).json({ error: 'A product with this Short Name already exists under this Brand and Manufacturer.' });
+      }
+    }
+
+    // Check duplicate model + brand + category + mfg
     let duplicate = null;
     const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
     if (cleanModel) {
@@ -1618,7 +1636,23 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
   const companyBrandId = brandRef ? brandRef.id : null;
 
-  // Check duplicate
+  // Check duplicate short_name
+  const cleanShortName = String(short_name || '').trim();
+  if (cleanShortName) {
+    const duplicateShortName = await getRecord(
+      `SELECT id FROM products 
+       WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         AND LOWER(TRIM(short_name)) = LOWER(?) 
+         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+         AND is_active = 1`,
+      [companyBrandId, cleanShortName, effectiveMfgBrandId]
+    );
+    if (duplicateShortName) {
+      return res.status(409).json({ error: 'A product with this Short Name already exists under this Brand and Manufacturer.' });
+    }
+  }
+
+  // Check duplicate model + brand + category + mfg
   let duplicate = null;
   const cleanModel = String(model || '').trim();
   if (cleanModel) {
