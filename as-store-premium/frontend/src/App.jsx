@@ -4886,6 +4886,7 @@ function App() {
                     <span className="text-[10px] uppercase font-black text-cyan-600 tracking-widest leading-none block mb-1">
                       {selectedProductDetails.brand || 'No Brand'} · {selectedProductDetails.category}
                       {selectedProductDetails.manufacturing_brand_name && ` · Mfg: ${selectedProductDetails.manufacturing_brand_name}`}
+                      {selectedProductDetails.supplier_name && ` · Supplier: ${selectedProductDetails.supplier_name}`}
                     </span>
                     <h2 id="product-details-title" className="text-xl font-extrabold text-slate-800 truncate">
                       {productName(selectedProductDetails)}
@@ -4935,8 +4936,14 @@ function App() {
                       </div>
                       {selectedProductDetails.manufacturing_brand_name && (
                         <div className="flex justify-between items-center py-2.5">
-                          <span className="text-sm font-bold text-slate-500">Supplier / Brand</span>
+                          <span className="text-sm font-bold text-slate-500">Manufacturing Brand</span>
                           <strong className="text-slate-800 font-extrabold text-base">{selectedProductDetails.manufacturing_brand_name}</strong>
+                        </div>
+                      )}
+                      {selectedProductDetails.supplier_name && (
+                        <div className="flex justify-between items-center py-2.5">
+                          <span className="text-sm font-bold text-slate-500">Supplier</span>
+                          <strong className="text-slate-800 font-extrabold text-base">{selectedProductDetails.supplier_name}</strong>
                         </div>
                       )}
                       {(role === 'superadmin' || data.priceVisibility.show_purchase_price_shopkeeper) && selectedProductDetails.purchase_price !== undefined && selectedProductDetails.purchase_price !== null && (

@@ -315,6 +315,7 @@ const getProductsForRole = async (role, query = {}) => {
     "COALESCE(array_to_string(p.colours, ','), '')",
     "COALESCE(mb.name, '')",
     "COALESCE(b.name, '')",
+    "COALESCE(s.name, '')",
   ]);
   
   if (hasQueryValue(query.brand)) {

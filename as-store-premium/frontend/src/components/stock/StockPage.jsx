@@ -928,6 +928,9 @@ export default function StockPage({
                       {item.manufacturing_brand_name && (
                         <span style={{ padding: '2px 8px', background: '#f0fdf4', color: '#166534', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #bbf7d0' }}>Mfg: {item.manufacturing_brand_name}</span>
                       )}
+                      {item.supplier_name && (
+                        <span style={{ padding: '2px 8px', background: '#eff6ff', color: '#1e40af', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #bfdbfe' }}>Supplier: {item.supplier_name}</span>
+                      )}
                       {!shopId && <span style={{ color: '#94a3b8', fontSize: '10.5px', fontWeight: '500' }}>· {item.shop_name}</span>}
                     </div>
                   </div>

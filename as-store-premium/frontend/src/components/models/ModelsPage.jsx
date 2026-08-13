@@ -202,6 +202,7 @@ export default function ModelsPage({
 
       // Mutate local item properties for immediate UI reactivity
       const mfgBrandObject = reference?.manufacturingBrands?.find(mb => Number(mb.id) === Number(payload.manufacturing_brand_id));
+      const supplierObject = reference?.suppliers?.find(s => Number(s.id) === Number(payload.supplier_id));
       Object.assign(editingProduct, {
         short_name: payload.short_name,
         name: payload.short_name,
@@ -335,13 +336,19 @@ export default function ModelsPage({
                     {/* Top Row: Category and Brand */}
                     <div className="flex items-center justify-between gap-2 mb-2 text-[10px] uppercase font-bold text-slate-400">
                       <span>{product.category || 'General'}</span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
                         <span>{product.brand || 'Generic'}</span>
                         {product.manufacturing_brand_name && (
-                          <span className="text-slate-300">|</span>
+                          <>
+                            <span className="text-slate-300">|</span>
+                            <span className="text-slate-500 font-semibold">{product.manufacturing_brand_name}</span>
+                          </>
                         )}
-                        {product.manufacturing_brand_name && (
-                          <span className="text-slate-500 font-semibold">{product.manufacturing_brand_name}</span>
+                        {product.supplier_name && (
+                          <>
+                            <span className="text-slate-300">|</span>
+                            <span className="text-blue-600 font-semibold">Sup: {product.supplier_name}</span>
+                          </>
                         )}
                       </div>
                     </div>
@@ -513,6 +520,9 @@ export default function ModelsPage({
                         {product.manufacturing_brand_name && (
                           <span className="text-[10px] text-slate-500 font-medium">Mfg: {product.manufacturing_brand_name}</span>
                         )}
+                        {product.supplier_name && (
+                          <span className="text-[10px] text-blue-600 font-medium">Supplier: {product.supplier_name}</span>
+                        )}
                       </div>
                     </td>
                     <td className="p-4">
@@ -595,7 +605,7 @@ export default function ModelsPage({
                   </div>
                   <div>
                     <h3 className="text-lg font-black text-slate-900">{productName(inspectProduct)}</h3>
-                    <p className="text-xs text-slate-500 font-semibold">{inspectProduct.brand || 'Generic'} · {inspectProduct.manufacturing_brand_name && `Mfg: ${inspectProduct.manufacturing_brand_name} · `}{inspectProduct.category || 'General'}</p>
+                    <p className="text-xs text-slate-500 font-semibold">{inspectProduct.brand || 'Generic'} · {inspectProduct.manufacturing_brand_name && `Mfg: ${inspectProduct.manufacturing_brand_name} · `}{inspectProduct.supplier_name && `Supplier: ${inspectProduct.supplier_name} · `}{inspectProduct.category || 'General'}</p>
                   </div>
                 </div>
                 <button onClick={() => setInspectProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">

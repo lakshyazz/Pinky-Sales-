@@ -270,6 +270,12 @@ export default function PricesPage({
                             <span className="font-semibold text-slate-600">Mfg: {product.manufacturing_brand_name}</span>
                           </>
                         )}
+                        {product.supplier_name && (
+                          <>
+                            <span className="text-slate-300">•</span>
+                            <span className="font-semibold text-blue-600">Supplier: {product.supplier_name}</span>
+                          </>
+                        )}
                       </div>
 
                       {/* Truncated Compatibility Label */}
