@@ -3757,6 +3757,8 @@ function App() {
                 data={data}
                 brands={data.brandSummary}
                 loading={pageLoading.brands}
+                products={brandProducts}
+                productLoading={brandProductsLoading}
                 onBrandChange={loadCore}
                 currency={currency}
                 productName={productName}

@@ -61,13 +61,31 @@ export default function BrandsPage({
   // Combine products from data.products, data.catalog, data.stock
   const allProducts = React.useMemo(() => {
     const list = [...(data.products || []), ...(data.catalog || []), ...(data.stock || [])];
-    const seen = new Set();
-    return list.filter((p) => {
+    const productMap = new Map();
+    list.forEach((p) => {
       const key = p.product_id || p.id;
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
+      if (!key) return;
+      if (!productMap.has(key)) {
+        productMap.set(key, { ...p });
+      } else {
+        const existing = productMap.get(key);
+        // Merge quantities safely
+        const existingQty = Number(existing.quantity ?? existing.total_stock ?? existing.available_quantity ?? 0);
+        const newQty = Number(p.quantity ?? p.total_stock ?? p.available_quantity ?? 0);
+        existing.quantity = Math.max(existingQty, newQty);
+        existing.total_stock = Math.max(existingQty, newQty);
+        existing.available_quantity = Math.max(existingQty, newQty);
+        
+        // Merge last stocked / updated timestamps
+        if (p.last_stocked_at && (!existing.last_stocked_at || new Date(p.last_stocked_at) > new Date(existing.last_stocked_at))) {
+          existing.last_stocked_at = p.last_stocked_at;
+        }
+        if (p.updated_at && (!existing.updated_at || new Date(p.updated_at) > new Date(existing.updated_at))) {
+          existing.updated_at = p.updated_at;
+        }
+      }
     });
+    return Array.from(productMap.values());
   }, [data.products, data.catalog, data.stock]);
 
   // Aggregate brand statistics
