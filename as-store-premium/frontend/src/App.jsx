@@ -2505,6 +2505,13 @@ function App() {
 
     try {
       setSaving(true);
+      if (payload.category && !(data.reference?.categories || []).some(c => c.name.toLowerCase() === payload.category.toLowerCase())) {
+        try {
+          await authedFetch('/reference-data/categories', { method: 'POST', body: JSON.stringify({ name: payload.category }) });
+        } catch (e) {
+          console.warn('Auto category creation notice:', e);
+        }
+      }
       const created = editingProductId
         ? await authedFetch(`/products/${editingProductId}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await authedFetch('/products', { method: 'POST', body: JSON.stringify(payload) });

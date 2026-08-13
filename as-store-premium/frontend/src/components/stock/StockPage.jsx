@@ -442,6 +442,12 @@ export default function StockPage({
                       value={forms.product.full_model_list} 
                       onChange={(v) => handleProductNameChange(v, 'full_model_list')} 
                     />
+                    <Input 
+                      label="Category / New Category Name" 
+                      placeholder="Example: Display, Battery, Charger, Cover"
+                      value={forms.product.category} 
+                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, category: v } }))} 
+                    />
                   </div>
 
                    {/* Grid 2: Brand and Category */}
@@ -452,65 +458,12 @@ export default function StockPage({
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, brand: v } }))} 
                       options={[['', 'Choose Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
                     />
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-bold text-slate-700">Product Category</label>
-                        <button
-                          type="button"
-                          onClick={() => setShowAddCategoryInput(!showAddCategoryInput)}
-                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-0.5 cursor-pointer"
-                        >
-                          <Plus size={12} /> Add New Category
-                        </button>
-                      </div>
-                      <Select 
-                        value={forms.product.category} 
-                        onChange={(v) => {
-                          if (v === '__ADD_NEW__') {
-                            setShowAddCategoryInput(true);
-                          } else {
-                            setForms(prev => ({ ...prev, product: { ...prev.product, category: v } }));
-                          }
-                        }} 
-                        options={[
-                          ['', 'Choose Category'],
-                          ['__ADD_NEW__', '+ Add New Category...'],
-                          ...data.reference.categories.map(c => [c.name, c.name])
-                        ]}
-                      />
-                      {showAddCategoryInput && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <input
-                            type="text"
-                            placeholder="Enter new category name..."
-                            value={inlineCategoryInput}
-                            onChange={(e) => setInlineCategoryInput(e.target.value)}
-                            className="w-full px-3 py-1.5 bg-white border border-teal-400 rounded-lg text-xs font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-teal-500/20"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                handleAddInlineCategory();
-                              }
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={handleAddInlineCategory}
-                            className="px-3 py-1.5 bg-teal-600 text-white font-bold text-xs rounded-lg hover:bg-teal-700 shrink-0 cursor-pointer"
-                          >
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => { setShowAddCategoryInput(false); setInlineCategoryInput(''); }}
-                            className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
-                          >
-                            <X size={16} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                    <Select 
+                      label="Select Existing Category" 
+                      value={forms.product.category} 
+                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, category: v } }))} 
+                      options={[['', 'Choose Existing Category'], ...data.reference.categories.map(c => [c.name, c.name])]}
+                    />
                     <Select 
                       label="Manufacturing Brand" 
                       value={forms.product.manufacturing_brand_id || ''} 
