@@ -278,7 +278,7 @@ const getPriceVisibility = async () => {
   };
 };
 const productColumnsForRole = async (role) => {
-  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'category', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'is_active', 'updated_at'];
+  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'is_active', 'updated_at'];
   let cols = [...base];
   if (role === 'superadmin') cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
   else {
@@ -287,17 +287,19 @@ const productColumnsForRole = async (role) => {
     if (visibility.show_wholesale_price_shopkeeper) cols.push('wholesale_price');
     if (visibility.show_purchase_price_shopkeeper) cols.push('purchase_price');
   }
-  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.supplier_id, s.name AS supplier_name, p.model AS display_model`;
+  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.supplier_id, s.name AS supplier_name, p.part_category_id, pc.name AS part_category_name, p.product_variant_id, pv.name AS product_variant_name, p.model AS display_model`;
 };
 const getReferenceData = () => getCached('reference-data', 300_000, async () => {
-  const [categories, colours, brands, manufacturingBrands, suppliers] = await Promise.all([
+  const [categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants] = await Promise.all([
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM colours WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM brands WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM manufacturing_brands ORDER BY LOWER(TRIM(name)), id'),
     allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM suppliers ORDER BY LOWER(TRIM(name)), id'),
+    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM part_categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM product_variants WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
   ]);
-  return { categories, colours, brands, manufacturingBrands, suppliers };
+  return { categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants };
 });
 const getProductsForRole = async (role, query = {}) => {
   const columns = await productColumnsForRole(role);
@@ -309,7 +311,10 @@ const getProductsForRole = async (role, query = {}) => {
     "COALESCE(p.short_name, '')",
     "COALESCE(p.full_model_list, '')",
     "COALESCE(p.brand, '')",
-    "COALESCE(p.category, '')",
+    "COALESCE(p.part_category, '')",
+    "COALESCE(p.quality_variant, '')",
+    "COALESCE(pc.name, '')",
+    "COALESCE(pv.name, '')",
     "COALESCE(p.model, '')",
     "COALESCE(p.description, '')",
     "COALESCE(array_to_string(p.colours, ','), '')",
@@ -337,6 +342,14 @@ const getProductsForRole = async (role, query = {}) => {
   }
 
   appendExactFilter(where, params, query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
+  if (hasQueryValue(query.part_category)) {
+    where.push('(LOWER(TRIM(COALESCE(p.part_category, \'\'))) = LOWER(TRIM(?)) OR LOWER(TRIM(COALESCE(pc.name, \'\'))) = LOWER(TRIM(?)))');
+    params.push(String(query.part_category).trim(), String(query.part_category).trim());
+  }
+  if (hasQueryValue(query.quality_variant)) {
+    where.push('(LOWER(TRIM(COALESCE(p.quality_variant, \'\'))) = LOWER(TRIM(?)) OR LOWER(TRIM(COALESCE(pv.name, \'\'))) = LOWER(TRIM(?)))');
+    params.push(String(query.quality_variant).trim(), String(query.quality_variant).trim());
+  }
   if (hasQueryValue(query.colour)) {
     where.push(`EXISTS (
       SELECT 1 FROM UNNEST(p.colours) AS product_colour
@@ -360,11 +373,15 @@ const getProductsForRole = async (role, query = {}) => {
               LEFT JOIN brands b ON b.id = p.company_brand_id
               LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
               LEFT JOIN suppliers s ON s.id = p.supplier_id
+              LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+              LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
               WHERE ${whereSql} ORDER BY p.brand, COALESCE(p.short_name, p.name)`,
     countSql: `SELECT COUNT(*) AS total FROM products p 
                LEFT JOIN brands b ON b.id = p.company_brand_id
                LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
                LEFT JOIN suppliers s ON s.id = p.supplier_id
+               LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+               LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
                WHERE ${whereSql}`,
     params,
     pagination,
@@ -1671,21 +1688,53 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
   }
 
+  const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
+  const productVariantRef = quality_variant ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
+  const effectivePartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
+  const effectiveProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
+  const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
+  const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant ? String(quality_variant).trim() : null);
+
+  const cleanPartCat = canonicalPartCategory || 'Display';
+  const cleanQualVar = canonicalQualityVariant || '';
+  const autoGeneratedName = [canonicalBrand, cleanModel, cleanPartCat, cleanQualVar].filter(Boolean).join(' ');
+  displayName = String(short_name || '').trim() || autoGeneratedName;
+
+  // Strict Duplicate combination check
+  if (cleanModel && effectivePartCategoryId) {
+    const duplicateCombination = await getRecord(
+      `SELECT id FROM products 
+       WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         AND LOWER(TRIM(model)) = LOWER(?) 
+         AND part_category_id = ?
+         AND product_variant_id IS NOT DISTINCT FROM ?
+         AND is_active = 1`,
+      [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId]
+    );
+    if (duplicateCombination) {
+      return res.status(409).json({ error: `A product for ${displayName} already exists.` });
+    }
+  }
+
   const result = await runQuery(
     `INSERT INTO products (
-      name, short_name, full_model_list, brand, category, model, official_price,
+      name, short_name, full_model_list, brand, category, part_category, quality_variant, model, official_price,
       purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-      company_brand_id, manufacturing_brand_id, supplier_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      company_brand_id, manufacturing_brand_id, supplier_id, part_category_id, product_variant_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, model || '', officialPriceNum,
+      displayName, displayName, displayName, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
       purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
-      companyBrandId, effectiveMfgBrandId, effectiveSupplierId
+      companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId
     ]
   );
+
+  const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
   const shops = await allRecords('SELECT id FROM shops');
+  const targetShopId = scopeShopId(req) || shops[0]?.id;
   for (const shop of shops) {
-    await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, 0) ON CONFLICT(shop_id, product_id) DO NOTHING', [shop.id, result.id]);
+    const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
+    await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, result.id, qty]);
   }
   await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
   res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
@@ -1797,16 +1846,23 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
   }
 
+  const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
+  const productVariantRef = await ensureReference('product_variants', quality_variant || req.body.product_variant_name);
+  const targetPartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
+  const targetProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
+  const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
+  const canonicalQualityVariant = productVariantRef ? productVariantRef.name : String(quality_variant || '').trim();
+
   await runQuery(
     `UPDATE products SET
-      name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, model = ?, official_price = ?,
+      name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, part_category = ?, quality_variant = ?, model = ?, official_price = ?,
       purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
-      description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, updated_at = CURRENT_TIMESTAMP
+      description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?`,
     [
-      compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, model || '', officialPriceNum,
+      compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, model || '', officialPriceNum,
       purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours, is_active,
-      companyBrandId, targetMfgBrandId, targetSupplierId, req.params.id,
+      companyBrandId, targetMfgBrandId, targetSupplierId, targetPartCategoryId, targetProductVariantId, req.params.id,
     ]
   );
   await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${officialPriceNum}`);
@@ -1890,6 +1946,43 @@ app.put('/api/other-products/:id', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('[OtherProducts] Update failed:', error);
     res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+// --- Reference Data Endpoints for Part Categories and Product Variants ---
+app.post(['/api/reference-data/part-categories', '/reference-data/part-categories'], authenticateToken, async (req, res) => {
+  try {
+    const { name } = req.body;
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return res.status(400).json({ error: 'Name is required' });
+    const existing = await getRecord('SELECT * FROM part_categories WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [cleanName]);
+    if (existing) {
+      await runQuery('UPDATE part_categories SET is_active = TRUE WHERE id = ?', [existing.id]);
+      return res.json(existing);
+    }
+    const result = await runQuery('INSERT INTO part_categories (name) VALUES (?)', [cleanName]);
+    invalidateCache('reference-data');
+    res.status(201).json({ id: result.id, name: cleanName });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to add part category' });
+  }
+});
+
+app.post(['/api/reference-data/product-variants', '/reference-data/product-variants'], authenticateToken, async (req, res) => {
+  try {
+    const { name } = req.body;
+    const cleanName = String(name || '').trim();
+    if (!cleanName) return res.status(400).json({ error: 'Name is required' });
+    const existing = await getRecord('SELECT * FROM product_variants WHERE LOWER(TRIM(name)) = LOWER(TRIM(?))', [cleanName]);
+    if (existing) {
+      await runQuery('UPDATE product_variants SET is_active = TRUE WHERE id = ?', [existing.id]);
+      return res.json(existing);
+    }
+    const result = await runQuery('INSERT INTO product_variants (name) VALUES (?)', [cleanName]);
+    invalidateCache('reference-data');
+    res.status(201).json({ id: result.id, name: cleanName });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to add product variant' });
   }
 });
 

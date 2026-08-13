@@ -495,6 +495,13 @@ export default function RedesignedDashboard({
   const [liveTime, setLiveTime] = useState('');
   const notificationRef = useRef(null);
 
+  // Always scroll to top when Dashboard is opened/mounted
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    const mainContainer = document.querySelector('main') || document.querySelector('.main-content') || document.documentElement;
+    if (mainContainer && mainContainer.scrollTop > 0) mainContainer.scrollTop = 0;
+  }, []);
+
   // Close notifications dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(event) {

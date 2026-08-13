@@ -163,6 +163,8 @@ const cleanReferenceData = (reference = {}) => ({
   brands: uniqueNamedItems(reference.brands),
   manufacturingBrands: uniqueNamedItems(reference.manufacturingBrands),
   suppliers: uniqueNamedItems(reference.suppliers),
+  partCategories: uniqueNamedItems(reference.partCategories),
+  productVariants: uniqueNamedItems(reference.productVariants),
 });
 const combineLowStockAlerts = (items = []) => {
   const combined = new Map();
@@ -429,7 +431,7 @@ const initialForms = {
   shop: { name: '', area: '', address: '', phone: '' },
   shopkeeper: { username: '', password: '', name: '', contact: '', shop_id: '' },
   product: {
-    short_name: '', full_model_list: '', brand: '', category: 'Display', model: '',
+    short_name: '', full_model_list: '', brand: '', part_category: 'Display', quality_variant: 'OLED', model: '',
     official_price: '', purchase_price: '', sale_price: '', wholesale_price: '', retail_price: '',
     opening_stock: '', description: '', colours: '', manufacturing_brand_id: '', supplier_id: '',
   },
@@ -874,6 +876,35 @@ function App() {
   const [modelSearch, setModelSearch] = useState('');
   const [priceSearch, setPriceSearch] = useState('');
   const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
+  const [showQuickAddCustomerModal, setShowQuickAddCustomerModal] = useState(false);
+  const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', notes: '' });
+  const [savingQuickCustomer, setSavingQuickCustomer] = useState(false);
+
+  const handleQuickAddCustomerSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!quickCustomerForm.name.trim()) return showToast('Please enter customer name');
+    try {
+      setSavingQuickCustomer(true);
+      const scoped = shopId ? `?shopId=${shopId}` : '';
+      const created = await authedFetch(`/customers${scoped}`, {
+        method: 'POST',
+        body: JSON.stringify(quickCustomerForm),
+      });
+      const updatedCustomers = await authedFetch(`/customers${scoped}`);
+      setData((prev) => ({ ...prev, customers: updatedCustomers }));
+      const newId = created?.id || updatedCustomers.find(c => c.name.toLowerCase() === quickCustomerForm.name.trim().toLowerCase())?.id;
+      if (newId) {
+        setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: String(newId) } }));
+      }
+      setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+      setShowQuickAddCustomerModal(false);
+      showToast('Customer created and selected for sale');
+    } catch (err) {
+      showToast(err.message || 'Failed to add customer');
+    } finally {
+      setSavingQuickCustomer(false);
+    }
+  };
   const [pendingFilters, setPendingFilters] = useState({ search: '', date: '' });
   const [reportsFilters, setReportsFilters] = useState({ search: '', brand: '', category: '' });
   const [globalSearch, setGlobalSearch] = useState('');
@@ -1110,6 +1141,24 @@ function App() {
     prevActiveRef.current = active;
   }, [active]);
 
+  // Global search keyboard shortcut (Ctrl+K, Cmd+K, Ctrl+/, Alt+K)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey || e.altKey) && (e.key === 'k' || e.key === 'K' || e.key === '/')) {
+        e.preventDefault();
+        setGlobalSearchFocused(true);
+        hydrateGlobalSearch();
+        const searchInput = document.querySelector('.global-search input') || document.querySelector('input[placeholder*="Search"]') || document.querySelector('input[type="search"]');
+        if (searchInput) {
+          searchInput.focus();
+          if (typeof searchInput.select === 'function') searchInput.select();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
+
   const requireShopSelection = (message = 'Select a specific shop first') => {
     if (role === 'superadmin' && !shopId) {
       showToast(message);
@@ -1143,10 +1192,10 @@ function App() {
 
     if (result.kind === 'product') {
       const nextQuery = productName(result.item);
-      setModelSearch(nextQuery);
+      setModelSearch('');
       setPriceSearch(nextQuery);
       if (role === 'customer') {
-        setCatalogFilters((prev) => ({ ...prev, search: nextQuery }));
+        setCatalogFilters((prev) => ({ ...prev, search: '' }));
         setActivePage('catalog');
       } else {
         setActivePage('models');
@@ -1769,6 +1818,22 @@ function App() {
     loadReportsPage({ page: reportsPager.page, filters: deferredReportsFilters });
   }, [active, selectedShop, deferredReportsFilters, reportsPager.page, reportsPager.limit, session?.token, authReady]);
 
+  // Ctrl+K / Cmd+K Global Search shortcut
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const searchInput = document.querySelector('input[type="search"], input[placeholder*="Search"], input[placeholder*="search"]');
+        if (searchInput) {
+          searchInput.focus();
+          searchInput.select();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   const login = (nextSession) => {
     const normalizedSession = normalizeSession(nextSession);
     localStorage.setItem('session', JSON.stringify(normalizedSession));
@@ -1957,8 +2022,11 @@ function App() {
       const reference = await api('/reference-data');
       setData((prev) => ({ ...prev, reference: cleanReferenceData(reference) }));
       const resolvedName = createdReference?.name || cleanName;
-      if (active === 'stock' && type === 'categories') {
-        setForms((prev) => ({ ...prev, product: { ...prev.product, category: resolvedName } }));
+      if (active === 'stock' && type === 'partCategories') {
+        setForms((prev) => ({ ...prev, product: { ...prev.product, part_category: resolvedName } }));
+      }
+      if (active === 'stock' && type === 'productVariants') {
+        setForms((prev) => ({ ...prev, product: { ...prev.product, quality_variant: resolvedName } }));
       }
       if (active === 'stock' && type === 'colours') {
         setForms((prev) => {
@@ -1985,6 +2053,7 @@ function App() {
       setSaving(true);
       await authedFetch(`/reference-data/${type}/${id}`, { method: 'PUT', body: JSON.stringify({ name: cleanName }) });
       await loadCore();
+      if (type === 'brands') await loadBrandsPage(shopId);
       showToast(`${referenceLabel} renamed to ${cleanName}`);
     } catch (error) {
       showToast(error.message || `Unable to rename ${referenceLabel}`);
@@ -2474,7 +2543,8 @@ function App() {
       full_model_list: (forms.product.full_model_list || '').trim(),
       name: (forms.product.full_model_list || '').trim(),
       brand: (forms.product.brand || '').trim(),
-      category: (forms.product.category || '').trim(),
+      part_category: (forms.product.part_category || '').trim(),
+      quality_variant: (forms.product.quality_variant || '').trim(),
       model: (forms.product.model || '').trim(),
       official_price: numericPrice(forms.product.sale_price),
       purchase_price: numericPrice(forms.product.purchase_price),
@@ -2524,6 +2594,8 @@ function App() {
       setForms((prev) => ({ ...prev, product: initialForms.product }));
       setEditingProductId('');
       showToast(editingProductId ? 'Product prices and details updated' : openingStock > 0 ? 'Product added with opening stock' : 'Product price added');
+      const refData = await api('/reference-data');
+      setData((prev) => ({ ...prev, reference: cleanReferenceData(refData) }));
       await loadCore();
       if (active === 'stock') await loadTab('stock', shopId);
       if (active === 'models' || active === 'prices') await loadProductPage({ tab: active, page: productPager.page });
@@ -3766,7 +3838,7 @@ function App() {
                 loading={pageLoading.brands}
                 products={brandProducts}
                 productLoading={brandProductsLoading}
-                onBrandChange={loadCore}
+                onBrandChange={async () => { await loadCore(); await loadBrandsPage(shopId); }}
                 currency={currency}
                 productName={productName}
                 onAddReferenceOption={addReferenceOption}
@@ -3947,7 +4019,19 @@ function App() {
                 </FormPanel>
                 <FormPanel title="Record customer purchase" action={saving ? 'Saving...' : 'Add transaction'} onSubmit={() => submitSale('customers')} disabled={saving || needsSpecificShop}>
                   <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '16px' }}>
-                    <Select label="Customer" value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-slate-700">Customer</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowQuickAddCustomerModal(true)}
+                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus size={12} /> Add New Customer
+                        </button>
+                      </div>
+                      <Select value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
+                    </div>
                     
                     <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
@@ -3958,7 +4042,7 @@ function App() {
                               label="Item bought" 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.description || p.brand || 'No variant'} · ${p.quantity} pcs left`])}
+                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${p.short_name || compactModelName(p.name || p.product_name)} · ${p.quantity} pcs left`])}
                             />
                           </div>
                           <div style={{ width: '205px' }}>
@@ -4070,7 +4154,19 @@ function App() {
                 {role === 'superadmin' && !shopId && <div className="loading">Select Warehouse or a branch from the location filter to create a sale. All-location sales remain visible below.</div>}
                 <FormPanel title={data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'} action="Create sale" onSubmit={() => submitSale('sales')} disabled={saving || needsSpecificShop}>
                   <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '16px' }}>
-                    <Select label="Customer" value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-slate-700">Customer</span>
+                        <button
+                          type="button"
+                          onClick={() => setShowQuickAddCustomerModal(true)}
+                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus size={12} /> Add New Customer
+                        </button>
+                      </div>
+                      <Select value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
+                    </div>
                     
                     <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
@@ -4081,7 +4177,7 @@ function App() {
                               label="Item bought" 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${productName(p)} · ${p.description || p.brand || 'No variant'} · ${p.quantity} pcs left`])}
+                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${p.short_name || compactModelName(p.name || p.product_name)} · ${p.quantity} pcs left`])}
                             />
                           </div>
                           <div style={{ width: '205px' }}>
@@ -4873,7 +4969,7 @@ function App() {
                 className="drawer-mask" 
                 type="button" 
                 aria-label="Close details drawer" 
-                onClick={() => setSelectedProductDetails(null)} 
+                onClick={() => { setSelectedProductDetails(null); setModelSearch(''); }} 
               />
               <motion.aside 
                 initial={{ x: '100%' }}
@@ -4899,7 +4995,7 @@ function App() {
                       {productName(selectedProductDetails)}
                     </h2>
                   </div>
-                  <button type="button" className="icon product-details-close" aria-label="Close product details" onClick={() => setSelectedProductDetails(null)}>
+                  <button type="button" className="icon product-details-close" aria-label="Close product details" onClick={() => { setSelectedProductDetails(null); setModelSearch(''); }}>
                     <X size={20} />
                   </button>
                 </div>
@@ -4978,6 +5074,93 @@ function App() {
           onCancel={() => setConfirmDialog(null)}
           onConfirm={runConfirmedAction}
         />
+
+        <AnimatePresence>
+          {showQuickAddCustomerModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative w-full max-w-md bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6"
+              >
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-2xl bg-teal-100 text-teal-700">
+                      <Users size={20} />
+                    </div>
+                    <h3 className="text-base font-extrabold text-slate-900">Add New Customer</h3>
+                  </div>
+                  <button type="button" onClick={() => setShowQuickAddCustomerModal(false)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleQuickAddCustomerSubmit} className="py-4 space-y-3.5 text-xs">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Customer Name *</label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Rahul Sharma"
+                      value={quickCustomerForm.name}
+                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, name: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Mobile Number</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 9876543210"
+                      value={quickCustomerForm.mobile}
+                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, mobile: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Address</label>
+                    <input
+                      type="text"
+                      placeholder="City or location"
+                      value={quickCustomerForm.address}
+                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, address: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Notes</label>
+                    <input
+                      type="text"
+                      placeholder="Optional notes"
+                      value={quickCustomerForm.notes}
+                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, notes: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickAddCustomerModal(false)}
+                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingQuickCustomer}
+                      className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-teal-600/20"
+                    >
+                      <Plus size={14} /> {savingQuickCustomer ? 'Creating...' : 'Create & Select Customer'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </main>
     </div>
   );
@@ -4998,7 +5181,14 @@ function Input({ label, value, onChange, type = 'text', className = '', ...input
   return (
     <label className={`field-label ${hasValue ? 'has-value' : ''} ${className}`}>
       <span className="field-label-text">{label}</span>
-      <input {...inputProps} placeholder={inputProps.placeholder || ' '} type={type} value={value} onChange={(e) => onChange(e.target.value)} />
+      <input
+        {...inputProps}
+        placeholder={inputProps.placeholder || ' '}
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onWheel={type === 'number' ? (e) => e.target.blur() : inputProps.onWheel}
+      />
     </label>
   );
 }

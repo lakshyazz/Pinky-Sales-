@@ -142,8 +142,26 @@ export default function BrandsPage({
     );
   }, [propBrands, brandStatsMap, searchVal]);
 
-  const activeBrandData = activeBrandName ? brandStatsMap.get(activeBrandName.toLowerCase()) : null;
-  const explorerProducts = propProducts || activeBrandData?.products || [];
+  const explorerProducts = React.useMemo(() => {
+    if (propProducts && Array.isArray(propProducts) && propProducts.length > 0) {
+      return propProducts;
+    }
+    if (!activeBrandName) return [];
+    
+    // 1. Try brandStatsMap match first
+    const activeData = brandStatsMap.get(activeBrandName.toLowerCase());
+    if (activeData && Array.isArray(activeData.products) && activeData.products.length > 0) {
+      return activeData.products;
+    }
+
+    // 2. Comprehensive fallback: filter allProducts across brand & manufacturing brand names
+    const targetBrand = activeBrandName.trim().toLowerCase();
+    return allProducts.filter((p) => {
+      const pBrand = String(p.brand || p.company_brand_name || p.brand_name || '').trim().toLowerCase();
+      const pMfgBrand = String(p.manufacturing_brand_name || p.mfg_brand_name || p.manufacturing_brand || '').trim().toLowerCase();
+      return pBrand === targetBrand || pMfgBrand === targetBrand || (pBrand && targetBrand.includes(pBrand)) || (targetBrand && pBrand.includes(targetBrand));
+    });
+  }, [propProducts, activeBrandName, brandStatsMap, allProducts]);
 
   // Calculate live summary stats for the current brand before search filters
   const modalStats = React.useMemo(() => {

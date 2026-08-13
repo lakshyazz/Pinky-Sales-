@@ -20,7 +20,10 @@ import {
   Settings,
   AlertCircle,
   Search,
-  PackagePlus
+  PackagePlus,
+  CheckCircle2,
+  AlertTriangle,
+  XCircle
 } from 'lucide-react';
 import ProductPagination from '../shared/ProductPagination';
 import SearchFilter from '../shared/SearchFilter';
@@ -70,6 +73,16 @@ export default function StockPage({
   const [isReferenceOpen, setIsReferenceOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
+  const [isCustomPartCategory, setIsCustomPartCategory] = useState(false);
+  const [isCustomQualityVariant, setIsCustomQualityVariant] = useState(false);
+
+  const defaultPartCategories = ['Display', 'Battery', 'Camera', 'Speaker', 'Charging IC', 'Main Flex', 'Frame', 'Charging Port', 'Vibrator', 'Ear Speaker', 'Back Glass', 'Middle Frame', 'Sim Tray', 'Housing', 'Mic'];
+  const refPartCategories = (data.reference?.partCategories || []).map(pc => typeof pc === 'string' ? pc : pc.name).filter(Boolean);
+  const uniquePartCategories = Array.from(new Set([...defaultPartCategories, ...refPartCategories]));
+
+  const defaultQualityVariants = ['OLED', 'Soft OLED', 'Hard OLED', 'Incell', 'With Frame', 'Without Frame', 'Fresh New', 'Set Remove', 'Original', 'Refurbished', 'Copy', 'Premium Copy'];
+  const refQualityVariants = (data.reference?.productVariants || []).map(qv => typeof qv === 'string' ? qv : qv.name).filter(Boolean);
+  const uniqueQualityVariants = Array.from(new Set([...defaultQualityVariants, ...refQualityVariants]));
 
   // Model Picker Modal state for quick stock addition from existing models
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
@@ -425,111 +438,363 @@ export default function StockPage({
 
           {isAddProductOpen && (
             <div className="stock-product-body">
-              <form className="stock-product-form" onSubmit={(e) => { e.preventDefault(); onSubmitProduct(); }}>
-                <div className="stock-product-flow">
+              <form className="stock-product-form space-y-5" onSubmit={(e) => { e.preventDefault(); onSubmitProduct(); }}>
+                <div className="stock-product-flow space-y-5">
                   
-                  {/* Grid 1: Basic specifications */}
-                  <div className="stock-product-grid stock-product-grid--identity">
+                  {/* Row 1: Short Display Name & Compatible Phone Models */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Input 
-                      label="Short Display Name (Visible to Users)" 
-                      placeholder="Example: iPhone 13 Battery Original"
+                      label="SHORT DISPLAY NAME (VISIBLE TO USERS)" 
+                      placeholder="Example: iPhone 13 Pro Display"
                       value={forms.product.short_name} 
                       onChange={(v) => handleProductNameChange(v, 'short_name')} 
                     />
                     <Input 
-                      label="Compatible Phone Models (Full list)" 
-                      placeholder="Example: A2633, A2482, A2631"
+                      label="COMPATIBLE PHONE MODELS (FULL LIST)" 
+                      placeholder="Example: A2483, A2484, A2636"
                       value={forms.product.full_model_list} 
                       onChange={(v) => handleProductNameChange(v, 'full_model_list')} 
                     />
+                  </div>                  {/* Row 2: Brand & Model */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Select 
+                      label="BRAND *" 
+                      placeholder="Select Brand"
+                      value={forms.product.brand} 
+                      onChange={(v) => {
+                        const brandName = v;
+                        const autoName = [brandName, forms.product.model, forms.product.part_category, forms.product.quality_variant].filter(Boolean).join(' ');
+                        setForms(prev => ({
+                          ...prev,
+                          product: {
+                            ...prev.product,
+                            brand: brandName,
+                            short_name: autoName,
+                            full_model_list: prev.product.full_model_list || prev.product.model || autoName
+                          }
+                        }));
+                      }} 
+                      options={[['', 'Select Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
+                    />
                     <Input 
-                      label="Category / New Category Name" 
-                      placeholder="Example: Display, Battery, Charger, Cover"
-                      value={forms.product.category} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, category: v } }))} 
+                      label="MODEL *" 
+                      placeholder="Type Model Name (e.g. V40e, iPhone 13)"
+                      value={forms.product.model} 
+                      onChange={(v) => {
+                        const modelName = v;
+                        const autoName = [forms.product.brand, modelName, forms.product.part_category, forms.product.quality_variant].filter(Boolean).join(' ');
+                        setForms(prev => ({
+                          ...prev,
+                          product: {
+                            ...prev.product,
+                            model: modelName,
+                            short_name: autoName,
+                            full_model_list: modelName
+                          }
+                        }));
+                      }} 
                     />
                   </div>
 
-                   {/* Grid 2: Brand and Category */}
-                  <div className="stock-product-grid stock-product-grid--taxonomy">
+                  {/* Row 3: Manufacturing Brand (Optional) & Supplier */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Select 
-                      label="Brand" 
-                      value={forms.product.brand} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, brand: v } }))} 
-                      options={[['', 'Choose Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
-                    />
-                    <Select 
-                      label="Select Existing Category" 
-                      value={forms.product.category} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, category: v } }))} 
-                      options={[['', 'Choose Existing Category'], ...data.reference.categories.map(c => [c.name, c.name])]}
-                    />
-                    <Select 
-                      label="Manufacturing Brand" 
+                      label="MANUFACTURING BRAND (OPTIONAL)" 
+                      placeholder="Select Manufacturing Brand"
                       value={forms.product.manufacturing_brand_id || ''} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, manufacturing_brand_id: v } }))} 
                       options={[
-                        ['', 'Choose Manufacturing Brand'], 
+                        ['', 'Select Manufacturing Brand'], 
                         ...(data.reference.manufacturingBrands || [])
                           .filter(mb => mb.is_active || String(mb.id) === String(forms.product.manufacturing_brand_id))
                           .map(mb => [mb.id, mb.name])
                       ]}
                     />
                     <Select 
-                      label="Supplier (Optional)" 
+                      label="SUPPLIER (OPTIONAL)" 
+                      placeholder="Select Supplier"
                       value={forms.product.supplier_id || ''} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, supplier_id: v } }))} 
                       options={[
-                        ['', 'Choose Supplier'], 
-                        ...(data.reference?.suppliers || [])
+                        ['', 'Select Supplier'], 
+                        ...(data.reference.suppliers || [])
                           .filter(s => s.is_active || String(s.id) === String(forms.product.supplier_id))
                           .map(s => [s.id, s.name])
                       ]}
                     />
                   </div>
 
-                  {/* Pricing grid */}
-                  <div className="stock-product-grid stock-product-grid--pricing">
+                  {/* Separate Part Category & Quality / Variant Container */}
+                  <div className="border border-emerald-300 dark:border-teal-800/80 rounded-2xl p-4 bg-emerald-50/20 dark:bg-emerald-950/10 grid grid-cols-1 md:grid-cols-2 gap-5">
+                    
+                    {/* Field 1: Part Category */}
+                    <div className="flex flex-col justify-between space-y-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[11px] font-black text-slate-800 uppercase tracking-wider block">PART CATEGORY *</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextState = !isCustomPartCategory;
+                              setIsCustomPartCategory(nextState);
+                              if (nextState) {
+                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: '' } }));
+                              }
+                            }}
+                            className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus size={12} /> {isCustomPartCategory ? 'Select Part Category' : 'Add New Part Category'}
+                          </button>
+                        </div>
+
+                        {isCustomPartCategory ? (
+                          <Input 
+                            label="New Part Category" 
+                            placeholder="Type part category (e.g. Display, Battery, Camera)"
+                            value={forms.product.part_category || ''} 
+                            onChange={(v) => {
+                              const partCat = v;
+                              const autoName = [forms.product.brand, forms.product.model, partCat, forms.product.quality_variant].filter(Boolean).join(' ');
+                              setForms(prev => ({ ...prev, product: { ...prev.product, part_category: partCat, short_name: autoName } }));
+                            }} 
+                          />
+                        ) : (
+                          <Select 
+                            label="Part Category *" 
+                            placeholder="Select Part Category"
+                            value={forms.product.part_category || ''} 
+                            onChange={(v) => {
+                              if (v === '__ADD_NEW__') {
+                                setIsCustomPartCategory(true);
+                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: '' } }));
+                              } else {
+                                const partCat = v;
+                                const autoName = [forms.product.brand, forms.product.model, partCat, forms.product.quality_variant].filter(Boolean).join(' ');
+                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: partCat, short_name: autoName } }));
+                              }
+                            }} 
+                            options={[
+                              ['', 'Select Part Category'],
+                              ...uniquePartCategories.map(pc => [pc, pc]),
+                              ['__ADD_NEW__', '➕ Add New Part Category...']
+                            ]}
+                          />
+                        )}
+
+                        {/* Quick Type Chips */}
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1 text-xs">
+                          <span className="text-[10px] font-bold text-slate-400 mr-1">Quick Categories:</span>
+                          {['Display', 'Battery', 'Camera', 'Speaker', 'Charging Port', 'Back Glass', 'Frame'].map((chip) => (
+                            <button
+                              type="button"
+                              key={chip}
+                              onClick={() => {
+                                setIsCustomPartCategory(false);
+                                const partCat = chip;
+                                const autoName = [forms.product.brand, forms.product.model, partCat, forms.product.quality_variant].filter(Boolean).join(' ');
+                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: partCat, short_name: autoName } }));
+                              }}
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
+                                forms.product.part_category === chip 
+                                  ? 'bg-teal-600 text-white border-teal-700 shadow-xs'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:border-teal-500'
+                              }`}
+                            >
+                              {chip}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <p className="text-[10px] text-slate-500 font-semibold italic">Defines WHAT spare part this is (Display, Battery, Camera, etc.)</p>
+                    </div>
+
+                    {/* Field 2: Product Quality / Variant */}
+                    <div className="flex flex-col justify-between space-y-3">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[11px] font-black text-slate-800 uppercase tracking-wider block">QUALITY / VARIANT (OPTIONAL)</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const nextState = !isCustomQualityVariant;
+                              setIsCustomQualityVariant(nextState);
+                              if (nextState) {
+                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: '' } }));
+                              }
+                            }}
+                            className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus size={12} /> {isCustomQualityVariant ? 'Select Variant' : 'Add New Variant'}
+                          </button>
+                        </div>
+
+                        {isCustomQualityVariant ? (
+                          <Input 
+                            label="New Quality / Variant" 
+                            placeholder="Type variant (e.g. OLED, Incell, With Frame)"
+                            value={forms.product.quality_variant || ''} 
+                            onChange={(v) => {
+                              const qualVar = v;
+                              const autoName = [forms.product.brand, forms.product.model, forms.product.part_category, qualVar].filter(Boolean).join(' ');
+                              setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: qualVar, short_name: autoName } }));
+                            }} 
+                          />
+                        ) : (
+                          <Select 
+                            label="Quality / Variant (Optional)" 
+                            placeholder="Select Variant"
+                            value={forms.product.quality_variant || ''} 
+                            onChange={(v) => {
+                              if (v === '__ADD_NEW__') {
+                                setIsCustomQualityVariant(true);
+                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: '' } }));
+                              } else {
+                                const qualVar = v;
+                                const autoName = [forms.product.brand, forms.product.model, forms.product.part_category, qualVar].filter(Boolean).join(' ');
+                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: qualVar, short_name: autoName } }));
+                              }
+                            }} 
+                            options={[
+                              ['', '(None / Default)'],
+                              ...uniqueQualityVariants.map(qv => [qv, qv]),
+                              ['__ADD_NEW__', '➕ Add New Quality Variant...']
+                            ]}
+                          />
+                        )}
+
+                        {/* Quick Variant Chips */}
+                        <div className="mt-2.5 flex flex-wrap items-center gap-1 text-xs">
+                          <span className="text-[10px] font-bold text-slate-400 mr-1">Quick Variants:</span>
+                          {['OLED', 'Incell', 'With Frame', 'Without Frame', 'Fresh New', 'Set Remove', 'Original'].map((chip) => (
+                            <button
+                              type="button"
+                              key={chip}
+                              onClick={() => {
+                                setIsCustomQualityVariant(false);
+                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: chip } }));
+                              }}
+                              className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
+                                forms.product.quality_variant === chip 
+                                  ? 'bg-teal-600 text-white border-teal-700 shadow-xs'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:border-teal-500'
+                              }`}
+                            >
+                              {chip}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <p className="text-[10px] text-slate-500 font-semibold italic">Defines WHICH VERSION/QUALITY it is (OLED, Incell, With Frame, etc.)</p>
+                    </div>
+
+                  </div>
+
+                  {/* Pricing Row */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <Input 
-                      label="Selling / Retail Price (Sale)" 
+                      label="SELLING PRICE (RETAIL)" 
                       type="number" 
-                      placeholder="₹0"
+                      placeholder="₹ 0.00"
                       value={forms.product.sale_price} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, sale_price: v } }))} 
                     />
                     <Input 
-                      label="Wholesale Price (Optional)" 
+                      label="WHOLESALE PRICE (OPTIONAL)" 
                       type="number" 
-                      placeholder="₹0"
+                      placeholder="₹ 0.00"
                       value={forms.product.wholesale_price} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, wholesale_price: v } }))} 
                     />
                     <Input 
-                      label="Purchase Cost Price (Cost)" 
+                      label="PURCHASE PRICE (COST)" 
                       type="number" 
-                      placeholder="₹0"
+                      placeholder="₹ 0.00"
                       value={forms.product.purchase_price} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, purchase_price: v } }))} 
                     />
                   </div>
 
-                  {/* Description */}
-                  <div className="stock-form-field">
-                    <label className="stock-form-label">Product Description / Compatibility Notes</label>
+                  {/* Description / Compatibility Notes */}
+                  <div className="space-y-1">
+                    <label className="text-[11px] font-black text-slate-700 uppercase tracking-wider block">DESCRIPTION / COMPATIBILITY NOTES</label>
                     <textarea 
-                      className="stock-form-textarea"
-                      placeholder="Add compatibility specifics or replacement warnings..."
+                      rows={3}
+                      className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-medium text-slate-800 outline-none focus:border-teal-500 focus:bg-white transition-all resize-none"
+                      placeholder="Add product description, compatibility info, quality notes etc..."
                       value={forms.product.description}
                       onChange={(e) => setForms(prev => ({ ...prev, product: { ...prev.product, description: e.target.value } }))}
                     />
                   </div>
 
-                  {/* Colour Selection */}
-                  <div className="stock-form-box">
-                    <span className="stock-form-label">Product Colours Tagging</span>
-                    <small className="stock-form-help">Select all colours that apply to this product. Typo-free tags keep inventory consistent.</small>
+                  {/* Initial Available Stock & Stock Status */}
+                  <div className="pt-2 flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex flex-wrap items-center gap-6">
+                      {!editingProductId && (
+                        <div style={{ width: '180px' }}>
+                          <Input 
+                            label="INITIAL AVAILABLE STOCK ⓘ" 
+                            type="number" 
+                            placeholder="0"
+                            value={forms.product.opening_stock} 
+                            onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, opening_stock: v } }))} 
+                          />
+                        </div>
+                      )}
+
+                      <div className="space-y-1">
+                        <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider block">STOCK STATUS ⓘ</span>
+                        <div className="flex items-center gap-2">
+                          <span className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
+                            Number(forms.product.opening_stock || 0) > 5 
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-300' 
+                              : 'bg-slate-50 text-slate-400 border-slate-200'
+                          }`}>
+                            <CheckCircle2 size={14} className="text-emerald-600" /> In Stock
+                          </span>
+                          <span className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
+                            Number(forms.product.opening_stock || 0) > 0 && Number(forms.product.opening_stock || 0) <= 5
+                              ? 'bg-amber-50 text-amber-700 border-amber-300' 
+                              : 'bg-slate-50 text-slate-400 border-slate-200'
+                          }`}>
+                            <AlertTriangle size={14} className="text-amber-600" /> Low Stock
+                          </span>
+                          <span className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
+                            Number(forms.product.opening_stock || 0) === 0
+                              ? 'bg-rose-50 text-rose-700 border-rose-300' 
+                              : 'bg-slate-50 text-slate-400 border-slate-200'
+                          }`}>
+                            <XCircle size={14} className="text-rose-600" /> No Stock
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 self-end">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddProductOpen(false)}
+                        className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={saving}
+                        className="px-6 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-teal-600/20 active:scale-95 transition-all cursor-pointer"
+                      >
+                        <PackagePlus size={16} /> {saving ? 'Saving Product...' : editingProductId ? 'Update Product' : 'Save Product'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Product Colours Tagging */}
+                  <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
+                    <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider block">Product Colours Tagging</span>
+                    <p className="text-[11px] text-slate-500 font-semibold">Select all colours that apply to this product. Typo-free tags keep inventory consistent.</p>
                     
-                    <div className="stock-colour-chip-list">
+                    <div className="flex flex-wrap gap-2">
                       {data.reference.colours.map((col) => {
                         const isSelected = forms.product.colours.split(',').map(c => c.trim()).includes(col.name);
                         return (
@@ -537,7 +802,11 @@ export default function StockPage({
                             type="button"
                             key={col.id}
                             onClick={() => handleToggleColour(col.name)}
-                            className={`stock-colour-chip ${isSelected ? 'selected' : ''}`}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border flex items-center gap-1.5 cursor-pointer ${
+                              isSelected
+                                ? 'bg-teal-600 text-white border-teal-700 shadow-xs'
+                                : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                            }`}
                           >
                             {isSelected && <Check size={12} />}
                             {col.name}
@@ -547,16 +816,16 @@ export default function StockPage({
                     </div>
 
                     {/* Inline Quick Add Colour */}
-                    <div className="stock-inline-colour-add">
+                    <div className="pt-2 flex items-center gap-2 max-w-xs">
                       <input 
-                        className="stock-inline-colour-input"
+                        className="flex-1 px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-teal-500"
                         type="text"
                         placeholder="Type new colour..."
                         value={inlineColorInput}
                         onChange={(e) => setInlineColorInput(e.target.value)}
                       />
                       <button 
-                        className="stock-inline-colour-button"
+                        className="px-3 py-2 bg-teal-600 hover:bg-teal-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
                         type="button" 
                         onClick={handleAddInlineColour}
                         disabled={saving}
@@ -564,26 +833,6 @@ export default function StockPage({
                         <Plus size={12} /> Add
                       </button>
                     </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="stock-product-actions">
-                    {editingProductId && (
-                      <button 
-                        className="soft" 
-                        type="button" 
-                        onClick={() => {
-                          setEditingProductId('');
-                          setForms((prev) => ({ ...prev, product: initialForms.product }));
-                        }}
-                      >
-                        Cancel Edit
-                      </button>
-                    )}
-                    <button className="primary" type="submit" disabled={saving}>
-                      <Save size={16} />
-                      {saving ? 'Saving...' : editingProductId ? 'Update Product' : 'Add Product'}
-                    </button>
                   </div>
 
                 </div>
@@ -615,25 +864,39 @@ export default function StockPage({
             <div style={{ padding: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
               
               {/* Tab Selector */}
-              <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '12px', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '12px', marginBottom: '16px', overflowX: 'auto' }}>
                 <button 
                   type="button" 
-                  onClick={() => { setRefTab('colours'); setEditingRef(null); }}
-                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'colours' ? 'rgba(168,85,247,0.15)' : 'transparent', color: refTab === 'colours' ? '#a855f7' : 'rgba(255,255,255,0.6)' }}
+                  onClick={() => { setRefTab('partCategories'); setEditingRef(null); }}
+                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'partCategories' ? 'rgba(13,148,136,0.15)' : 'transparent', color: refTab === 'partCategories' ? '#0d9488' : 'rgba(255,255,255,0.6)', fontWeight: '700' }}
                 >
-                  Colours
+                  Part Categories
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => { setRefTab('productVariants'); setEditingRef(null); }}
+                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'productVariants' ? 'rgba(13,148,136,0.15)' : 'transparent', color: refTab === 'productVariants' ? '#0d9488' : 'rgba(255,255,255,0.6)', fontWeight: '700' }}
+                >
+                  Quality / Variants
                 </button>
                 <button 
                   type="button" 
                   onClick={() => { setRefTab('brands'); setEditingRef(null); }}
-                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'brands' ? 'rgba(168,85,247,0.15)' : 'transparent', color: refTab === 'brands' ? '#a855f7' : 'rgba(255,255,255,0.6)' }}
+                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'brands' ? 'rgba(13,148,136,0.15)' : 'transparent', color: refTab === 'brands' ? '#0d9488' : 'rgba(255,255,255,0.6)', fontWeight: '700' }}
                 >
                   Brands {role !== 'superadmin' && <small>(Read-Only)</small>}
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => { setRefTab('colours'); setEditingRef(null); }}
+                  style={{ padding: '6px 12px', borderRadius: '6px', fontSize: '13px', border: 'none', cursor: 'pointer', background: refTab === 'colours' ? 'rgba(13,148,136,0.15)' : 'transparent', color: refTab === 'colours' ? '#0d9488' : 'rgba(255,255,255,0.6)', fontWeight: '700' }}
+                >
+                  Colours
                 </button>
               </div>
 
               {/* Creator form for selected type */}
-              {(refTab === 'colours' || role === 'superadmin') ? (
+              {(refTab === 'colours' || refTab === 'partCategories' || refTab === 'productVariants' || role === 'superadmin') ? (
                 <form 
                   style={{ display: 'flex', gap: '8px', marginBottom: '16px', maxWidth: '400px' }}
                   onSubmit={async (e) => {
@@ -644,15 +907,18 @@ export default function StockPage({
                     } else if (refTab === 'brands') {
                       await onAddReferenceOption('brands', newBrandInput);
                       setNewBrandInput('');
-                    } else {
-                      await onAddReferenceOption('categories', newCategoryInput);
+                    } else if (refTab === 'partCategories') {
+                      await onAddReferenceOption('partCategories', newCategoryInput);
+                      setNewCategoryInput('');
+                    } else if (refTab === 'productVariants') {
+                      await onAddReferenceOption('productVariants', newCategoryInput);
                       setNewCategoryInput('');
                     }
                   }}
                 >
                   <input 
                     type="text" 
-                    placeholder={`New ${refTab.slice(0, -1)} name...`}
+                    placeholder={`New ${refTab === 'partCategories' ? 'part category' : refTab === 'productVariants' ? 'variant' : refTab.slice(0, -1)} name...`}
                     value={refTab === 'colours' ? newColorInput : refTab === 'brands' ? newBrandInput : newCategoryInput}
                     onChange={(e) => {
                       if (refTab === 'colours') setNewColorInput(e.target.value);
@@ -672,10 +938,19 @@ export default function StockPage({
               )}
 
               {/* Items Grid list */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px', maxHeight: '250px', overflowY: 'auto', paddingRight: '6px' }}>
-                {getReferenceList().map((item) => {
-                  const isEditing = editingRef && editingRef.id === item.id && editingRef.type === refTab;
-                  return (
+              {(() => {
+                const referenceList = refTab === 'partCategories' 
+                  ? ((data.reference?.partCategories && data.reference.partCategories.length) ? data.reference.partCategories : uniquePartCategories.map((pc, i) => ({ id: `pc_${i}`, name: pc })))
+                  : refTab === 'productVariants'
+                  ? ((data.reference?.productVariants && data.reference.productVariants.length) ? data.reference.productVariants : uniqueQualityVariants.map((qv, i) => ({ id: `qv_${i}`, name: qv })))
+                  : refTab === 'brands'
+                  ? (data.reference?.brands || [])
+                  : (data.reference?.colours || []);
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px', maxHeight: '250px', overflowY: 'auto', paddingRight: '6px' }}>
+                    {referenceList.map((item) => {
+                      const isEditing = editingRef && editingRef.id === item.id && editingRef.type === refTab;
+                      return (
                     <div 
                       key={item.id} 
                       style={{ padding: '8px 12px', border: '1px solid rgba(255,255,255,0.05)', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
@@ -738,6 +1013,8 @@ export default function StockPage({
                   );
                 })}
               </div>
+            );
+          })()}
 
             </div>
           )}
@@ -993,7 +1270,7 @@ export default function StockPage({
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <div style={{ display: 'flex', alignItems: 'center' }}>
                     {isOutOfStock ? (
-                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>Out of Stock</span>
+                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>No Stock</span>
                     ) : isLowStock ? (
                       <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)', color: '#d97706', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>Low Stock ({item.quantity})</span>
                     ) : (

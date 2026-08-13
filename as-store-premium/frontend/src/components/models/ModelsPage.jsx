@@ -839,6 +839,30 @@ export default function ModelsPage({
                   </div>
                 </div>
 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Type (Part Type)</label>
+                    <input
+                      type="text"
+                      value={editForm.product_type || editForm.category || ''}
+                      onChange={(e) => setEditForm({ ...editForm, product_type: e.target.value, category: e.target.value })}
+                      placeholder="e.g. Display, Battery, Camera, Speaker"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Quality / Variant</label>
+                    <input
+                      type="text"
+                      value={editForm.quality_variant || ''}
+                      onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
+                      placeholder="e.g. OLED, Incell, With Frame, Set Remove"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+                </div>
+
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">Product Pricing Tiers</span>
@@ -862,6 +886,7 @@ export default function ModelsPage({
                         disabled={!canEditSellingPrice}
                         value={editForm.sale_price}
                         onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
+                        onWheel={(e) => e.target.blur()}
                         placeholder="e.g. 540"
                         title={!canEditSellingPrice ? 'Only Shopkeepers and Super Admin can edit prices' : ''}
                         className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
@@ -880,6 +905,7 @@ export default function ModelsPage({
                         disabled={!isSuperAdmin}
                         value={editForm.wholesale_price}
                         onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
+                        onWheel={(e) => e.target.blur()}
                         placeholder="e.g. 480"
                         title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
                         className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
@@ -898,6 +924,7 @@ export default function ModelsPage({
                         disabled={!isSuperAdmin}
                         value={editForm.purchase_price}
                         onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
+                        onWheel={(e) => e.target.blur()}
                         placeholder="e.g. 380"
                         title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
                         className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
@@ -913,13 +940,19 @@ export default function ModelsPage({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Category</label>
-                    <input
-                      type="text"
+                    <select
                       value={editForm.category}
                       onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                      placeholder="e.g. Display, Battery, Spare Parts"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    />
+                    >
+                      <option value="">Choose Category</option>
+                      {(reference?.categories || []).map((cat) => (
+                        <option key={cat.id || cat.name} value={cat.name}>{cat.name}</option>
+                      ))}
+                      {editForm.category && !(reference?.categories || []).some(c => c.name === editForm.category) && (
+                        <option value={editForm.category}>{editForm.category}</option>
+                      )}
+                    </select>
                   </div>
 
                   <div>
@@ -964,6 +997,42 @@ export default function ModelsPage({
                           <option key={s.id} value={s.id}>{s.name}</option>
                         ))}
                     </select>
+                  </div>
+                </div>
+
+                {/* Color Management Section */}
+                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block">Model Available Colours</span>
+                    <span className="text-[10px] text-slate-400 font-semibold">Click chip to toggle on/off</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(reference?.colours || []).map((col) => {
+                      const activeColours = (editForm.colours || '').split(',').map(c => c.trim()).filter(Boolean);
+                      const isSelected = activeColours.some(c => c.toLowerCase() === col.name.toLowerCase());
+                      return (
+                        <button
+                          type="button"
+                          key={col.id || col.name}
+                          onClick={() => {
+                            let next;
+                            if (isSelected) {
+                              next = activeColours.filter(c => c.toLowerCase() !== col.name.toLowerCase());
+                            } else {
+                              next = [...activeColours, col.name];
+                            }
+                            setEditForm({ ...editForm, colours: next.join(', ') });
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
+                            isSelected
+                              ? 'bg-teal-600 text-white border-teal-700 shadow-sm'
+                              : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                          }`}
+                        >
+                          {isSelected ? `✓ ${col.name}` : `+ ${col.name}`}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
