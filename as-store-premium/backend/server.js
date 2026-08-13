@@ -1155,8 +1155,27 @@ app.get('/api/manufacturing-brands', authenticateToken, requireShopStaff, async 
 app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, res) => {
   const brand = cleanQueryText(req.query.brand, 120);
   if (!brand) return res.status(400).json({ error: 'Brand is required.' });
+  
   const shopId = await getReadableInventoryScope(req);
-  const scope = inventoryJoinScope(req, shopId);
+  const includeWarehouse = isShopStaffRole(req.user.role) && String(req.query.includeWarehouse || '').toLowerCase() === 'true';
+  const warehouse = includeWarehouse ? await getWarehouse() : null;
+
+  const joinClauses = [];
+  const joinParams = [];
+
+  if (shopId && includeWarehouse && warehouse?.id && Number(warehouse.id) !== Number(shopId)) {
+    joinClauses.push('(ib.shop_id = ? OR ib.shop_id = ?)');
+    joinParams.push(shopId, Number(warehouse.id));
+  } else if (shopId) {
+    joinClauses.push('ib.shop_id = ?');
+    joinParams.push(shopId);
+  }
+
+  if (isShopStaffRole(req.user.role)) {
+    joinClauses.push(`(ib.assigned_user_id IS NULL OR ib.assigned_user_id = ${Number(req.user.id)})`);
+  }
+
+  const joinSql = joinClauses.length ? ` AND ${joinClauses.join(' AND ')}` : '';
   const visibility = await getPriceVisibility();
   const extraPrices = req.user.role === 'superadmin'
     ? ', p.purchase_price, p.wholesale_price'
@@ -1177,11 +1196,11 @@ app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, 
     FROM products p
     LEFT JOIN brands b ON b.id = p.company_brand_id
     LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
-    LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${scope.sql}
+    LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${joinSql}
     WHERE p.is_active = 1 AND LOWER(TRIM(p.brand)) = LOWER(TRIM(?))
     GROUP BY p.id, b.id, mb.id
     ORDER BY COALESCE(p.short_name, p.name)
-  `, [...scope.params, brand]);
+  `, [...joinParams, brand]);
   res.json(rows);
 });
 
