@@ -1322,22 +1322,26 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     }
 
     // Check duplicate
-    const duplicate = await getRecord(
-      `SELECT id FROM products 
-       WHERE company_brand_id IS NOT DISTINCT FROM ? 
-         AND LOWER(TRIM(COALESCE(model, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, ''))) 
-         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-         AND LOWER(TRIM(COALESCE(category, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, '')))
-         AND is_active = 1
-         AND id <> ?`,
-      [
-        companyBrandId || null,
-        model !== undefined ? (model || '') : (oldProduct.model || ''),
-        targetMfgBrandId,
-        categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
-        productId
-      ]
-    );
+    let duplicate = null;
+    const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
+    if (cleanModel) {
+      duplicate = await getRecord(
+        `SELECT id FROM products 
+         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+           AND LOWER(TRIM(model)) = LOWER(?) 
+           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+           AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
+           AND is_active = 1
+           AND id <> ?`,
+        [
+          companyBrandId || null,
+          cleanModel,
+          targetMfgBrandId,
+          categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
+          productId
+        ]
+      );
+    }
     if (duplicate) {
       return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
     }
@@ -1596,15 +1600,19 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
   const companyBrandId = brandRef ? brandRef.id : null;
 
   // Check duplicate
-  const duplicate = await getRecord(
-    `SELECT id FROM products 
-     WHERE company_brand_id IS NOT DISTINCT FROM ? 
-       AND LOWER(TRIM(COALESCE(model, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, ''))) 
-       AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-       AND LOWER(TRIM(COALESCE(category, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, '')))
-       AND is_active = 1`,
-    [companyBrandId, model || '', effectiveMfgBrandId, categoryRef ? categoryRef.name : effectiveCategory]
-  );
+  let duplicate = null;
+  const cleanModel = String(model || '').trim();
+  if (cleanModel) {
+    duplicate = await getRecord(
+      `SELECT id FROM products 
+       WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         AND LOWER(TRIM(model)) = LOWER(?) 
+         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+         AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
+         AND is_active = 1`,
+      [companyBrandId, cleanModel, effectiveMfgBrandId, categoryRef ? categoryRef.name : effectiveCategory]
+    );
+  }
   if (duplicate) {
     return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
   }
@@ -1711,22 +1719,26 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
   }
 
   // Check duplicate
-  const duplicate = await getRecord(
-    `SELECT id FROM products 
-     WHERE company_brand_id IS NOT DISTINCT FROM ? 
-       AND LOWER(TRIM(COALESCE(model, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, ''))) 
-       AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-       AND LOWER(TRIM(COALESCE(category, ''))) IS NOT DISTINCT FROM LOWER(TRIM(COALESCE(?, '')))
-       AND is_active = 1
-       AND id <> ?`,
-    [
-      companyBrandId,
-      model !== undefined ? (model || '') : (oldProduct.model || ''),
-      targetMfgBrandId,
-      categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
-      req.params.id
-    ]
-  );
+  let duplicate = null;
+  const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
+  if (cleanModel) {
+    duplicate = await getRecord(
+      `SELECT id FROM products 
+       WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         AND LOWER(TRIM(model)) = LOWER(?) 
+         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+         AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
+         AND is_active = 1
+         AND id <> ?`,
+      [
+        companyBrandId,
+        cleanModel,
+        targetMfgBrandId,
+        categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
+        req.params.id
+      ]
+    );
+  }
   if (duplicate) {
     return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
   }
