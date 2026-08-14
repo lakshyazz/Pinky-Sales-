@@ -131,8 +131,19 @@ const compactModelName = (value) => {
 };
 const productName = (item) => {
   const baseName = compactModelName(item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name || item?.model_name);
-  const mfg = item?.manufacturing_brand_name || item?.mfg_brand_name || item?.manufacturing_brand;
-  return mfg ? `${baseName} (Mfg: ${mfg})` : baseName;
+  const mfg = item?.manufacturing_brand_name || item?.mfg_brand_name || (typeof item?.manufacturing_brand === 'string' ? item?.manufacturing_brand : null);
+  const variant = item?.quality_variant || item?.product_variant_name || (typeof item?.variant === 'string' ? item?.variant : null);
+  const supplier = item?.supplier_name || (typeof item?.supplier === 'string' ? item?.supplier : null);
+
+  const parts = [];
+  if (mfg && !baseName.toLowerCase().includes(mfg.toLowerCase())) parts.push(`Mfg: ${mfg}`);
+  if (variant && !baseName.toLowerCase().includes(variant.toLowerCase())) parts.push(variant);
+  if (supplier && !baseName.toLowerCase().includes(supplier.toLowerCase())) parts.push(supplier);
+
+  if (parts.length > 0) {
+    return `${baseName} (${parts.join(' - ')})`;
+  }
+  return baseName;
 };
 const fullModelList = (item) => item?.full_model_list || item?.name || item?.product_name || item?.model_name || '';
 const priceLabel = (value) => Number(value) > 0 ? currency(value) : 'Price not set';
@@ -5028,11 +5039,12 @@ function App() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-[10px] uppercase font-black text-cyan-600 tracking-widest leading-none block mb-1">
-                      {selectedProductDetails.brand || 'No Brand'} · {selectedProductDetails.category}
+                      {selectedProductDetails.brand || 'No Brand'} · {selectedProductDetails.part_category || selectedProductDetails.category || 'General'}
+                      {(selectedProductDetails.quality_variant || selectedProductDetails.product_variant_name) && ` · Variant: ${selectedProductDetails.quality_variant || selectedProductDetails.product_variant_name}`}
                       {selectedProductDetails.manufacturing_brand_name && ` · Mfg: ${selectedProductDetails.manufacturing_brand_name}`}
                       {selectedProductDetails.supplier_name && ` · Supplier: ${selectedProductDetails.supplier_name}`}
                     </span>
-                    <h2 id="product-details-title" className="text-xl font-extrabold text-slate-800 truncate">
+                    <h2 id="product-details-title" className="text-xl font-extrabold text-slate-800 leading-snug break-words">
                       {productName(selectedProductDetails)}
                     </h2>
                   </div>
@@ -5072,24 +5084,34 @@ function App() {
                   )}
 
                   <div>
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Pricing details</span>
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Product Specs & Pricing Details</span>
                     <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 divide-y divide-slate-100">
                       <div className="flex justify-between items-center py-2.5">
-                        <span className="text-sm font-bold text-slate-500">Sale Price</span>
-                        <strong className="text-slate-800 font-extrabold text-base">{priceLabel(selectedProductDetails.sale_price)}</strong>
+                        <span className="text-sm font-bold text-slate-500">Quality / Variant</span>
+                        <strong className="text-cyan-700 font-extrabold text-sm px-2.5 py-1 bg-cyan-50 border border-cyan-200/80 rounded-lg">
+                          {selectedProductDetails.quality_variant || selectedProductDetails.product_variant_name || 'Standard'}
+                        </strong>
+                      </div>
+                      <div className="flex justify-between items-center py-2.5">
+                        <span className="text-sm font-bold text-slate-500">Part Category</span>
+                        <strong className="text-slate-800 font-extrabold text-sm">{selectedProductDetails.part_category || selectedProductDetails.category || 'Display'}</strong>
                       </div>
                       {selectedProductDetails.manufacturing_brand_name && (
                         <div className="flex justify-between items-center py-2.5">
                           <span className="text-sm font-bold text-slate-500">Manufacturing Brand</span>
-                          <strong className="text-slate-800 font-extrabold text-base">{selectedProductDetails.manufacturing_brand_name}</strong>
+                          <strong className="text-slate-800 font-extrabold text-sm">{selectedProductDetails.manufacturing_brand_name}</strong>
                         </div>
                       )}
                       {selectedProductDetails.supplier_name && (
                         <div className="flex justify-between items-center py-2.5">
                           <span className="text-sm font-bold text-slate-500">Supplier</span>
-                          <strong className="text-slate-800 font-extrabold text-base">{selectedProductDetails.supplier_name}</strong>
+                          <strong className="text-slate-800 font-extrabold text-sm">{selectedProductDetails.supplier_name}</strong>
                         </div>
                       )}
+                      <div className="flex justify-between items-center py-2.5">
+                        <span className="text-sm font-bold text-slate-500">Sale Price</span>
+                        <strong className="text-emerald-700 font-extrabold text-base">{priceLabel(selectedProductDetails.sale_price)}</strong>
+                      </div>
                       {(role === 'superadmin' || data.priceVisibility.show_purchase_price_shopkeeper) && selectedProductDetails.purchase_price !== undefined && selectedProductDetails.purchase_price !== null && (
                         <div className="flex justify-between items-center py-2.5">
                           <span className="text-sm font-bold text-slate-500">Purchase Price</span>

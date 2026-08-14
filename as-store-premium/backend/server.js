@@ -1369,46 +1369,33 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
     }
 
-    // Check duplicate short_name
-    const cleanShortName = String(short_name !== undefined ? (short_name || '') : (oldProduct.short_name || '')).trim();
-    if (cleanShortName) {
-      const duplicateShortName = await getRecord(
-        `SELECT id FROM products 
-         WHERE company_brand_id IS NOT DISTINCT FROM ? 
-           AND LOWER(TRIM(short_name)) = LOWER(?) 
-           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-           AND is_active = 1
-           AND id <> ?`,
-        [companyBrandId || null, cleanShortName, targetMfgBrandId, productId]
-      );
-      if (duplicateShortName) {
-        return res.status(409).json({ error: 'A product with this Short Name already exists under this Brand and Manufacturer.' });
-      }
-    }
-
-    // Check duplicate model + brand + category + mfg
+    // Check duplicate composite combination
     let duplicate = null;
     const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
-    if (cleanModel) {
+    if (cleanModel && targetPartCategoryId) {
       duplicate = await getRecord(
         `SELECT id FROM products 
          WHERE company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
+           AND part_category_id IS NOT DISTINCT FROM ?
+           AND product_variant_id IS NOT DISTINCT FROM ?
            AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-           AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
+           AND supplier_id IS NOT DISTINCT FROM ?
            AND is_active = 1
            AND id <> ?`,
         [
           companyBrandId || null,
           cleanModel,
+          targetPartCategoryId,
+          targetProductVariantId,
           targetMfgBrandId,
-          categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
+          targetSupplierId,
           productId
         ]
       );
     }
     if (duplicate) {
-      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
+      return res.status(409).json({ error: 'A product matching this exact Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.' });
     }
 
     await runTransaction(async (tx) => {
@@ -1727,40 +1714,6 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
     const companyBrandId = brandRef ? brandRef.id : null;
 
-    // Check duplicate short_name
-    const cleanShortName = String(short_name || '').trim();
-    if (cleanShortName) {
-      const duplicateShortName = await getRecord(
-        `SELECT id FROM products 
-         WHERE company_brand_id IS NOT DISTINCT FROM ? 
-           AND LOWER(TRIM(short_name)) = LOWER(?) 
-           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-           AND is_active = 1`,
-        [companyBrandId, cleanShortName, effectiveMfgBrandId]
-      );
-      if (duplicateShortName) {
-        return res.status(409).json({ error: 'A product with this Short Name already exists under this Brand and Manufacturer.' });
-      }
-    }
-
-    // Check duplicate model + brand + category + mfg
-    let duplicate = null;
-    const cleanModel = String(model || short_name || full_model_list || '').trim();
-    if (cleanModel) {
-      duplicate = await getRecord(
-        `SELECT id FROM products 
-         WHERE company_brand_id IS NOT DISTINCT FROM ? 
-           AND LOWER(TRIM(model)) = LOWER(?) 
-           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-           AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
-           AND is_active = 1`,
-        [companyBrandId, cleanModel, effectiveMfgBrandId, categoryRef ? categoryRef.name : effectiveCategory]
-      );
-    }
-    if (duplicate) {
-      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
-    }
-
     const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
     const productVariantRef = quality_variant ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
     const effectivePartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
@@ -1768,36 +1721,41 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
     const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant ? String(quality_variant).trim() : null);
 
+    const cleanModel = String(model || short_name || full_model_list || '').trim();
     const cleanPartCat = canonicalPartCategory || 'Display';
     const cleanQualVar = canonicalQualityVariant || '';
     const autoGeneratedName = [canonicalBrand, cleanModel, cleanPartCat, cleanQualVar].filter(Boolean).join(' ');
     displayName = String(short_name || '').trim() || autoGeneratedName;
 
-    // Strict Duplicate combination check (Active products)
+    // Composite Duplicate combination check (requires exact match across ALL core variant attributes)
     if (cleanModel && effectivePartCategoryId) {
       const duplicateCombination = await getRecord(
         `SELECT id FROM products 
          WHERE company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
-           AND part_category_id = ?
+           AND part_category_id IS NOT DISTINCT FROM ?
            AND product_variant_id IS NOT DISTINCT FROM ?
+           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+           AND supplier_id IS NOT DISTINCT FROM ?
            AND is_active = 1`,
-        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId]
+        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId, effectiveMfgBrandId, effectiveSupplierId]
       );
       if (duplicateCombination) {
-        return res.status(409).json({ error: `A product for ${displayName} already exists.` });
+        return res.status(409).json({ error: `A product with this exact Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.` });
       }
 
-      // Check if a soft-deleted / archived product exists with the same combination -> RESTORE IT!
+      // Check if a soft-deleted / archived product exists with the exact same FULL composite combination -> RESTORE IT!
       const inactiveProduct = await getRecord(
         `SELECT id FROM products 
          WHERE company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
-           AND part_category_id = ?
+           AND part_category_id IS NOT DISTINCT FROM ?
            AND product_variant_id IS NOT DISTINCT FROM ?
+           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+           AND supplier_id IS NOT DISTINCT FROM ?
            AND is_active = 0
          ORDER BY id DESC LIMIT 1`,
-        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId]
+        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId, effectiveMfgBrandId, effectiveSupplierId]
       );
 
       if (inactiveProduct) {
@@ -1940,37 +1898,41 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
       if (!mfgBrand) return res.status(400).json({ error: 'Selected manufacturing brand is invalid.' });
     }
 
-    // Check duplicate
+    const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
+    const productVariantRef = quality_variant ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
+    const targetPartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
+    const targetProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
+    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
+    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : String(quality_variant || '').trim();
+
+    // Check duplicate composite combination
     let duplicate = null;
     const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
-    if (cleanModel) {
+    if (cleanModel && targetPartCategoryId) {
       duplicate = await getRecord(
         `SELECT id FROM products 
          WHERE company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
+           AND part_category_id IS NOT DISTINCT FROM ?
+           AND product_variant_id IS NOT DISTINCT FROM ?
            AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-           AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
+           AND supplier_id IS NOT DISTINCT FROM ?
            AND is_active = 1
            AND id <> ?`,
         [
           companyBrandId,
           cleanModel,
+          targetPartCategoryId,
+          targetProductVariantId,
           targetMfgBrandId,
-          categoryRef ? categoryRef.name : (category || oldProduct.category || ''),
+          targetSupplierId,
           req.params.id
         ]
       );
     }
     if (duplicate) {
-      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
+      return res.status(409).json({ error: 'A product matching this exact Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.' });
     }
-
-    const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
-    const productVariantRef = await ensureReference('product_variants', quality_variant || req.body.product_variant_name);
-    const targetPartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
-    const targetProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
-    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
-    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : String(quality_variant || '').trim();
 
     await runQuery(
       `UPDATE products SET

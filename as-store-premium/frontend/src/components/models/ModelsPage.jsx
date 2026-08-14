@@ -650,8 +650,13 @@ export default function ModelsPage({
                     <Smartphone className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-black text-slate-900">{productName(inspectProduct)}</h3>
-                    <p className="text-xs text-slate-500 font-semibold">{inspectProduct.brand || 'Generic'} · {inspectProduct.manufacturing_brand_name && `Mfg: ${inspectProduct.manufacturing_brand_name} · `}{inspectProduct.supplier_name && `Supplier: ${inspectProduct.supplier_name} · `}{inspectProduct.category || 'General'}</p>
+                    <h3 className="text-lg font-black text-slate-900 leading-snug">{productName(inspectProduct)}</h3>
+                    <p className="text-xs text-slate-500 font-semibold">
+                      {inspectProduct.brand || 'Generic'} · {inspectProduct.part_category || inspectProduct.category || 'General'}
+                      {(inspectProduct.quality_variant || inspectProduct.product_variant_name) && ` · Variant: ${inspectProduct.quality_variant || inspectProduct.product_variant_name}`}
+                      {inspectProduct.manufacturing_brand_name && ` · Mfg: ${inspectProduct.manufacturing_brand_name}`}
+                      {inspectProduct.supplier_name && ` · Supplier: ${inspectProduct.supplier_name}`}
+                    </p>
                   </div>
                 </div>
                 <button onClick={() => setInspectProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
@@ -660,6 +665,27 @@ export default function ModelsPage({
               </div>
 
               <div className="py-4 space-y-4 text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  <div className="p-2.5 rounded-2xl bg-cyan-50 border border-cyan-200/80">
+                    <span className="text-[10px] uppercase font-extrabold text-cyan-700 block">Quality / Variant</span>
+                    <span className="text-xs font-black text-cyan-950 truncate block mt-0.5">
+                      {inspectProduct.quality_variant || inspectProduct.product_variant_name || 'Standard'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="text-[10px] uppercase font-extrabold text-slate-500 block">Manufacturing Brand</span>
+                    <span className="text-xs font-black text-slate-800 truncate block mt-0.5">
+                      {inspectProduct.manufacturing_brand_name || 'Generic'}
+                    </span>
+                  </div>
+                  <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200">
+                    <span className="text-[10px] uppercase font-extrabold text-slate-500 block">Supplier</span>
+                    <span className="text-xs font-black text-slate-800 truncate block mt-0.5">
+                      {inspectProduct.supplier_name || 'Unspecified'}
+                    </span>
+                  </div>
+                </div>
+
                 <div>
                   <span className="text-[10px] uppercase font-extrabold text-slate-400 block mb-1">Compatible Device Variants</span>
                   <p className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-slate-800 font-medium leading-relaxed">
