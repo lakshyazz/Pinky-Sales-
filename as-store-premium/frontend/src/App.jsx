@@ -2581,6 +2581,9 @@ function App() {
     // Client-side Deduplication / Unique Check before creating new product
     if (!editingProductId && data.products && Array.isArray(data.products)) {
       const isDuplicate = data.products.some((existing) => {
+        const isActive = existing.is_active === undefined || Number(existing.is_active) === 1 || existing.is_active === true;
+        if (!isActive) return false;
+
         const brandMatch = (existing.brand || '').toLowerCase().trim() === payload.brand.toLowerCase();
         const modelMatch = (existing.model || '').toLowerCase().trim() === payload.model.toLowerCase();
         const catMatch = (existing.part_category || existing.category || '').toLowerCase().trim() === payload.part_category.toLowerCase();
