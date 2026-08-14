@@ -2534,7 +2534,12 @@ function App() {
     }
   };
 
-  const submitProduct = async () => {
+  const submitProduct = async (e) => {
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault();
+    }
+    if (saving) return;
+
     const openingStock = forms.product.opening_stock === '' ? 0 : Number(forms.product.opening_stock);
     const openingStockLocationId = shopId || data.warehouse?.id;
     const numericPrice = (value) => value === '' || value === null || value === undefined ? null : Number(value);
@@ -2572,6 +2577,21 @@ function App() {
       return showToast('Opening stock must be 0 or more');
     }
     if (openingStock > 0 && !openingStockLocationId) return showToast('Warehouse is not configured yet');
+
+    // Client-side Deduplication / Unique Check before creating new product
+    if (!editingProductId && data.products && Array.isArray(data.products)) {
+      const isDuplicate = data.products.some((existing) => {
+        const brandMatch = (existing.brand || '').toLowerCase().trim() === payload.brand.toLowerCase();
+        const modelMatch = (existing.model || '').toLowerCase().trim() === payload.model.toLowerCase();
+        const catMatch = (existing.part_category || existing.category || '').toLowerCase().trim() === payload.part_category.toLowerCase();
+        const variantMatch = (existing.quality_variant || '').toLowerCase().trim() === payload.quality_variant.toLowerCase();
+        return brandMatch && modelMatch && catMatch && variantMatch;
+      });
+
+      if (isDuplicate) {
+        return showToast('A product with this Brand, Model, Category, and Variant combination already exists.');
+      }
+    }
 
     try {
       setSaving(true);
@@ -5193,12 +5213,13 @@ function Input({ label, value, onChange, type = 'text', className = '', ...input
   );
 }
 
-function Select({ label, value, onChange, options, placeholder = 'Select', className = '', ...selectProps }) {
+function Select({ label, value, onChange, options = [], placeholder = 'Select', className = '', ...selectProps }) {
+  const hasEmptyOption = options.some(([id]) => id === '' || id === null || id === undefined);
   return (
     <label className={`field-label select-field ${value ? 'has-value' : ''} ${className}`}>
       <span className="field-label-text">{label}</span>
       <select {...selectProps} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">{placeholder}</option>
+        {!hasEmptyOption && placeholder && <option value="">{placeholder}</option>}
         {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
       </select>
     </label>

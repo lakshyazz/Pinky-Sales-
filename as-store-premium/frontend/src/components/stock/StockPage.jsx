@@ -75,6 +75,7 @@ export default function StockPage({
   const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [isCustomPartCategory, setIsCustomPartCategory] = useState(false);
   const [isCustomQualityVariant, setIsCustomQualityVariant] = useState(false);
+  const [isCustomNameEdited, setIsCustomNameEdited] = useState(false);
 
   const defaultPartCategories = ['Display', 'Battery', 'Camera', 'Speaker', 'Charging IC', 'Main Flex', 'Frame', 'Charging Port', 'Vibrator', 'Ear Speaker', 'Back Glass', 'Middle Frame', 'Sim Tray', 'Housing', 'Mic'];
   const refPartCategories = (data.reference?.partCategories || []).map(pc => typeof pc === 'string' ? pc : pc.name).filter(Boolean);
@@ -117,8 +118,11 @@ export default function StockPage({
   useEffect(() => {
     if (editingProductId) {
       setIsAddProductOpen(true);
+      setIsCustomNameEdited(true);
+    } else if (!forms.product?.short_name) {
+      setIsCustomNameEdited(false);
     }
-  }, [editingProductId]);
+  }, [editingProductId, forms.product?.short_name]);
 
   // Brand alias detection mapping
   const detectBrand = (name) => {
@@ -151,6 +155,9 @@ export default function StockPage({
 
   // Run brand detection on name changes and auto-apply if not manually overridden
   const handleProductNameChange = (value, field) => {
+    if (field === 'short_name') {
+      setIsCustomNameEdited(Boolean(value && value.trim()));
+    }
     setForms((prev) => {
       const updatedProduct = { ...prev.product, [field]: value };
       
@@ -463,16 +470,18 @@ export default function StockPage({
                       value={forms.product.brand} 
                       onChange={(v) => {
                         const brandName = v;
-                        const autoName = [brandName, forms.product.model, forms.product.part_category, forms.product.quality_variant].filter(Boolean).join(' ');
-                        setForms(prev => ({
-                          ...prev,
-                          product: {
-                            ...prev.product,
-                            brand: brandName,
-                            short_name: autoName,
-                            full_model_list: prev.product.full_model_list || prev.product.model || autoName
-                          }
-                        }));
+                        setForms(prev => {
+                          const autoName = [brandName, prev.product.model, prev.product.part_category, prev.product.quality_variant].filter(Boolean).join(' ');
+                          return {
+                            ...prev,
+                            product: {
+                              ...prev.product,
+                              brand: brandName,
+                              short_name: isCustomNameEdited ? prev.product.short_name : autoName,
+                              full_model_list: prev.product.full_model_list || prev.product.model || autoName
+                            }
+                          };
+                        });
                       }} 
                       options={[['', 'Select Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
                     />
@@ -482,16 +491,18 @@ export default function StockPage({
                       value={forms.product.model} 
                       onChange={(v) => {
                         const modelName = v;
-                        const autoName = [forms.product.brand, modelName, forms.product.part_category, forms.product.quality_variant].filter(Boolean).join(' ');
-                        setForms(prev => ({
-                          ...prev,
-                          product: {
-                            ...prev.product,
-                            model: modelName,
-                            short_name: autoName,
-                            full_model_list: modelName
-                          }
-                        }));
+                        setForms(prev => {
+                          const autoName = [prev.product.brand, modelName, prev.product.part_category, prev.product.quality_variant].filter(Boolean).join(' ');
+                          return {
+                            ...prev,
+                            product: {
+                              ...prev.product,
+                              model: modelName,
+                              short_name: isCustomNameEdited ? prev.product.short_name : autoName,
+                              full_model_list: modelName
+                            }
+                          };
+                        });
                       }} 
                     />
                   </div>
@@ -554,8 +565,17 @@ export default function StockPage({
                             value={forms.product.part_category || ''} 
                             onChange={(v) => {
                               const partCat = v;
-                              const autoName = [forms.product.brand, forms.product.model, partCat, forms.product.quality_variant].filter(Boolean).join(' ');
-                              setForms(prev => ({ ...prev, product: { ...prev.product, part_category: partCat, short_name: autoName } }));
+                              setForms(prev => {
+                                const autoName = [prev.product.brand, prev.product.model, partCat, prev.product.quality_variant].filter(Boolean).join(' ');
+                                return {
+                                  ...prev,
+                                  product: {
+                                    ...prev.product,
+                                    part_category: partCat,
+                                    short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                  }
+                                };
+                              });
                             }} 
                           />
                         ) : (
@@ -569,12 +589,20 @@ export default function StockPage({
                                 setForms(prev => ({ ...prev, product: { ...prev.product, part_category: '' } }));
                               } else {
                                 const partCat = v;
-                                const autoName = [forms.product.brand, forms.product.model, partCat, forms.product.quality_variant].filter(Boolean).join(' ');
-                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: partCat, short_name: autoName } }));
+                                setForms(prev => {
+                                  const autoName = [prev.product.brand, prev.product.model, partCat, prev.product.quality_variant].filter(Boolean).join(' ');
+                                  return {
+                                    ...prev,
+                                    product: {
+                                      ...prev.product,
+                                      part_category: partCat,
+                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                    }
+                                  };
+                                });
                               }
                             }} 
                             options={[
-                              ['', 'Select Part Category'],
                               ...uniquePartCategories.map(pc => [pc, pc]),
                               ['__ADD_NEW__', '➕ Add New Part Category...']
                             ]}
@@ -591,8 +619,17 @@ export default function StockPage({
                               onClick={() => {
                                 setIsCustomPartCategory(false);
                                 const partCat = chip;
-                                const autoName = [forms.product.brand, forms.product.model, partCat, forms.product.quality_variant].filter(Boolean).join(' ');
-                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: partCat, short_name: autoName } }));
+                                setForms(prev => {
+                                  const autoName = [prev.product.brand, prev.product.model, partCat, prev.product.quality_variant].filter(Boolean).join(' ');
+                                  return {
+                                    ...prev,
+                                    product: {
+                                      ...prev.product,
+                                      part_category: partCat,
+                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                    }
+                                  };
+                                });
                               }}
                               className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
                                 forms.product.part_category === chip 
@@ -636,8 +673,17 @@ export default function StockPage({
                             value={forms.product.quality_variant || ''} 
                             onChange={(v) => {
                               const qualVar = v;
-                              const autoName = [forms.product.brand, forms.product.model, forms.product.part_category, qualVar].filter(Boolean).join(' ');
-                              setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: qualVar, short_name: autoName } }));
+                              setForms(prev => {
+                                const autoName = [prev.product.brand, prev.product.model, prev.product.part_category, qualVar].filter(Boolean).join(' ');
+                                return {
+                                  ...prev,
+                                  product: {
+                                    ...prev.product,
+                                    quality_variant: qualVar,
+                                    short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                  }
+                                };
+                              });
                             }} 
                           />
                         ) : (
@@ -651,8 +697,17 @@ export default function StockPage({
                                 setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: '' } }));
                               } else {
                                 const qualVar = v;
-                                const autoName = [forms.product.brand, forms.product.model, forms.product.part_category, qualVar].filter(Boolean).join(' ');
-                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: qualVar, short_name: autoName } }));
+                                setForms(prev => {
+                                  const autoName = [prev.product.brand, prev.product.model, prev.product.part_category, qualVar].filter(Boolean).join(' ');
+                                  return {
+                                    ...prev,
+                                    product: {
+                                      ...prev.product,
+                                      quality_variant: qualVar,
+                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                    }
+                                  };
+                                });
                               }
                             }} 
                             options={[
@@ -672,7 +727,18 @@ export default function StockPage({
                               key={chip}
                               onClick={() => {
                                 setIsCustomQualityVariant(false);
-                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: chip } }));
+                                const qualVar = chip;
+                                setForms(prev => {
+                                  const autoName = [prev.product.brand, prev.product.model, prev.product.part_category, qualVar].filter(Boolean).join(' ');
+                                  return {
+                                    ...prev,
+                                    product: {
+                                      ...prev.product,
+                                      quality_variant: qualVar,
+                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                    }
+                                  };
+                                });
                               }}
                               className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
                                 forms.product.quality_variant === chip 
