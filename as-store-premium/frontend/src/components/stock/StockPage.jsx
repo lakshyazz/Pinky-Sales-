@@ -160,6 +160,9 @@ export default function StockPage({
     }
     setForms((prev) => {
       const updatedProduct = { ...prev.product, [field]: value };
+      if (!updatedProduct.model) {
+        updatedProduct.model = updatedProduct.short_name || (updatedProduct.full_model_list ? updatedProduct.full_model_list.split('/')[0].trim() : '');
+      }
       
       // Auto detect brand based on title/compatible models
       const detected = detectBrand(updatedProduct.short_name || updatedProduct.full_model_list);

@@ -2610,11 +2610,20 @@ function App() {
         const modelMatch = existingModel === targetPayloadModel;
         const catMatch = (existing.part_category || existing.category || '').toLowerCase().trim() === (payload.part_category || '').toLowerCase().trim();
         const variantMatch = (existing.quality_variant || '').toLowerCase().trim() === (payload.quality_variant || '').toLowerCase().trim();
-        return brandMatch && modelMatch && catMatch && variantMatch;
+
+        const targetMfg = (payload.manufacturing_brand_id ? String(payload.manufacturing_brand_id) : '').toLowerCase().trim();
+        const existingMfg = (existing.manufacturing_brand_id ? String(existing.manufacturing_brand_id) : (existing.manufacturing_brand_name || existing.manufacturing_brand || '')).toLowerCase().trim();
+        const mfgMatch = !targetMfg || !existingMfg ? true : (existingMfg === targetMfg);
+
+        const targetSupplier = (payload.supplier_id ? String(payload.supplier_id) : '').toLowerCase().trim();
+        const existingSupplier = (existing.supplier_id ? String(existing.supplier_id) : (existing.supplier_name || existing.supplier || '')).toLowerCase().trim();
+        const supplierMatch = !targetSupplier || !existingSupplier ? true : (existingSupplier === targetSupplier);
+
+        return brandMatch && modelMatch && catMatch && variantMatch && mfgMatch && supplierMatch;
       });
 
       if (isDuplicate) {
-        return showToast('A product with this Brand, Model, Category, and Variant combination already exists.');
+        return showToast('A product with this Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.');
       }
     }
 
