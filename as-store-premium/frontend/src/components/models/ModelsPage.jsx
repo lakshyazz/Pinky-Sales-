@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus, Trash2, MoreHorizontal } from 'lucide-react';
+import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, CheckCircle2, ShieldAlert, Edit3, Save, Check, Lock, PlusCircle, PackagePlus, Trash2, MoreHorizontal, XCircle, Info } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
 import SearchInput from '../ui/SearchInput';
@@ -49,6 +49,11 @@ export default function ModelsPage({
     purchase_price: '',
     full_model_list: '',
     description: '',
+    colours: '',
+    manufacturing_brand_id: '',
+    supplier_id: '',
+    stock_status: 'in_stock',
+    stock_quantity: '',
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -87,17 +92,30 @@ export default function ModelsPage({
 
   const handleOpenEdit = (product) => {
     setEditingProduct(product);
+    const availableQty = Number(product.warehouse_stock ?? product.available_stock ?? product.quantity ?? product.stock ?? 0);
+    let initialStatus = 'in_stock';
+    if (availableQty <= 0) {
+      initialStatus = 'no_stock';
+    } else if (availableQty <= 5) {
+      initialStatus = 'low_stock';
+    }
+
     setEditForm({
       short_name: product.short_name || product.name || '',
       brand: product.brand || '',
       category: product.category || '',
+      product_type: product.part_category || product.part_category_name || product.category || '',
+      quality_variant: product.quality_variant || product.product_variant_name || '',
       sale_price: product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : '',
       wholesale_price: product.wholesale_price !== undefined && product.wholesale_price !== null ? String(product.wholesale_price) : '',
       purchase_price: product.purchase_price !== undefined && product.purchase_price !== null ? String(product.purchase_price) : '',
       full_model_list: product.full_model_list || product.model || '',
       description: product.description || '',
+      colours: Array.isArray(product.colours) ? product.colours.join(', ') : (product.colours || ''),
       manufacturing_brand_id: product.manufacturing_brand_id !== undefined && product.manufacturing_brand_id !== null ? String(product.manufacturing_brand_id) : '',
       supplier_id: product.supplier_id !== undefined && product.supplier_id !== null ? String(product.supplier_id) : '',
+      stock_status: initialStatus,
+      stock_quantity: String(availableQty),
     });
   };
 
@@ -172,6 +190,7 @@ export default function ModelsPage({
     try {
       setSavingEdit(true);
       const token = session?.token || localStorage.getItem('token');
+      const isNoStock = editForm.stock_status === 'no_stock';
       const payload = {
         short_name: editForm.short_name,
         name: editForm.short_name,
@@ -182,8 +201,12 @@ export default function ModelsPage({
         purchase_price: editForm.purchase_price ? Number(editForm.purchase_price) : 0,
         full_model_list: editForm.full_model_list,
         description: editForm.description,
+        colours: editForm.colours,
         manufacturing_brand_id: editForm.manufacturing_brand_id ? Number(editForm.manufacturing_brand_id) : null,
         supplier_id: editForm.supplier_id ? Number(editForm.supplier_id) : null,
+        stock_status: editForm.stock_status,
+        set_stock_zero: isNoStock,
+        stock_quantity: isNoStock ? 0 : (editForm.stock_quantity !== '' ? Number(editForm.stock_quantity) : undefined),
       };
 
       if (api) {
@@ -217,9 +240,17 @@ export default function ModelsPage({
         manufacturing_brand_name: mfgBrandObject ? mfgBrandObject.name : editingProduct.manufacturing_brand_name,
         supplier_id: payload.supplier_id,
         supplier_name: supplierObject ? supplierObject.name : editingProduct.supplier_name,
+        ...(isNoStock ? { quantity: 0, available_stock: 0, warehouse_stock: 0, stock: 0 } : {}),
       });
 
-      if (setGlobalToast) setGlobalToast('Product details & pricing updated successfully', 'success');
+      if (setGlobalToast) {
+        setGlobalToast(
+          isNoStock 
+            ? 'Product updated & available stock set to 0 (No Stock in Warehouse)'
+            : 'Product details & pricing updated successfully',
+          'success'
+        );
+      }
       if (onProductUpdated) onProductUpdated();
       setEditingProduct(null);
     } catch (err) {
@@ -997,6 +1028,68 @@ export default function ModelsPage({
                           <option key={s.id} value={s.id}>{s.name}</option>
                         ))}
                     </select>
+                  </div>
+                </div>
+                {/* Stock Status Selector Section */}
+                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block">STOCK STATUS</span>
+                      <div className="group relative inline-flex items-center">
+                        <Info className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-600 transition-colors" />
+                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-52 p-2 bg-slate-900 text-white text-[10px] rounded-lg shadow-lg z-20 pointer-events-none text-center">
+                          Selecting "No Stock" sets available warehouse quantity to zero so other shopkeepers see no stock in warehouse.
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-slate-400 font-semibold">
+                      {editForm.stock_status === 'no_stock'
+                        ? 'Warehouse stock will be set to 0'
+                        : editForm.stock_status === 'low_stock'
+                        ? 'Marked as low stock'
+                        : 'In stock & available'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, stock_status: 'in_stock' })}
+                      className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border ${
+                        editForm.stock_status === 'in_stock'
+                          ? 'bg-emerald-50/90 text-emerald-700 border-emerald-300 shadow-sm ring-2 ring-emerald-500/20'
+                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100/60 hover:text-slate-700'
+                      }`}
+                    >
+                      <CheckCircle2 className={`w-4 h-4 ${editForm.stock_status === 'in_stock' ? 'text-emerald-600' : 'text-emerald-500'}`} />
+                      In Stock
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, stock_status: 'low_stock' })}
+                      className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border ${
+                        editForm.stock_status === 'low_stock'
+                          ? 'bg-amber-50/90 text-amber-700 border-amber-300 shadow-sm ring-2 ring-amber-500/20'
+                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100/60 hover:text-slate-700'
+                      }`}
+                    >
+                      <ShieldAlert className={`w-4 h-4 ${editForm.stock_status === 'low_stock' ? 'text-amber-600' : 'text-amber-500'}`} />
+                      Low Stock
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, stock_status: 'no_stock', stock_quantity: '0' })}
+                      className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border ${
+                        editForm.stock_status === 'no_stock'
+                          ? 'bg-rose-50 text-rose-700 border-rose-300 shadow-sm ring-2 ring-rose-500/20'
+                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100/60 hover:text-slate-700'
+                      }`}
+                    >
+                      <XCircle className={`w-4 h-4 ${editForm.stock_status === 'no_stock' ? 'text-rose-600' : 'text-rose-500'}`} />
+                      No Stock
+                    </button>
                   </div>
                 </div>
 

@@ -1330,7 +1330,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const isSuperAdmin = req.user.role === 'superadmin';
   const isShopkeeper = req.user.role === 'shopkeeper' || req.user.role === 'admin' || req.user.role === 'shop_staff';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
-  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id, supplier_id } = req.body;
+  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id, supplier_id, stock_status, set_stock_zero, stock_quantity } = req.body;
  
   // Shopkeepers and Superadmins can update selling price (sale_price). Cost and wholesale are superadmin only.
   const targetSalePrice = sale_price ?? retail_price;
@@ -1441,6 +1441,58 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         targetSupplierId,
         productId
       ]);
+
+      // Stock status update: if set_stock_zero or stock_status === 'no_stock' or stock_quantity === 0
+      if (stock_status === 'no_stock' || set_stock_zero === true || stock_quantity === 0) {
+        await tx.runQuery(
+          'UPDATE inventory_batches SET quantity_remaining = 0 WHERE product_id = ?',
+          [productId]
+        );
+        await tx.runQuery(
+          'UPDATE stock SET quantity = 0, updated_at = CURRENT_TIMESTAMP WHERE product_id = ?',
+          [productId]
+        );
+      } else if (stock_quantity !== undefined && Number(stock_quantity) > 0 && (stock_status === 'in_stock' || stock_status === 'low_stock')) {
+        const targetQty = Number(stock_quantity);
+        const warehouseShop = await tx.getRecord("SELECT id FROM shops WHERE location_type = 'warehouse' ORDER BY id ASC LIMIT 1");
+        const targetShopId = shop_id || (warehouseShop ? warehouseShop.id : req.user.shop_id);
+        if (targetShopId) {
+          const currentBatchQty = await tx.getRecord(
+            'SELECT COALESCE(SUM(quantity_remaining), 0) AS qty FROM inventory_batches WHERE shop_id = ? AND product_id = ?',
+            [targetShopId, productId]
+          );
+          const currentStock = Number(currentBatchQty?.qty || 0);
+          if (currentStock !== targetQty) {
+            const diff = targetQty - currentStock;
+            if (diff > 0) {
+              await tx.runQuery(
+                `INSERT INTO inventory_batches (
+                  shop_id, product_id, purchase_price, wholesale_price, official_price, retail_price,
+                  quantity_received, quantity_remaining, received_date, notes, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_DATE, ?, ?)`,
+                [
+                  targetShopId, productId, newPurchasePrice || oldProduct.purchase_price, newWholesalePrice || oldProduct.wholesale_price,
+                  newSalePrice || oldProduct.sale_price, newSalePrice || oldProduct.sale_price,
+                  diff, diff, 'Stock set via product edit', req.user.id
+                ]
+              );
+            } else {
+              let toRemove = Math.abs(diff);
+              const batches = await tx.allRecords(
+                'SELECT id, quantity_remaining FROM inventory_batches WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 ORDER BY id ASC',
+                [targetShopId, productId]
+              );
+              for (const b of batches) {
+                if (toRemove <= 0) break;
+                const rem = Math.min(toRemove, Number(b.quantity_remaining));
+                await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?', [rem, b.id]);
+                toRemove -= rem;
+              }
+            }
+            await syncStockFromBatches(tx, targetShopId, productId);
+          }
+        }
+      }
 
       // If price was updated, also update prices on inventory_batches for the shop
       if (newSalePrice) {
