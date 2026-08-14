@@ -1061,7 +1061,17 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
   const { type = 'stock', brand = '', category = '', colour = '', shopkeeperId = '', status = '', batchId = '' } = req.query;
   if (type === 'products') {
     const columns = await productColumnsForRole(req.user.role);
-    return res.json(await allRecords(`SELECT ${columns} FROM products WHERE is_active = 1 ORDER BY brand, COALESCE(short_name, name)`));
+    return res.json(await allRecords(`
+      SELECT ${columns} 
+      FROM products p 
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
+      WHERE p.is_active = 1 
+      ORDER BY p.brand, COALESCE(p.short_name, p.name)
+    `));
   }
 
   const shopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : Number(req.query.shopId || 0);
@@ -1638,158 +1648,177 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
 });
 
 app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
-  res.json(await getProductsForRole(req.user.role, req.query));
+  try {
+    const productsData = await getProductsForRole(req.user.role, req.query);
+    res.json(productsData);
+  } catch (error) {
+    console.error('[API PRODUCTS ERROR]', error.message, error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch products',
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
 });
 
 app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
-  const {
-    name, short_name, full_model_list, brand, category, model, official_price,
-    purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-    manufacturing_brand_id, supplier_id
-  } = req.body;
-  let compatibilityModels = String(full_model_list || name || '').trim();
-  let displayName = String(short_name || '').trim();
-  if (!displayName) {
-    displayName = compatibilityModels || 'Unnamed Product';
-  }
-  if (!compatibilityModels) {
-    compatibilityModels = displayName;
-  }
-
-  const parsePrice = (val, fallback = null) => {
-    if (val === '' || val === null || val === undefined) return fallback;
-    const num = Number(val);
-    return isNaN(num) ? fallback : num;
-  };
-  
-  const effectiveBrand = String(brand || '').trim() || 'Generic';
-  const effectiveCategory = String(category || '').trim() || 'Other';
-  
-  let effectiveMfgBrandId = manufacturing_brand_id ? Number(manufacturing_brand_id) : null;
-  if (!effectiveMfgBrandId) {
-    const unknownMfg = await getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
-    if (unknownMfg) {
-      effectiveMfgBrandId = unknownMfg.id;
-    }
-  }
-
-  const salePriceNum = sale_price !== undefined && sale_price !== '' && sale_price !== null ? Number(sale_price) : 0;
-  const purchasePriceNum = parsePrice(purchase_price, null);
-  const wholesalePriceNum = parsePrice(wholesale_price, null);
-  const officialPriceNum = salePriceNum;
-  const retailPriceNum = salePriceNum;
-
-  const categoryRef = await ensureReference('categories', effectiveCategory);
-  const brandRef = await ensureReference('brands', effectiveBrand);
-  
-  if (effectiveMfgBrandId) {
-    const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ? AND is_active = TRUE', [effectiveMfgBrandId]);
-    if (!mfgBrand) {
-      return res.status(400).json({ error: 'Selected manufacturing brand is invalid or inactive.' });
-    }
-  }
-
-  let effectiveSupplierId = supplier_id ? Number(supplier_id) : null;
-  if (effectiveSupplierId) {
-    const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ? AND is_active = TRUE', [effectiveSupplierId]);
-    if (!supplier) {
-      return res.status(400).json({ error: 'Selected supplier is invalid or inactive.' });
-    }
-  }
-
-  const canonicalColours = [];
-  for (const colour of normalizeColours(colours)) {
-    const colRef = await ensureReference('colours', colour);
-    if (colRef) canonicalColours.push(colRef.name);
-  }
-  const canonicalBrand = brandRef ? brandRef.name : effectiveBrand.trim();
-  const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
-  const companyBrandId = brandRef ? brandRef.id : null;
-
-  // Check duplicate short_name
-  const cleanShortName = String(short_name || '').trim();
-  if (cleanShortName) {
-    const duplicateShortName = await getRecord(
-      `SELECT id FROM products 
-       WHERE company_brand_id IS NOT DISTINCT FROM ? 
-         AND LOWER(TRIM(short_name)) = LOWER(?) 
-         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-         AND is_active = 1`,
-      [companyBrandId, cleanShortName, effectiveMfgBrandId]
-    );
-    if (duplicateShortName) {
-      return res.status(409).json({ error: 'A product with this Short Name already exists under this Brand and Manufacturer.' });
-    }
-  }
-
-  // Check duplicate model + brand + category + mfg
-  let duplicate = null;
-  const cleanModel = String(model || '').trim();
-  if (cleanModel) {
-    duplicate = await getRecord(
-      `SELECT id FROM products 
-       WHERE company_brand_id IS NOT DISTINCT FROM ? 
-         AND LOWER(TRIM(model)) = LOWER(?) 
-         AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-         AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
-         AND is_active = 1`,
-      [companyBrandId, cleanModel, effectiveMfgBrandId, categoryRef ? categoryRef.name : effectiveCategory]
-    );
-  }
-  if (duplicate) {
-    return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
-  }
-
-  const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
-  const productVariantRef = quality_variant ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
-  const effectivePartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
-  const effectiveProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
-  const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
-  const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant ? String(quality_variant).trim() : null);
-
-  const cleanPartCat = canonicalPartCategory || 'Display';
-  const cleanQualVar = canonicalQualityVariant || '';
-  const autoGeneratedName = [canonicalBrand, cleanModel, cleanPartCat, cleanQualVar].filter(Boolean).join(' ');
-  displayName = String(short_name || '').trim() || autoGeneratedName;
-
-  // Strict Duplicate combination check
-  if (cleanModel && effectivePartCategoryId) {
-    const duplicateCombination = await getRecord(
-      `SELECT id FROM products 
-       WHERE company_brand_id IS NOT DISTINCT FROM ? 
-         AND LOWER(TRIM(model)) = LOWER(?) 
-         AND part_category_id = ?
-         AND product_variant_id IS NOT DISTINCT FROM ?
-         AND is_active = 1`,
-      [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId]
-    );
-    if (duplicateCombination) {
-      return res.status(409).json({ error: `A product for ${displayName} already exists.` });
-    }
-  }
-
-  const result = await runQuery(
-    `INSERT INTO products (
-      name, short_name, full_model_list, brand, category, part_category, quality_variant, model, official_price,
+  try {
+    const {
+      name, short_name, full_model_list, brand, category, model, official_price,
       purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-      company_brand_id, manufacturing_brand_id, supplier_id, part_category_id, product_variant_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      displayName, displayName, displayName, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
-      purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
-      companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId
-    ]
-  );
+      manufacturing_brand_id, supplier_id, part_category, quality_variant
+    } = req.body;
+    let compatibilityModels = String(full_model_list || name || '').trim();
+    let displayName = String(short_name || '').trim();
+    if (!displayName) {
+      displayName = compatibilityModels || 'Unnamed Product';
+    }
+    if (!compatibilityModels) {
+      compatibilityModels = displayName;
+    }
 
-  const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
-  const shops = await allRecords('SELECT id FROM shops');
-  const targetShopId = scopeShopId(req) || shops[0]?.id;
-  for (const shop of shops) {
-    const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
-    await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, result.id, qty]);
+    const parsePrice = (val, fallback = null) => {
+      if (val === '' || val === null || val === undefined) return fallback;
+      const num = Number(val);
+      return isNaN(num) ? fallback : num;
+    };
+    
+    const effectiveBrand = String(brand || '').trim() || 'Generic';
+    const effectiveCategory = String(category || '').trim() || 'Other';
+    
+    let effectiveMfgBrandId = manufacturing_brand_id ? Number(manufacturing_brand_id) : null;
+    if (!effectiveMfgBrandId) {
+      const unknownMfg = await getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
+      if (unknownMfg) {
+        effectiveMfgBrandId = unknownMfg.id;
+      }
+    }
+
+    const salePriceNum = sale_price !== undefined && sale_price !== '' && sale_price !== null ? Number(sale_price) : 0;
+    const purchasePriceNum = parsePrice(purchase_price, null);
+    const wholesalePriceNum = parsePrice(wholesale_price, null);
+    const officialPriceNum = salePriceNum;
+    const retailPriceNum = salePriceNum;
+
+    const categoryRef = await ensureReference('categories', effectiveCategory);
+    const brandRef = await ensureReference('brands', effectiveBrand);
+    
+    if (effectiveMfgBrandId) {
+      const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ? AND is_active = TRUE', [effectiveMfgBrandId]);
+      if (!mfgBrand) {
+        return res.status(400).json({ error: 'Selected manufacturing brand is invalid or inactive.' });
+      }
+    }
+
+    let effectiveSupplierId = supplier_id ? Number(supplier_id) : null;
+    if (effectiveSupplierId) {
+      const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ? AND is_active = TRUE', [effectiveSupplierId]);
+      if (!supplier) {
+        return res.status(400).json({ error: 'Selected supplier is invalid or inactive.' });
+      }
+    }
+
+    const canonicalColours = [];
+    for (const colour of normalizeColours(colours)) {
+      const colRef = await ensureReference('colours', colour);
+      if (colRef) canonicalColours.push(colRef.name);
+    }
+    const canonicalBrand = brandRef ? brandRef.name : effectiveBrand.trim();
+    const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
+    const companyBrandId = brandRef ? brandRef.id : null;
+
+    // Check duplicate short_name
+    const cleanShortName = String(short_name || '').trim();
+    if (cleanShortName) {
+      const duplicateShortName = await getRecord(
+        `SELECT id FROM products 
+         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+           AND LOWER(TRIM(short_name)) = LOWER(?) 
+           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+           AND is_active = 1`,
+        [companyBrandId, cleanShortName, effectiveMfgBrandId]
+      );
+      if (duplicateShortName) {
+        return res.status(409).json({ error: 'A product with this Short Name already exists under this Brand and Manufacturer.' });
+      }
+    }
+
+    // Check duplicate model + brand + category + mfg
+    let duplicate = null;
+    const cleanModel = String(model || '').trim();
+    if (cleanModel) {
+      duplicate = await getRecord(
+        `SELECT id FROM products 
+         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+           AND LOWER(TRIM(model)) = LOWER(?) 
+           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
+           AND LOWER(TRIM(COALESCE(category, ''))) = LOWER(TRIM(?))
+           AND is_active = 1`,
+        [companyBrandId, cleanModel, effectiveMfgBrandId, categoryRef ? categoryRef.name : effectiveCategory]
+      );
+    }
+    if (duplicate) {
+      return res.status(409).json({ error: 'A product with this combination of Company Brand, Model, Manufacturing Brand, and Category already exists.' });
+    }
+
+    const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
+    const productVariantRef = quality_variant ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
+    const effectivePartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
+    const effectiveProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
+    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
+    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant ? String(quality_variant).trim() : null);
+
+    const cleanPartCat = canonicalPartCategory || 'Display';
+    const cleanQualVar = canonicalQualityVariant || '';
+    const autoGeneratedName = [canonicalBrand, cleanModel, cleanPartCat, cleanQualVar].filter(Boolean).join(' ');
+    displayName = String(short_name || '').trim() || autoGeneratedName;
+
+    // Strict Duplicate combination check
+    if (cleanModel && effectivePartCategoryId) {
+      const duplicateCombination = await getRecord(
+        `SELECT id FROM products 
+         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+           AND LOWER(TRIM(model)) = LOWER(?) 
+           AND part_category_id = ?
+           AND product_variant_id IS NOT DISTINCT FROM ?
+           AND is_active = 1`,
+        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId]
+      );
+      if (duplicateCombination) {
+        return res.status(409).json({ error: `A product for ${displayName} already exists.` });
+      }
+    }
+
+    const result = await runQuery(
+      `INSERT INTO products (
+        name, short_name, full_model_list, brand, category, part_category, quality_variant, model, official_price,
+        purchase_price, sale_price, wholesale_price, retail_price, description, colours,
+        company_brand_id, manufacturing_brand_id, supplier_id, part_category_id, product_variant_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        displayName, displayName, displayName, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
+        purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
+        companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId
+      ]
+    );
+
+    const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
+    const shops = await allRecords('SELECT id FROM shops');
+    const targetShopId = scopeShopId(req) || shops[0]?.id;
+    for (const shop of shops) {
+      const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
+      await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, result.id, qty]);
+    }
+    await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
+    res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
+  } catch (error) {
+    console.error('[API POST PRODUCTS ERROR]', error.message, error.stack);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to create product',
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
-  await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
-  res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
 });
 
 app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
