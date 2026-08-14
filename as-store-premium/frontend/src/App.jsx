@@ -2581,8 +2581,8 @@ function App() {
     // Client-side Deduplication / Unique Check before creating new product
     if (!editingProductId && data.products && Array.isArray(data.products)) {
       const isDuplicate = data.products.some((existing) => {
-        const isActive = existing.is_active === undefined || Number(existing.is_active) === 1 || existing.is_active === true;
-        if (!isActive) return false;
+        const isInactiveOrDeleted = existing.is_active === 0 || existing.is_active === false || existing.is_deleted === true || (existing.deleted_at !== null && existing.deleted_at !== undefined);
+        if (isInactiveOrDeleted) return false;
 
         const brandMatch = (existing.brand || '').toLowerCase().trim() === payload.brand.toLowerCase();
         const modelMatch = (existing.model || '').toLowerCase().trim() === payload.model.toLowerCase();
@@ -2673,6 +2673,13 @@ function App() {
           }
           const selectedId = selectedProductDetails?.product_id || selectedProductDetails?.id;
           if (selectedId === productId) setSelectedProductDetails(null);
+          
+          setData((prev) => ({
+            ...prev,
+            products: (prev.products || []).filter((p) => String(p.id || p.product_id) !== String(productId)),
+            stock: (prev.stock || []).filter((s) => String(s.product_id || s.id) !== String(productId)),
+          }));
+
           showToast(`${name} was deleted`);
           await loadCore();
           if (active === 'stock') await loadTab('stock', shopId);
