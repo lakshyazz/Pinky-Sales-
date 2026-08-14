@@ -33,7 +33,22 @@ export default function ModelsPage({
   const isSuperAdmin = role === 'superadmin';
   const isShopkeeper = role === 'shopkeeper' || role === 'admin';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
-  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'table'
+  const [viewMode, setViewModeState] = useState(() => {
+    try {
+      return localStorage.getItem('models_view_mode') || 'table';
+    } catch {
+      return 'table';
+    }
+  }); // 'table' | 'grid'
+
+  const setViewMode = (mode) => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem('models_view_mode', mode);
+    } catch {
+      // ignore storage errors
+    }
+  };
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [inspectProduct, setInspectProduct] = useState(null);
   const [activeMenuId, setActiveMenuId] = useState(null);

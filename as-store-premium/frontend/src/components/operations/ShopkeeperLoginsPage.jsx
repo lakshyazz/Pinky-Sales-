@@ -38,7 +38,22 @@ export default function ShopkeeperLoginsPage({
   Empty
 }) {
   const [showPassword, setShowPassword] = useState(false);
-  const [viewMode, setViewMode] = useState('table'); // 'table' | 'grid'
+  const [viewMode, setViewModeState] = useState(() => {
+    try {
+      return localStorage.getItem('shopkeepers_view_mode') || 'table';
+    } catch {
+      return 'table';
+    }
+  }); // 'table' | 'grid'
+
+  const setViewMode = (mode) => {
+    setViewModeState(mode);
+    try {
+      localStorage.setItem('shopkeepers_view_mode', mode);
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   const shopkeeperForm = forms.shopkeeper || {};
   const shopForm = forms.shop || {};

@@ -291,13 +291,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'suppliers', 'models', 'prices', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'import', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'brands', 'manufacturing-brands', 'suppliers', 'models', 'prices', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -2571,6 +2571,10 @@ function App() {
       payload.name = payload.short_name;
     }
 
+    if (!payload.model) {
+      payload.model = payload.short_name || payload.full_model_list || '';
+    }
+
     const optionalPrices = [payload.purchase_price, payload.wholesale_price, payload.sale_price].filter((price) => price !== null);
     if (optionalPrices.some((price) => !Number.isFinite(price) || price < 0)) return showToast('All entered prices must be 0 or more');
     if (!Number.isInteger(openingStock) || openingStock < 0) {
@@ -2580,14 +2584,21 @@ function App() {
 
     // Client-side Deduplication / Unique Check before creating new product
     if (!editingProductId && data.products && Array.isArray(data.products)) {
+      const targetPayloadModel = (payload.model || payload.short_name || payload.full_model_list || '').toLowerCase().trim();
+
       const isDuplicate = data.products.some((existing) => {
         const isInactiveOrDeleted = existing.is_active === 0 || existing.is_active === false || existing.is_deleted === true || (existing.deleted_at !== null && existing.deleted_at !== undefined);
         if (isInactiveOrDeleted) return false;
 
-        const brandMatch = (existing.brand || '').toLowerCase().trim() === payload.brand.toLowerCase();
-        const modelMatch = (existing.model || '').toLowerCase().trim() === payload.model.toLowerCase();
-        const catMatch = (existing.part_category || existing.category || '').toLowerCase().trim() === payload.part_category.toLowerCase();
-        const variantMatch = (existing.quality_variant || '').toLowerCase().trim() === payload.quality_variant.toLowerCase();
+        const existingModel = (existing.model || existing.short_name || existing.full_model_list || '').toLowerCase().trim();
+
+        // Do not match empty model to empty model
+        if (!targetPayloadModel || !existingModel) return false;
+
+        const brandMatch = (existing.brand || '').toLowerCase().trim() === (payload.brand || '').toLowerCase().trim();
+        const modelMatch = existingModel === targetPayloadModel;
+        const catMatch = (existing.part_category || existing.category || '').toLowerCase().trim() === (payload.part_category || '').toLowerCase().trim();
+        const variantMatch = (existing.quality_variant || '').toLowerCase().trim() === (payload.quality_variant || '').toLowerCase().trim();
         return brandMatch && modelMatch && catMatch && variantMatch;
       });
 

@@ -1745,7 +1745,7 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
 
     // Check duplicate model + brand + category + mfg
     let duplicate = null;
-    const cleanModel = String(model || '').trim();
+    const cleanModel = String(model || short_name || full_model_list || '').trim();
     if (cleanModel) {
       duplicate = await getRecord(
         `SELECT id FROM products 
