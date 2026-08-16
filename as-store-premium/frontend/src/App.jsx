@@ -39,6 +39,8 @@ import {
   X,
 } from 'lucide-react';
 import ModelsPage from './components/models/ModelsPage';
+import ProductDetailModal from './components/models/ProductDetailModal';
+import ProductDetailPage from './components/models/ProductDetailPage';
 import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import BrandsPage from './components/brands/BrandsPage';
@@ -5031,127 +5033,28 @@ function App() {
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {selectedProductDetails && (
-            <div className="drawer-layer" role="presentation">
-              <motion.button 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="drawer-mask" 
-                type="button" 
-                aria-label="Close details drawer" 
-                onClick={() => { setSelectedProductDetails(null); setModelSearch(''); }} 
+        {selectedProductDetails && (
+          <div className="fixed inset-0 z-50 bg-slate-50 dark:bg-slate-950 overflow-y-auto p-4 sm:p-6 lg:p-8 animate-fadeIn">
+            <div className="max-w-6xl mx-auto">
+              <ProductDetailPage
+                product={selectedProductDetails}
+                onBack={() => {
+                  setSelectedProductDetails(null);
+                  setModelSearch('');
+                }}
+                onEdit={(prod) => {
+                  setSelectedProductDetails(null);
+                  if (editProduct) editProduct(prod);
+                }}
+                role={role}
+                priceVisibility={data.priceVisibility}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
               />
-              <motion.aside 
-                initial={{ x: '100%' }}
-                animate={{ x: 0 }}
-                exit={{ x: '100%' }}
-                transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-                className="transfer-drawer product-details-drawer"
-                role="dialog" 
-                aria-modal="true" 
-                aria-labelledby="product-details-title"
-              >
-                <div className="drawer-head product-details-head flex items-start gap-4 pb-5 border-b border-slate-100 mb-6">
-                  <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 text-cyan-600 flex items-center justify-center shrink-0">
-                    <Smartphone className="w-6 h-6" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className="text-[10px] uppercase font-black text-cyan-600 tracking-widest leading-none block mb-1">
-                      {selectedProductDetails.brand || 'No Brand'} · {selectedProductDetails.part_category || selectedProductDetails.category || 'General'}
-                      {(selectedProductDetails.quality_variant || selectedProductDetails.product_variant_name) && ` · Variant: ${selectedProductDetails.quality_variant || selectedProductDetails.product_variant_name}`}
-                      {selectedProductDetails.manufacturing_brand_name && ` · Mfg: ${selectedProductDetails.manufacturing_brand_name}`}
-                      {selectedProductDetails.supplier_name && ` · Supplier: ${selectedProductDetails.supplier_name}`}
-                    </span>
-                    <h2 id="product-details-title" className="text-xl font-extrabold text-slate-800 leading-snug break-words">
-                      {productName(selectedProductDetails)}
-                    </h2>
-                  </div>
-                  <button type="button" className="icon product-details-close" aria-label="Close product details" onClick={() => { setSelectedProductDetails(null); setModelSearch(''); }}>
-                    <X size={20} />
-                  </button>
-                </div>
-                
-                <div className="space-y-6">
-                  <div>
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Compatible Models</span>
-                    <div className="product-compatible-copy p-4 bg-slate-50 border border-slate-100 rounded-xl text-slate-700 text-sm font-semibold whitespace-pre-wrap leading-relaxed">
-                      {fullModelList(selectedProductDetails)}
-                    </div>
-                  </div>
-
-                  {selectedProductDetails.description && (
-                    <div>
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Description</span>
-                      <p className="text-slate-600 text-sm leading-relaxed whitespace-pre-wrap font-medium">
-                        {selectedProductDetails.description}
-                      </p>
-                    </div>
-                  )}
-
-                  {selectedProductDetails.colours?.length > 0 && (
-                    <div>
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Available Colours</span>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedProductDetails.colours.map((colour) => (
-                          <span key={colour} className="px-3 py-1 bg-slate-100 text-slate-700 border border-slate-200 rounded-full text-xs font-extrabold shadow-sm">
-                            {colour}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <div>
-                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Product Specs & Pricing Details</span>
-                    <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 divide-y divide-slate-100">
-                      <div className="flex justify-between items-center py-2.5">
-                        <span className="text-sm font-bold text-slate-500">Quality / Variant</span>
-                        <strong className="text-cyan-700 font-extrabold text-sm px-2.5 py-1 bg-cyan-50 border border-cyan-200/80 rounded-lg">
-                          {selectedProductDetails.quality_variant || selectedProductDetails.product_variant_name || 'Standard'}
-                        </strong>
-                      </div>
-                      <div className="flex justify-between items-center py-2.5">
-                        <span className="text-sm font-bold text-slate-500">Part Category</span>
-                        <strong className="text-slate-800 font-extrabold text-sm">{selectedProductDetails.part_category || selectedProductDetails.category || 'Display'}</strong>
-                      </div>
-                      {selectedProductDetails.manufacturing_brand_name && (
-                        <div className="flex justify-between items-center py-2.5">
-                          <span className="text-sm font-bold text-slate-500">Manufacturing Brand</span>
-                          <strong className="text-slate-800 font-extrabold text-sm">{selectedProductDetails.manufacturing_brand_name}</strong>
-                        </div>
-                      )}
-                      {selectedProductDetails.supplier_name && (
-                        <div className="flex justify-between items-center py-2.5">
-                          <span className="text-sm font-bold text-slate-500">Supplier</span>
-                          <strong className="text-slate-800 font-extrabold text-sm">{selectedProductDetails.supplier_name}</strong>
-                        </div>
-                      )}
-                      <div className="flex justify-between items-center py-2.5">
-                        <span className="text-sm font-bold text-slate-500">Sale Price</span>
-                        <strong className="text-emerald-700 font-extrabold text-base">{priceLabel(selectedProductDetails.sale_price)}</strong>
-                      </div>
-                      {(role === 'superadmin' || data.priceVisibility.show_purchase_price_shopkeeper) && selectedProductDetails.purchase_price !== undefined && selectedProductDetails.purchase_price !== null && (
-                        <div className="flex justify-between items-center py-2.5">
-                          <span className="text-sm font-bold text-slate-500">Purchase Price</span>
-                          <strong className="text-rose-600 font-extrabold text-base">{priceLabel(selectedProductDetails.purchase_price)}</strong>
-                        </div>
-                      )}
-                      {(role === 'superadmin' || data.priceVisibility.show_wholesale_price_shopkeeper) && selectedProductDetails.wholesale_price !== undefined && selectedProductDetails.wholesale_price !== null && (
-                        <div className="flex justify-between items-center py-2.5">
-                          <span className="text-sm font-bold text-slate-500">Wholesale Price</span>
-                          <strong className="text-indigo-600 font-extrabold text-base">{priceLabel(selectedProductDetails.wholesale_price)}</strong>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </motion.aside>
             </div>
-          )}
-        </AnimatePresence>
+          </div>
+        )}
         <ConfirmationDialog
           dialog={confirmDialog}
           saving={saving}

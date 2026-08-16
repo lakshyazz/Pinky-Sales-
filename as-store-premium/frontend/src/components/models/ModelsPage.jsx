@@ -6,6 +6,8 @@ import ExpandableText from '../shared/ExpandableText';
 import SearchInput from '../ui/SearchInput';
 import ProductThumbnail from '../ui/ProductThumbnail';
 import ProductImageUpload from '../ui/ProductImageUpload';
+import ProductDetailModal from './ProductDetailModal';
+import ProductDetailPage from './ProductDetailPage';
 
 export default function ModelsPage({
   items = [],
@@ -102,11 +104,7 @@ export default function ModelsPage({
   }, [items, selectedCategory]);
 
   const handleOpenDetails = (product) => {
-    if (onViewDetails) {
-      onViewDetails(product);
-    } else {
-      setInspectProduct(product);
-    }
+    setInspectProduct(product);
   };
 
   const handleOpenEdit = (product) => {
@@ -301,6 +299,317 @@ export default function ModelsPage({
     }
   };
 
+  if (inspectProduct) {
+    return (
+      <div className="space-y-6">
+        <ProductDetailPage
+          product={inspectProduct}
+          onBack={() => setInspectProduct(null)}
+          onEdit={(prod) => handleOpenEdit(prod)}
+          onAddStock={(prod) => handleOpenAddStock(prod)}
+          role={role}
+          priceVisibility={reference?.priceVisibility}
+          productName={productName}
+          fullModelList={fullModelList}
+          priceLabel={priceLabel}
+        />
+
+        {/* Add Stock to Model Modal */}
+        <AnimatePresence>
+          {addStockProduct && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm overflow-y-auto">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.94 }}
+                className="relative w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6 my-8"
+              >
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-2xl bg-emerald-600 text-white shadow-md shadow-emerald-600/20">
+                      <PackagePlus className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black text-slate-900">Add Stock to Model</h3>
+                      <p className="text-xs text-slate-500 font-medium">Add new inventory pieces to your shop for this existing model.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setAddStockProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <div className="my-4 p-3.5 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="font-extrabold text-slate-900 text-sm block">{productName(addStockProduct)}</span>
+                    <span className="text-slate-500 font-semibold">{addStockProduct.brand || 'Generic'} · {addStockProduct.manufacturing_brand_name && `Mfg: ${addStockProduct.manufacturing_brand_name} · `}{addStockProduct.category || 'General'}</span>
+                  </div>
+                  <span className="px-3 py-1.5 rounded-xl bg-emerald-100 text-emerald-800 font-black text-xs">
+                    {priceLabel(addStockProduct.sale_price)}
+                  </span>
+                </div>
+
+                <form onSubmit={handleSaveAddStock} className="space-y-4 text-xs">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-emerald-700 uppercase tracking-wider block mb-1">Stock Quantity to Add (Pcs) *</label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      value={addStockForm.quantity}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, quantity: e.target.value })}
+                      placeholder="e.g. 25"
+                      className="w-full px-3.5 py-2.5 bg-emerald-50/60 border border-emerald-300 rounded-xl font-black text-emerald-900 text-sm outline-none focus:border-emerald-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Retail Selling Price (₹)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        disabled={!canEditSellingPrice}
+                        value={addStockForm.sale_price}
+                        onChange={(e) => setAddStockForm({ ...addStockForm, sale_price: e.target.value })}
+                        placeholder="e.g. 540"
+                        className={`w-full px-3.5 py-2.5 rounded-xl font-bold text-xs outline-none transition-all ${
+                          !canEditSellingPrice
+                            ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+                            : 'bg-slate-50 border border-slate-200 text-slate-900 focus:border-cyan-500 focus:bg-white'
+                        }`}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Colour Variant (Optional)</label>
+                      <input
+                        type="text"
+                        value={addStockForm.colour}
+                        onChange={(e) => setAddStockForm({ ...addStockForm, colour: e.target.value })}
+                        placeholder="e.g. Black, Silver, Transparent"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Batch Notes (Optional)</label>
+                    <input
+                      type="text"
+                      value={addStockForm.notes}
+                      onChange={(e) => setAddStockForm({ ...addStockForm, notes: e.target.value })}
+                      placeholder="e.g. Received new shipment from vendor"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    />
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAddStockProduct(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingStock}
+                      className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer"
+                    >
+                      {savingStock ? 'Saving...' : 'Add Stock'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Edit Product Modal */}
+        <AnimatePresence>
+          {editingProduct && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm overflow-y-auto">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.94 }}
+                className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6 my-8"
+              >
+                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-2xl bg-cyan-600 text-white shadow-md shadow-cyan-600/20">
+                      <Edit3 className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-black text-slate-900">Edit Model Details</h3>
+                      <p className="text-xs text-slate-500 font-medium">Update pricing, compatibility, brand, supplier and specifications.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setEditingProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveEdit} className="py-4 space-y-4 text-xs">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product / Model Name *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editForm.short_name}
+                      onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
+                      placeholder="e.g. iPhone 13 Pro Display Combo"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Device Brand</label>
+                      <input
+                        type="text"
+                        value={editForm.brand}
+                        onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
+                        placeholder="e.g. Apple, Samsung, Xiaomi"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Part Category</label>
+                      <input
+                        type="text"
+                        value={editForm.product_type}
+                        onChange={(e) => setEditForm({ ...editForm, product_type: e.target.value, category: e.target.value })}
+                        placeholder="e.g. Display, Battery, Camera"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Quality Variant</label>
+                      <input
+                        type="text"
+                        value={editForm.quality_variant}
+                        onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
+                        placeholder="e.g. OLED, HD+ LCD, Original OEM"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
+                      <select
+                        value={editForm.manufacturing_brand_id}
+                        onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      >
+                        <option value="">Select Manufacturing Brand (Optional)</option>
+                        {reference?.manufacturingBrands?.map((mb) => (
+                          <option key={mb.id} value={mb.id}>{mb.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Retail Selling Price (₹) *</label>
+                      <input
+                        type="number"
+                        step="any"
+                        required
+                        disabled={!canEditSellingPrice}
+                        value={editForm.sale_price}
+                        onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
+                        placeholder="e.g. 1250"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Wholesale Price (₹)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        value={editForm.wholesale_price}
+                        onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
+                        placeholder="e.g. 1100"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Cost / Purchase (₹)</label>
+                      <input
+                        type="number"
+                        step="any"
+                        disabled={!isSuperAdmin}
+                        value={editForm.purchase_price}
+                        onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
+                        placeholder="e.g. 950"
+                        className={`w-full px-3.5 py-2.5 rounded-xl font-bold text-xs outline-none transition-all ${
+                          !isSuperAdmin
+                            ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
+                            : 'bg-slate-50 border border-slate-200 text-slate-900 focus:border-cyan-500 focus:bg-white'
+                        }`}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Compatible Device Models (Comma or Slash separated)</label>
+                    <textarea
+                      rows={2}
+                      value={editForm.full_model_list}
+                      onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
+                      placeholder="e.g. RLM C55, RLM C65 5G, Nord N30, Reno 6"
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all resize-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Photo / Image URL</label>
+                    <ProductImageUpload
+                      value={editForm.image_url}
+                      urls={editForm.image_urls}
+                      onChange={({ image_url, image_urls }) => {
+                        setEditForm((prev) => ({
+                          ...prev,
+                          image_url,
+                          image_urls: image_urls || (image_url ? [image_url] : []),
+                        }));
+                      }}
+                      api={api}
+                      session={session}
+                      disabled={savingEdit}
+                    />
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditingProduct(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingEdit}
+                      className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer"
+                    >
+                      {savingEdit ? 'Saving...' : 'Save Changes'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header Toolbar */}
@@ -382,7 +691,7 @@ export default function ModelsPage({
           {filteredItems.map((product) => {
             const compatibleStr = fullModelList(product);
             const compatibleList = compatibleStr
-              ? compatibleStr.split(',').map((s) => s.trim()).filter(Boolean)
+              ? String(compatibleStr).split(/[,/;\n\r]+/).map((s) => s.trim()).filter(Boolean)
               : [];
 
             return (
@@ -449,16 +758,24 @@ export default function ModelsPage({
                         Compatible Devices
                       </span>
                       {compatibleList.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {compatibleList.slice(0, 3).map((dev, idx) => (
-                            <span key={idx} className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-medium">
+                        <div className="flex flex-wrap gap-1 items-center">
+                          {compatibleList.slice(0, 2).map((dev, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded-md bg-slate-50 border border-slate-200 text-slate-600 text-[10px] font-semibold max-w-[130px] truncate">
                               {dev}
                             </span>
                           ))}
-                          {compatibleList.length > 3 && (
-                            <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200/60 text-slate-500 text-[10px] font-bold">
-                              +{compatibleList.length - 3} more
-                            </span>
+                          {compatibleList.length > 2 && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleOpenDetails(product);
+                              }}
+                              className="px-1.5 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200/80 text-slate-600 text-[10px] font-bold transition-colors cursor-pointer"
+                              title="Click to view all compatible devices"
+                            >
+                              +{compatibleList.length - 2} more
+                            </button>
                           )}
                         </div>
                       ) : (
@@ -589,7 +906,11 @@ export default function ModelsPage({
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredItems.map((product) => (
                   <tr key={product.id} className="hover:bg-slate-50/50 transition-colors duration-150">
-                    <td className="p-4 px-5 font-semibold text-slate-900">
+                    <td 
+                      className="p-4 px-5 font-semibold text-slate-900 cursor-pointer hover:text-cyan-700 transition-colors group/cell"
+                      onClick={() => handleOpenDetails(product)}
+                      title="Click to view product details"
+                    >
                       <div className="flex items-center gap-3">
                         <ProductThumbnail
                           src={product.image_url}
@@ -599,9 +920,10 @@ export default function ModelsPage({
                           category={product.part_category || product.category || 'Display'}
                           size={38}
                           rounded="10px"
+                          showZoom={false}
                         />
                         <div className="flex flex-col">
-                          <span className="font-bold text-slate-900">{productName(product)}</span>
+                          <span className="font-bold text-slate-900 group-hover/cell:text-cyan-700 transition-colors">{productName(product)}</span>
                           {product.model && product.model !== productName(product) && (
                             <span className="text-[10px] text-slate-400 font-medium">{product.model}</span>
                           )}
@@ -682,126 +1004,7 @@ export default function ModelsPage({
         </div>
       )}
 
-      {/* Quick Specs Inspector Modal */}
-      <AnimatePresence>
-        {inspectProduct && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.94 }}
-              className="relative w-full max-w-lg bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6"
-            >
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div className="flex items-center gap-3">
-                  <ProductThumbnail
-                    src={inspectProduct.image_url}
-                    imageUrl={inspectProduct.image_url}
-                    imageUrls={inspectProduct.image_urls}
-                    alt={productName(inspectProduct)}
-                    category={inspectProduct.part_category || inspectProduct.category || 'Display'}
-                    size={48}
-                    rounded="16px"
-                  />
-                  <div>
-                    <h3 className="text-lg font-black text-slate-900 leading-snug">{productName(inspectProduct)}</h3>
-                    <p className="text-xs text-slate-500 font-semibold">
-                      {inspectProduct.brand || 'Generic'} · {inspectProduct.part_category || inspectProduct.category || 'General'}
-                      {(inspectProduct.quality_variant || inspectProduct.product_variant_name) && ` · Variant: ${inspectProduct.quality_variant || inspectProduct.product_variant_name}`}
-                      {inspectProduct.manufacturing_brand_name && ` · Mfg: ${inspectProduct.manufacturing_brand_name}`}
-                      {inspectProduct.supplier_name && ` · Supplier: ${inspectProduct.supplier_name}`}
-                    </p>
-                  </div>
-                </div>
-                <button onClick={() => setInspectProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
 
-              <div className="py-4 space-y-4 text-xs">
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  <div className="p-2.5 rounded-2xl bg-cyan-50 border border-cyan-200/80">
-                    <span className="text-[10px] uppercase font-extrabold text-cyan-700 block">Quality / Variant</span>
-                    <span className="text-xs font-black text-cyan-950 truncate block mt-0.5">
-                      {inspectProduct.quality_variant || inspectProduct.product_variant_name || 'Standard'}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200">
-                    <span className="text-[10px] uppercase font-extrabold text-slate-500 block">Manufacturing Brand</span>
-                    <span className="text-xs font-black text-slate-800 truncate block mt-0.5">
-                      {inspectProduct.manufacturing_brand_name || 'Generic'}
-                    </span>
-                  </div>
-                  <div className="p-2.5 rounded-2xl bg-slate-50 border border-slate-200">
-                    <span className="text-[10px] uppercase font-extrabold text-slate-500 block">Supplier</span>
-                    <span className="text-xs font-black text-slate-800 truncate block mt-0.5">
-                      {inspectProduct.supplier_name || 'Unspecified'}
-                    </span>
-                  </div>
-                </div>
-
-                <div>
-                  <span className="text-[10px] uppercase font-extrabold text-slate-400 block mb-1">Compatible Device Variants</span>
-                  <p className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-slate-800 font-medium leading-relaxed">
-                    {fullModelList(inspectProduct) || 'Universal compatibility'}
-                  </p>
-                </div>
-
-                {inspectProduct.description && (
-                  <div>
-                    <span className="text-[10px] uppercase font-extrabold text-slate-400 block mb-1">Description & Notes</span>
-                    <p className="p-3 rounded-2xl bg-slate-50 border border-slate-200 text-slate-700 font-medium">
-                      {inspectProduct.description}
-                    </p>
-                  </div>
-                )}
-
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <div className="p-3 rounded-2xl bg-emerald-50 border border-emerald-100">
-                    <span className="text-[10px] uppercase font-extrabold text-emerald-600 block">Retail Sale Price</span>
-                    <span className="text-lg font-black text-emerald-700">{priceLabel(inspectProduct.sale_price)}</span>
-                  </div>
-                  <div className="p-3 rounded-2xl bg-teal-50 border border-teal-100">
-                    <span className="text-[10px] uppercase font-extrabold text-teal-600 block">Official Price</span>
-                    <span className="text-lg font-black text-teal-700">{priceLabel(inspectProduct.official_price || inspectProduct.sale_price)}</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-4 border-t border-slate-100 flex items-center justify-between gap-2">
-                <button
-                  onClick={() => {
-                    const prod = inspectProduct;
-                    setInspectProduct(null);
-                    handleOpenAddStock(prod);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
-                >
-                  <PackagePlus className="w-4 h-4" /> + Add Stock
-                </button>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => {
-                      const prod = inspectProduct;
-                      setInspectProduct(null);
-                      handleOpenEdit(prod);
-                    }}
-                    className="px-3.5 py-2 rounded-xl bg-cyan-50 hover:bg-cyan-600 hover:text-white text-cyan-700 font-bold text-xs flex items-center gap-1"
-                  >
-                    <Edit3 className="w-3.5 h-3.5" /> Edit
-                  </button>
-                  <button
-                    onClick={() => setInspectProduct(null)}
-                    className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs"
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* Add Stock to Model Modal */}
       <AnimatePresence>
