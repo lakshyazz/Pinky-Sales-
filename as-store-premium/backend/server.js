@@ -295,7 +295,7 @@ const getPriceVisibility = async () => {
     show_purchase_price_shopkeeper: settingEnabled(settings, 'show_purchase_price_shopkeeper'),
   };
 };
-const productColumnsForRole = async (role) => {
+const productColumnsForRole = async (role, query = {}) => {
   const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'image_url', 'image_urls', 'is_active', 'updated_at'];
   let cols = [...base];
   if (role === 'superadmin') cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
@@ -305,7 +305,15 @@ const productColumnsForRole = async (role) => {
     if (visibility.show_wholesale_price_shopkeeper) cols.push('wholesale_price');
     if (visibility.show_purchase_price_shopkeeper) cols.push('purchase_price');
   }
-  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.supplier_id, s.name AS supplier_name, p.part_category_id, pc.name AS part_category_name, p.product_variant_id, pv.name AS product_variant_name, p.model AS display_model`;
+
+  const shopScope = query.shop_id ? `AND ib.shop_id = ${Number(query.shop_id)}` : '';
+  const stockSubquery = `, COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS stock_quantity,
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS available_stock,
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS quantity,
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id), 0) AS total_stock,
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)), 0) AS warehouse_stock`;
+
+  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.supplier_id, s.name AS supplier_name, p.part_category_id, pc.name AS part_category_name, p.product_variant_id, pv.name AS product_variant_name, p.model AS display_model` + stockSubquery;
 };
 const getReferenceData = () => getCached('reference-data', 300_000, async () => {
   const [categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants] = await Promise.all([
@@ -320,7 +328,7 @@ const getReferenceData = () => getCached('reference-data', 300_000, async () => 
   return { categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants };
 });
 const getProductsForRole = async (role, query = {}) => {
-  const columns = await productColumnsForRole(role);
+  const columns = await productColumnsForRole(role, query);
   const pagination = parsePagination(query);
   const params = [];
   const where = ['p.is_active = 1', 'p.name IS NOT NULL'];

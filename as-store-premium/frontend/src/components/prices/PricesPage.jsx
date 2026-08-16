@@ -153,7 +153,19 @@ export default function PricesPage({
           <Input label="Purchase price" type="number" className="md:col-span-1" value={productForm.purchase_price} onChange={(value) => onProductFieldChange('purchase_price', value)} />
           <Input label="Sale price" type="number" className="md:col-span-1" value={productForm.sale_price} onChange={(value) => onProductFieldChange('sale_price', value)} />
           <Input label="Wholesale price" type="number" className="md:col-span-1" value={productForm.wholesale_price} onChange={(value) => onProductFieldChange('wholesale_price', value)} />
-          {!editingProductId && <Input label="Opening stock" type="number" className="md:col-span-1" value={productForm.opening_stock} onChange={(value) => onProductFieldChange('opening_stock', value)} />}
+          {!editingProductId ? (
+            <Input label="Opening stock" type="number" className="md:col-span-1" value={productForm.opening_stock} onChange={(value) => onProductFieldChange('opening_stock', value)} />
+          ) : (
+            <div className="md:col-span-1 flex flex-col justify-center">
+              <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider block mb-1">Available Stock</span>
+              <div className="h-10 px-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between text-xs font-bold">
+                <span className="text-slate-500">Warehouse:</span>
+                <span className={Number(productForm.stock_quantity ?? productForm.quantity ?? 0) <= 0 ? 'text-rose-600 font-extrabold' : 'text-emerald-700 font-extrabold'}>
+                  {Number(productForm.stock_quantity ?? productForm.quantity ?? 0)} pcs
+                </span>
+              </div>
+            </div>
+          )}
           <Input label="Description" className="md:col-span-4" value={productForm.description} onChange={(value) => onProductFieldChange('description', value)} />
           <Select
             label="Add Colour"
@@ -294,12 +306,41 @@ export default function PricesPage({
                     </div>
                   </div>
                   
-                  {/* Column 2: Aligned Pricing details (lg:col-span-5) */}
-                  <div className="w-full lg:col-span-5 grid grid-cols-3 gap-4 text-right pr-0 lg:pr-4 border-b lg:border-b-0 pb-3 lg:pb-0 lg:border-r border-slate-200/60 h-full py-1">
+                  {/* Column 2: Aligned Stock & Pricing details (lg:col-span-5) */}
+                  <div className="w-full lg:col-span-5 grid grid-cols-4 gap-2 text-right pr-0 lg:pr-4 border-b lg:border-b-0 pb-3 lg:pb-0 lg:border-r border-slate-200/60 h-full py-1 items-center">
+                    {/* Available Stock */}
+                    {(() => {
+                      const stockQty = Number(product.quantity ?? product.available_stock ?? product.stock_quantity ?? product.warehouse_stock ?? product.stock ?? 0);
+                      const isOutOfStock = stockQty <= 0;
+                      const isLowStock = stockQty > 0 && stockQty <= 5;
+                      return (
+                        <div className="flex flex-col justify-center items-end">
+                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Available</span>
+                          <span 
+                            title={isOutOfStock ? 'No stock available in warehouse' : isLowStock ? `${stockQty} pcs remaining (Low Stock)` : `${stockQty} pcs in stock`}
+                            className={`text-[10px] font-black px-2 py-0.5 rounded-lg border mt-1 inline-flex items-center gap-1 shadow-xs ${
+                              isOutOfStock
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : isLowStock
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                              isOutOfStock ? 'bg-rose-500' : isLowStock ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'
+                            }`} />
+                            <span className="truncate max-w-[70px]">
+                              {isOutOfStock ? '0 Out' : `${stockQty} pcs`}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })()}
+
                     {/* Sale Price */}
                     <div className="flex flex-col justify-center">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Sale</span>
-                      <span className="text-sm font-semibold text-emerald-700 mt-0.5">{priceLabel(product.sale_price)}</span>
+                      <span className="text-sm font-black text-emerald-700 mt-0.5">{priceLabel(product.sale_price)}</span>
                     </div>
                     
                     {/* Purchase Price */}
