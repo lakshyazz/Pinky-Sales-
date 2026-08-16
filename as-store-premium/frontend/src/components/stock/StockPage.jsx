@@ -28,6 +28,8 @@ import {
 import ProductPagination from '../shared/ProductPagination';
 import SearchFilter from '../shared/SearchFilter';
 import ExpandableText from '../shared/ExpandableText';
+import ProductThumbnail from '../ui/ProductThumbnail';
+import ProductImageUpload from '../ui/ProductImageUpload';
 
 export default function StockPage({
   role,
@@ -160,17 +162,15 @@ export default function StockPage({
     }
     setForms((prev) => {
       const updatedProduct = { ...prev.product, [field]: value };
-      if (!updatedProduct.model) {
-        updatedProduct.model = updatedProduct.short_name || (updatedProduct.full_model_list ? updatedProduct.full_model_list.split('/')[0].trim() : '');
-      }
       
-      // Auto detect brand based on title/compatible models
-      const detected = detectBrand(updatedProduct.short_name || updatedProduct.full_model_list);
-      if (detected) {
-        // Look up casing match from brand references
-        const match = data.reference.brands.find(b => b.name.toLowerCase() === detected.toLowerCase());
-        if (match) {
-          updatedProduct.brand = match.name;
+      // Auto detect brand based on title/compatible models if brand is not already set
+      if (!prev.product.brand) {
+        const detected = detectBrand(updatedProduct.short_name || updatedProduct.full_model_list);
+        if (detected) {
+          const match = data.reference.brands.find(b => b.name.toLowerCase() === detected.toLowerCase());
+          if (match) {
+            updatedProduct.brand = match.name;
+          }
         }
       }
       return { ...prev, product: updatedProduct };
@@ -465,8 +465,8 @@ export default function StockPage({
                       value={forms.product.full_model_list} 
                       onChange={(v) => handleProductNameChange(v, 'full_model_list')} 
                     />
-                  </div>                  {/* Row 2: Brand & Model */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  </div>                  {/* Row 2: Brand, Manufacturing Brand & Supplier */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <Select 
                       label="BRAND *" 
                       placeholder="Select Brand"
@@ -474,44 +474,19 @@ export default function StockPage({
                       onChange={(v) => {
                         const brandName = v;
                         setForms(prev => {
-                          const autoName = [brandName, prev.product.model, prev.product.part_category, prev.product.quality_variant].filter(Boolean).join(' ');
+                          const autoName = [brandName, prev.product.part_category].filter(Boolean).join(' ');
                           return {
                             ...prev,
                             product: {
                               ...prev.product,
                               brand: brandName,
-                              short_name: isCustomNameEdited ? prev.product.short_name : autoName,
-                              full_model_list: prev.product.full_model_list || prev.product.model || autoName
+                              short_name: isCustomNameEdited ? prev.product.short_name : autoName
                             }
                           };
                         });
                       }} 
                       options={[['', 'Select Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
                     />
-                    <Input 
-                      label="MODEL *" 
-                      placeholder="Type Model Name (e.g. V40e, iPhone 13)"
-                      value={forms.product.model} 
-                      onChange={(v) => {
-                        const modelName = v;
-                        setForms(prev => {
-                          const autoName = [prev.product.brand, modelName, prev.product.part_category, prev.product.quality_variant].filter(Boolean).join(' ');
-                          return {
-                            ...prev,
-                            product: {
-                              ...prev.product,
-                              model: modelName,
-                              short_name: isCustomNameEdited ? prev.product.short_name : autoName,
-                              full_model_list: modelName
-                            }
-                          };
-                        });
-                      }} 
-                    />
-                  </div>
-
-                  {/* Row 3: Manufacturing Brand (Optional) & Supplier */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <Select 
                       label="MANUFACTURING BRAND (OPTIONAL)" 
                       placeholder="Select Manufacturing Brand"
@@ -569,7 +544,7 @@ export default function StockPage({
                             onChange={(v) => {
                               const partCat = v;
                               setForms(prev => {
-                                const autoName = [prev.product.brand, prev.product.model, partCat, prev.product.quality_variant].filter(Boolean).join(' ');
+                                const autoName = [prev.product.brand, partCat].filter(Boolean).join(' ');
                                 return {
                                   ...prev,
                                   product: {
@@ -593,7 +568,7 @@ export default function StockPage({
                               } else {
                                 const partCat = v;
                                 setForms(prev => {
-                                  const autoName = [prev.product.brand, prev.product.model, partCat, prev.product.quality_variant].filter(Boolean).join(' ');
+                                  const autoName = [prev.product.brand, partCat].filter(Boolean).join(' ');
                                   return {
                                     ...prev,
                                     product: {
@@ -623,7 +598,7 @@ export default function StockPage({
                                 setIsCustomPartCategory(false);
                                 const partCat = chip;
                                 setForms(prev => {
-                                  const autoName = [prev.product.brand, prev.product.model, partCat, prev.product.quality_variant].filter(Boolean).join(' ');
+                                  const autoName = [prev.product.brand, partCat].filter(Boolean).join(' ');
                                   return {
                                     ...prev,
                                     product: {
@@ -676,17 +651,13 @@ export default function StockPage({
                             value={forms.product.quality_variant || ''} 
                             onChange={(v) => {
                               const qualVar = v;
-                              setForms(prev => {
-                                const autoName = [prev.product.brand, prev.product.model, prev.product.part_category, qualVar].filter(Boolean).join(' ');
-                                return {
-                                  ...prev,
-                                  product: {
-                                    ...prev.product,
-                                    quality_variant: qualVar,
-                                    short_name: isCustomNameEdited ? prev.product.short_name : autoName
-                                  }
-                                };
-                              });
+                              setForms(prev => ({
+                                ...prev,
+                                product: {
+                                  ...prev.product,
+                                  quality_variant: qualVar
+                                }
+                              }));
                             }} 
                           />
                         ) : (
@@ -700,17 +671,13 @@ export default function StockPage({
                                 setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: '' } }));
                               } else {
                                 const qualVar = v;
-                                setForms(prev => {
-                                  const autoName = [prev.product.brand, prev.product.model, prev.product.part_category, qualVar].filter(Boolean).join(' ');
-                                  return {
-                                    ...prev,
-                                    product: {
-                                      ...prev.product,
-                                      quality_variant: qualVar,
-                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
-                                    }
-                                  };
-                                });
+                                setForms(prev => ({
+                                  ...prev,
+                                  product: {
+                                    ...prev.product,
+                                    quality_variant: qualVar
+                                  }
+                                }));
                               }
                             }} 
                             options={[
@@ -731,17 +698,13 @@ export default function StockPage({
                               onClick={() => {
                                 setIsCustomQualityVariant(false);
                                 const qualVar = chip;
-                                setForms(prev => {
-                                  const autoName = [prev.product.brand, prev.product.model, prev.product.part_category, qualVar].filter(Boolean).join(' ');
-                                  return {
-                                    ...prev,
-                                    product: {
-                                      ...prev.product,
-                                      quality_variant: qualVar,
-                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
-                                    }
-                                  };
-                                });
+                                setForms(prev => ({
+                                  ...prev,
+                                  product: {
+                                    ...prev.product,
+                                    quality_variant: qualVar
+                                  }
+                                }));
                               }}
                               className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
                                 forms.product.quality_variant === chip 
@@ -782,6 +745,26 @@ export default function StockPage({
                       placeholder="₹ 0.00"
                       value={forms.product.purchase_price} 
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, purchase_price: v } }))} 
+                    />
+                  </div>
+
+                  {/* Cloudflare R2 Product Image Upload */}
+                  <div className="pt-2">
+                    <ProductImageUpload
+                      imageUrl={forms.product?.image_url || ''}
+                      imageUrls={forms.product?.image_urls || []}
+                      onImageChange={({ imageUrl, imageUrls }) => {
+                        setForms(prev => ({
+                          ...prev,
+                          product: {
+                            ...prev.product,
+                            image_url: imageUrl,
+                            image_urls: imageUrls,
+                          }
+                        }));
+                      }}
+                      category={forms.product?.part_category || forms.product?.category || 'Display'}
+                      disabled={saving}
                     />
                   </div>
 
@@ -1269,9 +1252,13 @@ export default function StockPage({
                 
                 {/* Product Name & Brand */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                  <div style={{ width: '40px', height: '40px', borderRadius: '12px', background: 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)', color: '#0d9488', display: 'flex', alignItems: 'center', justifyItems: 'center', justifyContent: 'center', boxShadow: '0 2px 8px -2px rgba(13,148,136,0.12)' }}>
-                    <Smartphone size={18} />
-                  </div>
+                  <ProductThumbnail
+                    src={item.image_url}
+                    alt={productName(item)}
+                    category={item.part_category || item.category || 'Display'}
+                    size={44}
+                    rounded="12px"
+                  />
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <b style={{ fontSize: '14.5px', color: '#1e293b', fontWeight: '800', lineHeight: 1.3, overflowWrap: 'anywhere' }}>{productName(item)}</b>
                     {fullModelList(item) && fullModelList(item) !== productName(item) && (

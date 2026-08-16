@@ -17,7 +17,10 @@ const rawConnectionString =
   process.env.SUPABASE_URL ||
   'postgres://postgres.hnntlrycgywhstbqqmfo:J3H14Vo7XVbdXPNx@aws-0-us-east-1.pooler.supabase.com:5432/postgres';
 
-const connectionString = rawConnectionString ? rawConnectionString.replace(/([?&])sslmode=[^&]*(&?)/gi, '$1').replace(/\?$/, '') : '';
+let connectionString = rawConnectionString ? rawConnectionString.replace(/([?&])sslmode=[^&]*(&?)/gi, '$1').replace(/\?$/, '') : '';
+if (connectionString.includes('pooler.supabase.com:5432')) {
+  connectionString = connectionString.replace('pooler.supabase.com:5432', 'pooler.supabase.com:6543');
+}
 
 const pool = new Pool({
   connectionString,

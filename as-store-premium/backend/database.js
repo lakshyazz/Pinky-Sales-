@@ -201,6 +201,8 @@ export const initDatabase = async () => {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS wholesale_price NUMERIC(12, 2);
       ALTER TABLE products ADD COLUMN IF NOT EXISTS retail_price NUMERIC(12, 2);
       ALTER TABLE products ADD COLUMN IF NOT EXISTS colours TEXT[] NOT NULL DEFAULT '{}';
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;
       UPDATE products
       SET
         full_model_list = COALESCE(NULLIF(full_model_list, ''), name),

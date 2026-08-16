@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import Pagination from '../ui/Pagination';
 import SearchInput from '../ui/SearchInput';
 import ExpandableText from '../shared/ExpandableText';
+import ProductThumbnail from '../ui/ProductThumbnail';
 
 export default function PricesPage({
   role,
@@ -239,13 +240,13 @@ export default function PricesPage({
                   {/* Column 1: Product / Model details (lg:col-span-5) */}
                   <div className="w-full lg:col-span-5 flex items-start gap-3">
                     {/* Image Thumbnail Preview container */}
-                    <div className="w-12 h-12 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-center text-slate-450 shrink-0 overflow-hidden">
-                      {product.image_url ? (
-                        <img src={product.image_url} alt={productName(product)} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-sm font-semibold text-slate-500">₹</span>
-                      )}
-                    </div>
+                    <ProductThumbnail
+                      src={product.image_url}
+                      alt={productName(product)}
+                      category={product.part_category || product.category || 'Display'}
+                      size={48}
+                      rounded="10px"
+                    />
                     
                     {/* Info Hierarchy */}
                     <div className="min-w-0 flex-1">

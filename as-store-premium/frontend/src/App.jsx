@@ -445,6 +445,7 @@ const initialForms = {
     short_name: '', full_model_list: '', brand: '', part_category: 'Display', quality_variant: 'OLED', model: '',
     official_price: '', purchase_price: '', sale_price: '', wholesale_price: '', retail_price: '',
     opening_stock: '', description: '', colours: '', manufacturing_brand_id: '', supplier_id: '',
+    image_url: '', image_urls: [],
   },
   stock: { product_id: '', quantity: '', colour: '', supplier_id: '' },
   customer: { name: '', mobile: '', address: '', notes: '' },
@@ -2571,19 +2572,21 @@ function App() {
       colours: (forms.product.colours || '').split(',').map((colour) => colour.trim()).filter(Boolean),
       manufacturing_brand_id: forms.product.manufacturing_brand_id ? Number(forms.product.manufacturing_brand_id) : null,
       supplier_id: forms.product.supplier_id ? Number(forms.product.supplier_id) : null,
+      image_url: forms.product.image_url || null,
+      image_urls: forms.product.image_urls || [],
     };
 
     if (!payload.short_name) {
-      payload.short_name = payload.full_model_list || payload.model || 'Unnamed Product';
+      payload.short_name = [payload.brand, payload.model, payload.part_category].filter(Boolean).join(' ') || payload.full_model_list || 'Unnamed Product';
     }
 
     if (!payload.full_model_list) {
-      payload.full_model_list = payload.short_name;
-      payload.name = payload.short_name;
+      payload.full_model_list = payload.model || payload.short_name;
+      payload.name = payload.full_model_list;
     }
 
     if (!payload.model) {
-      payload.model = payload.short_name || payload.full_model_list || '';
+      payload.model = payload.full_model_list || payload.short_name || '';
     }
 
     const optionalPrices = [payload.purchase_price, payload.wholesale_price, payload.sale_price].filter((price) => price !== null);
@@ -2681,6 +2684,8 @@ function App() {
         colours: Array.isArray(product.colours) ? product.colours.join(', ') : '',
         manufacturing_brand_id: product.manufacturing_brand_id || '',
         supplier_id: product.supplier_id || '',
+        image_url: product.image_url || '',
+        image_urls: product.image_urls || [],
       },
     }));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -3961,7 +3966,14 @@ function App() {
                 session={session}
                 api={api}
                 setGlobalToast={showToast}
-                onProductUpdated={loadCore}
+                onProductUpdated={async () => {
+                  try {
+                    await loadCore();
+                    await loadProductPage({ tab: 'models', page: productPager.page });
+                  } catch (e) {
+                    console.warn('Refresh error:', e);
+                  }
+                }}
                 onDeleteProduct={deleteProduct}
                 pager={productPager}
                 loading={productPageLoading}

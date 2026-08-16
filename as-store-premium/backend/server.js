@@ -3,7 +3,25 @@ import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import multer from 'multer';
 import { initDatabase, runQuery, getRecord, allRecords, runTransaction } from './database.js';
+import { uploadImageToR2, deleteImageFromR2, isR2Configured, getImageBufferFromStorage } from './r2Storage.js';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB max
+    files: 10,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowed.includes(file.mimetype.toLowerCase())) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only JPEG, PNG, and WebP images are allowed (max 10MB).'));
+    }
+  },
+});
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -278,7 +296,7 @@ const getPriceVisibility = async () => {
   };
 };
 const productColumnsForRole = async (role) => {
-  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'is_active', 'updated_at'];
+  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'image_url', 'image_urls', 'is_active', 'updated_at'];
   let cols = [...base];
   if (role === 'superadmin') cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
   else {
@@ -1340,7 +1358,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const isSuperAdmin = req.user.role === 'superadmin';
   const isShopkeeper = req.user.role === 'shopkeeper' || req.user.role === 'admin' || req.user.role === 'shop_staff';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
-  const { short_name, name, brand, category, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id, supplier_id, stock_status, set_stock_zero, stock_quantity } = req.body;
+  const { short_name, name, brand, category, part_category, quality_variant, full_model_list, model, sale_price, retail_price, wholesale_price, purchase_price, official_price, description, colours, shop_id, manufacturing_brand_id, supplier_id, stock_status, set_stock_zero, stock_quantity, image_url, image_urls } = req.body;
  
   // Shopkeepers and Superadmins can update selling price (sale_price). Cost and wholesale are superadmin only.
   const targetSalePrice = sale_price ?? retail_price;
@@ -1352,6 +1370,16 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   try {
     const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [productId]);
     if (!oldProduct) return res.status(404).json({ error: 'Product not found.' });
+
+    // Clean up old R2 image if image changed/removed
+    if (image_url !== undefined && oldProduct.image_url && oldProduct.image_url !== image_url) {
+      deleteImageFromR2(oldProduct.image_url).catch((err) => console.warn('[R2 Delete Old Image Warning]', err.message));
+    }
+
+    const finalImageUrl = image_url !== undefined ? (image_url ? String(image_url).trim() : null) : oldProduct.image_url;
+    const finalImageUrls = image_urls !== undefined 
+      ? (typeof image_urls === 'string' ? image_urls : JSON.stringify(image_urls))
+      : (oldProduct.image_urls ? (typeof oldProduct.image_urls === 'string' ? oldProduct.image_urls : JSON.stringify(oldProduct.image_urls)) : JSON.stringify(finalImageUrl ? [finalImageUrl] : []));
 
     const brandRef = brand ? await ensureReference('brands', brand) : null;
     const categoryRef = category ? await ensureReference('categories', category) : null;
@@ -1368,6 +1396,13 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ?', [targetSupplierId]);
       if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
     }
+
+    const partCategoryRef = (part_category || req.body.part_category_name || category) ? await ensureReference('part_categories', part_category || req.body.part_category_name || category) : null;
+    const productVariantRef = (quality_variant || req.body.product_variant_name) ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
+    const targetPartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : oldProduct.part_category_id);
+    const targetProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : oldProduct.product_variant_id);
+    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : (part_category || oldProduct.part_category || category || oldProduct.category || null);
+    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant || oldProduct.quality_variant || null);
 
     // Check duplicate composite combination
     let duplicate = null;
@@ -1405,6 +1440,10 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           name = COALESCE(?, name),
           brand = COALESCE(?, brand),
           category = COALESCE(?, category),
+          part_category = COALESCE(?, part_category),
+          quality_variant = COALESCE(?, quality_variant),
+          part_category_id = COALESCE(?, part_category_id),
+          product_variant_id = COALESCE(?, product_variant_id),
           full_model_list = COALESCE(?, full_model_list),
           model = COALESCE(?, model),
           sale_price = COALESCE(?, sale_price),
@@ -1417,6 +1456,8 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           company_brand_id = COALESCE(?, company_brand_id),
           manufacturing_brand_id = COALESCE(?, manufacturing_brand_id),
           supplier_id = ?,
+          image_url = ?,
+          image_urls = ?::jsonb,
           updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `, [
@@ -1424,6 +1465,10 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         name || short_name || null,
         brand || null,
         category || null,
+        canonicalPartCategory,
+        canonicalQualityVariant,
+        targetPartCategoryId,
+        targetProductVariantId,
         full_model_list || null,
         model || null,
         newSalePrice,
@@ -1436,6 +1481,8 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         companyBrandId,
         targetMfgBrandId,
         targetSupplierId,
+        finalImageUrl,
+        finalImageUrls,
         productId
       ]);
 
@@ -1634,6 +1681,94 @@ app.post('/api/stock-import', authenticateToken, requireShopStaff, async (req, r
   }
 });
 
+// --- Cloudflare R2 Image Upload Endpoints ---
+app.post(['/api/upload/image', '/upload/image'], authenticateToken, requireShopStaff, (req, res, next) => {
+  upload.single('image')(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File too large. Maximum allowed size is 10 MB.' });
+      }
+      return res.status(400).json({ error: `Upload error: ${err.message}` });
+    } else if (err) {
+      return res.status(400).json({ error: err.message || 'File upload error.' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided.' });
+    }
+    const result = await uploadImageToR2(req.file.buffer, req.file.originalname, 'products');
+    res.json(result);
+  } catch (error) {
+    console.error('[UploadAPI Error]', error);
+    res.status(500).json({ error: error.message || 'Failed to optimize and upload image.' });
+  }
+});
+
+app.post(['/api/upload/images', '/upload/images'], authenticateToken, requireShopStaff, (req, res, next) => {
+  upload.array('images', 10)(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'One or more files exceed the 10 MB limit.' });
+      }
+      return res.status(400).json({ error: `Upload error: ${err.message}` });
+    } else if (err) {
+      return res.status(400).json({ error: err.message || 'File upload error.' });
+    }
+    next();
+  });
+}, async (req, res) => {
+  try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: 'No image files provided.' });
+    }
+    const uploadPromises = req.files.map((file) => uploadImageToR2(file.buffer, file.originalname, 'products'));
+    const results = await Promise.all(uploadPromises);
+    res.json({
+      success: true,
+      images: results.map((r) => ({ url: r.url, key: r.key, size: r.size, width: r.width, height: r.height, fallback: r.fallback })),
+    });
+  } catch (error) {
+    console.error('[BatchUploadAPI Error]', error);
+    res.status(500).json({ error: error.message || 'Failed to upload batch images.' });
+  }
+});
+
+app.delete(['/api/upload/image', '/upload/image'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const { url, key } = req.body || {};
+    const target = url || key || req.query.url || req.query.key;
+    if (!target) {
+      return res.status(400).json({ error: 'Image URL or key is required for deletion.' });
+    }
+    const result = await deleteImageFromR2(target);
+    res.json(result);
+  } catch (error) {
+    console.error('[DeleteUploadAPI Error]', error);
+    res.status(500).json({ error: error.message || 'Failed to delete image.' });
+  }
+});
+
+app.get(['/api/images/*', '/images/*'], async (req, res) => {
+  try {
+    const rawPath = req.params[0] || req.path.replace(/^\/(?:api\/)?images\//, '');
+    const key = rawPath.replace(/^\/+/, '');
+    if (!key) return res.status(404).send('Image key missing');
+
+    const imageBuffer = await getImageBufferFromStorage(key);
+    if (!imageBuffer) return res.status(404).send('Image not found');
+
+    res.setHeader('Content-Type', 'image/webp');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    res.send(imageBuffer);
+  } catch (err) {
+    console.error('[Serve Image Error]', err.message);
+    res.status(404).send('Image not found');
+  }
+});
+
 app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const productsData = await getProductsForRole(req.user.role, req.query);
@@ -1653,16 +1788,12 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     const {
       name, short_name, full_model_list, brand, category, model, official_price,
       purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-      manufacturing_brand_id, supplier_id, part_category, quality_variant
+      manufacturing_brand_id, supplier_id, part_category, quality_variant,
+      image_url, image_urls
     } = req.body;
     let compatibilityModels = String(full_model_list || name || '').trim();
     let displayName = String(short_name || '').trim();
-    if (!displayName) {
-      displayName = compatibilityModels || 'Unnamed Product';
-    }
-    if (!compatibilityModels) {
-      compatibilityModels = displayName;
-    }
+    const cleanModel = String(model || (full_model_list && !full_model_list.includes(',') ? full_model_list : '') || '').trim();
 
     const parsePrice = (val, fallback = null) => {
       if (val === '' || val === null || val === undefined) return fallback;
@@ -1721,11 +1852,19 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
     const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant ? String(quality_variant).trim() : null);
 
-    const cleanModel = String(model || short_name || full_model_list || '').trim();
     const cleanPartCat = canonicalPartCategory || 'Display';
-    const cleanQualVar = canonicalQualityVariant || '';
-    const autoGeneratedName = [canonicalBrand, cleanModel, cleanPartCat, cleanQualVar].filter(Boolean).join(' ');
-    displayName = String(short_name || '').trim() || autoGeneratedName;
+    const autoGeneratedName = [canonicalBrand, cleanModel, cleanPartCat].filter(Boolean).join(' ');
+    if (!displayName) {
+      displayName = autoGeneratedName || compatibilityModels || 'Unnamed Product';
+    }
+    if (!compatibilityModels) {
+      compatibilityModels = cleanModel || displayName;
+    }
+
+    const targetImageUrl = image_url ? String(image_url).trim() : null;
+    const targetImageUrls = image_urls 
+      ? (typeof image_urls === 'string' ? image_urls : JSON.stringify(image_urls)) 
+      : JSON.stringify(targetImageUrl ? [targetImageUrl] : []);
 
     // Composite Duplicate combination check (requires exact match across ALL core variant attributes)
     if (cleanModel && effectivePartCategoryId) {
@@ -1763,12 +1902,15 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
           `UPDATE products SET
             name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, part_category = ?, quality_variant = ?, model = ?,
             official_price = ?, purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?, description = ?, colours = ?,
-            company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+            company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?,
+            image_url = COALESCE(?, image_url), image_urls = COALESCE(?::jsonb, image_urls),
+            is_active = 1, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?`,
           [
-            displayName, displayName, displayName, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
+            compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
             purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
-            companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId, inactiveProduct.id
+            companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId,
+            targetImageUrl, targetImageUrls, inactiveProduct.id
           ]
         );
 
@@ -1788,12 +1930,14 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
       `INSERT INTO products (
         name, short_name, full_model_list, brand, category, part_category, quality_variant, model, official_price,
         purchase_price, sale_price, wholesale_price, retail_price, description, colours,
-        company_brand_id, manufacturing_brand_id, supplier_id, part_category_id, product_variant_id, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        company_brand_id, manufacturing_brand_id, supplier_id, part_category_id, product_variant_id,
+        image_url, image_urls, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, 1)`,
       [
-        displayName, displayName, displayName, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
+        compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
         purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
-        companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId
+        companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId,
+        targetImageUrl, targetImageUrls
       ]
     );
 
@@ -1840,15 +1984,28 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     const {
       name, short_name, full_model_list, brand, category, model, official_price,
       purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
-      manufacturing_brand_id, supplier_id, part_category, quality_variant
+      manufacturing_brand_id, supplier_id, part_category, quality_variant,
+      image_url, image_urls
     } = req.body;
+
+    // Clean up old R2 image if image changed/removed
+    if (image_url !== undefined && oldProduct.image_url && oldProduct.image_url !== image_url) {
+      deleteImageFromR2(oldProduct.image_url).catch((err) => console.warn('[R2 Delete Old Image Warning]', err.message));
+    }
+
+    const finalImageUrl = image_url !== undefined ? (image_url ? String(image_url).trim() : null) : oldProduct.image_url;
+    const finalImageUrls = image_urls !== undefined 
+      ? (typeof image_urls === 'string' ? image_urls : JSON.stringify(image_urls))
+      : (oldProduct.image_urls ? (typeof oldProduct.image_urls === 'string' ? oldProduct.image_urls : JSON.stringify(oldProduct.image_urls)) : JSON.stringify(finalImageUrl ? [finalImageUrl] : []));
+
     let compatibilityModels = String(full_model_list || name || '').trim();
     let displayName = String(short_name || '').trim();
+    const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
     if (!displayName) {
-      displayName = compatibilityModels || 'Unnamed Product';
+      displayName = compatibilityModels || oldProduct.short_name || oldProduct.name || 'Unnamed Product';
     }
     if (!compatibilityModels) {
-      compatibilityModels = displayName;
+      compatibilityModels = cleanModel || displayName;
     }
 
     const parsePrice = (val, fallback = null) => {
@@ -1907,7 +2064,6 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
 
     // Check duplicate composite combination
     let duplicate = null;
-    const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
     if (cleanModel && targetPartCategoryId) {
       duplicate = await getRecord(
         `SELECT id FROM products 
@@ -1938,12 +2094,14 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
       `UPDATE products SET
         name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, part_category = ?, quality_variant = ?, model = ?, official_price = ?,
         purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
-        description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?, updated_at = CURRENT_TIMESTAMP
+        description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?,
+        image_url = ?, image_urls = ?::jsonb, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?`,
       [
         compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, model || '', officialPriceNum,
         purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours, is_active,
-        companyBrandId, targetMfgBrandId, targetSupplierId, targetPartCategoryId, targetProductVariantId, req.params.id,
+        companyBrandId, targetMfgBrandId, targetSupplierId, targetPartCategoryId, targetProductVariantId,
+        finalImageUrl, finalImageUrls, req.params.id,
       ]
     );
     await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${officialPriceNum}`);
@@ -1960,7 +2118,7 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
 
 app.delete('/api/products/:id', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const product = await getRecord('SELECT id, name, short_name FROM products WHERE id = ?', [req.params.id]);
+    const product = await getRecord('SELECT id, name, short_name, image_url, image_urls FROM products WHERE id = ?', [req.params.id]);
     if (!product) return res.status(404).json({ error: 'Product not found.' });
 
     const history = await getRecord(
@@ -1977,6 +2135,25 @@ app.delete('/api/products/:id', authenticateToken, requireShopStaff, async (req,
       await runQuery('UPDATE products SET is_active = 0 WHERE id = ?', [req.params.id]);
       await audit(req, 'Soft deleted product (archived due to history)', 'product', req.params.id, product.short_name || product.name);
       return res.json({ success: true, archived: true });
+    }
+
+    // Clean up product image(s) from Cloudflare R2 bucket
+    if (product.image_url) {
+      deleteImageFromR2(product.image_url).catch((err) => console.warn('[R2 Delete Image Warning]', err.message));
+    }
+    if (product.image_urls) {
+      let urls = [];
+      try {
+        urls = typeof product.image_urls === 'string' ? JSON.parse(product.image_urls) : product.image_urls;
+      } catch {}
+      if (Array.isArray(urls)) {
+        urls.forEach((u) => {
+          const urlStr = typeof u === 'string' ? u : u?.url;
+          if (urlStr && urlStr !== product.image_url) {
+            deleteImageFromR2(urlStr).catch((err) => console.warn('[R2 Delete Gallery Image Warning]', err.message));
+          }
+        });
+      }
     }
 
     await runTransaction(async (tx) => {

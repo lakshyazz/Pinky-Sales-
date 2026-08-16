@@ -4,6 +4,8 @@ import { Smartphone, LayoutGrid, List, Search, ArrowRight, Eye, X, Tag, Cpu, Che
 import Pagination from '../ui/Pagination';
 import ExpandableText from '../shared/ExpandableText';
 import SearchInput from '../ui/SearchInput';
+import ProductThumbnail from '../ui/ProductThumbnail';
+import ProductImageUpload from '../ui/ProductImageUpload';
 
 export default function ModelsPage({
   items = [],
@@ -69,6 +71,8 @@ export default function ModelsPage({
     supplier_id: '',
     stock_status: 'in_stock',
     stock_quantity: '',
+    image_url: '',
+    image_urls: [],
   });
   const [savingEdit, setSavingEdit] = useState(false);
 
@@ -131,6 +135,8 @@ export default function ModelsPage({
       supplier_id: product.supplier_id !== undefined && product.supplier_id !== null ? String(product.supplier_id) : '',
       stock_status: initialStatus,
       stock_quantity: String(availableQty),
+      image_url: product.image_url || '',
+      image_urls: product.image_urls || [],
     });
   };
 
@@ -206,22 +212,32 @@ export default function ModelsPage({
       setSavingEdit(true);
       const token = session?.token || localStorage.getItem('token');
       const isNoStock = editForm.stock_status === 'no_stock';
+      const partCat = editForm.product_type || editForm.category || 'Display';
+      const parsedColours = typeof editForm.colours === 'string'
+        ? editForm.colours.split(',').map(c => c.trim()).filter(Boolean)
+        : (Array.isArray(editForm.colours) ? editForm.colours : []);
+
       const payload = {
         short_name: editForm.short_name,
         name: editForm.short_name,
         brand: editForm.brand,
-        category: editForm.category,
-        sale_price: editForm.sale_price ? Number(editForm.sale_price) : 0,
-        wholesale_price: editForm.wholesale_price ? Number(editForm.wholesale_price) : 0,
-        purchase_price: editForm.purchase_price ? Number(editForm.purchase_price) : 0,
-        full_model_list: editForm.full_model_list,
-        description: editForm.description,
-        colours: editForm.colours,
+        category: partCat,
+        part_category: partCat,
+        quality_variant: editForm.quality_variant || null,
+        model: editForm.full_model_list || editForm.short_name || '',
+        full_model_list: editForm.full_model_list || '',
+        sale_price: editForm.sale_price !== '' && editForm.sale_price !== null ? Number(editForm.sale_price) : 0,
+        wholesale_price: editForm.wholesale_price !== '' && editForm.wholesale_price !== null ? Number(editForm.wholesale_price) : 0,
+        purchase_price: editForm.purchase_price !== '' && editForm.purchase_price !== null ? Number(editForm.purchase_price) : 0,
+        description: editForm.description || '',
+        colours: parsedColours,
         manufacturing_brand_id: editForm.manufacturing_brand_id ? Number(editForm.manufacturing_brand_id) : null,
         supplier_id: editForm.supplier_id ? Number(editForm.supplier_id) : null,
         stock_status: editForm.stock_status,
         set_stock_zero: isNoStock,
         stock_quantity: isNoStock ? 0 : (editForm.stock_quantity !== '' ? Number(editForm.stock_quantity) : undefined),
+        image_url: editForm.image_url || null,
+        image_urls: editForm.image_urls || [],
       };
 
       if (api) {
@@ -235,7 +251,10 @@ export default function ModelsPage({
           },
           body: JSON.stringify(payload),
         });
-        if (!res.ok) throw new Error('Failed to update product');
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || 'Failed to update product');
+        }
       }
 
       // Mutate local item properties for immediate UI reactivity
@@ -246,15 +265,21 @@ export default function ModelsPage({
         name: payload.short_name,
         brand: payload.brand,
         category: payload.category,
+        part_category: payload.part_category,
+        quality_variant: payload.quality_variant,
+        model: payload.model,
         sale_price: payload.sale_price,
         wholesale_price: payload.wholesale_price,
         purchase_price: payload.purchase_price,
         full_model_list: payload.full_model_list,
         description: payload.description,
+        colours: payload.colours,
         manufacturing_brand_id: payload.manufacturing_brand_id,
         manufacturing_brand_name: mfgBrandObject ? mfgBrandObject.name : editingProduct.manufacturing_brand_name,
         supplier_id: payload.supplier_id,
         supplier_name: supplierObject ? supplierObject.name : editingProduct.supplier_name,
+        image_url: payload.image_url,
+        image_urls: payload.image_urls,
         ...(isNoStock ? { quantity: 0, available_stock: 0, warehouse_stock: 0, stock: 0 } : {}),
       });
 
@@ -365,16 +390,21 @@ export default function ModelsPage({
                 key={product.id}
                 className="rounded-xl bg-white border border-slate-200 shadow-sm flex flex-col justify-between overflow-hidden relative group hover:border-slate-300 transition-all duration-150"
               >
-                {/* Image Area placeholder */}
+                {/* Image Area */}
                 <div 
                   onClick={() => handleOpenDetails(product)}
-                  className="w-full h-32 bg-slate-50 border-b border-slate-100 flex items-center justify-center text-slate-300 cursor-pointer overflow-hidden relative"
+                  className="w-full h-36 bg-slate-50 border-b border-slate-100 flex items-center justify-center cursor-pointer overflow-hidden relative"
                 >
-                  {product.image_url ? (
-                    <img src={product.image_url} alt={productName(product)} className="w-full h-full object-cover group-hover:scale-[1.02] transition-all duration-150" />
-                  ) : (
-                    <Smartphone className="w-8 h-8 opacity-40 text-slate-450 group-hover:scale-105 transition-all duration-150" />
-                  )}
+                  <ProductThumbnail
+                    src={product.image_url}
+                    imageUrl={product.image_url}
+                    imageUrls={product.image_urls}
+                    alt={productName(product)}
+                    category={product.part_category || product.category || 'Display'}
+                    size="100%"
+                    className="w-full h-full rounded-none border-none"
+                    showZoom={false}
+                  />
                 </div>
 
                 <div className="p-4 flex-1 flex flex-col justify-between">
@@ -559,7 +589,25 @@ export default function ModelsPage({
               <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                 {filteredItems.map((product) => (
                   <tr key={product.id} className="hover:bg-slate-50/50 transition-colors duration-150">
-                    <td className="p-4 px-5 font-semibold text-slate-900">{productName(product)}</td>
+                    <td className="p-4 px-5 font-semibold text-slate-900">
+                      <div className="flex items-center gap-3">
+                        <ProductThumbnail
+                          src={product.image_url}
+                          imageUrl={product.image_url}
+                          imageUrls={product.image_urls}
+                          alt={productName(product)}
+                          category={product.part_category || product.category || 'Display'}
+                          size={38}
+                          rounded="10px"
+                        />
+                        <div className="flex flex-col">
+                          <span className="font-bold text-slate-900">{productName(product)}</span>
+                          {product.model && product.model !== productName(product) && (
+                            <span className="text-[10px] text-slate-400 font-medium">{product.model}</span>
+                          )}
+                        </div>
+                      </div>
+                    </td>
                     <td className="p-4">
                       <div className="flex flex-col gap-0.5">
                         <span className="text-slate-900 font-semibold">{product.brand || 'Generic'}</span>
@@ -646,9 +694,15 @@ export default function ModelsPage({
             >
               <div className="flex items-center justify-between pb-4 border-b border-slate-100">
                 <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-2xl bg-cyan-100 text-cyan-800">
-                    <Smartphone className="w-5 h-5" />
-                  </div>
+                  <ProductThumbnail
+                    src={inspectProduct.image_url}
+                    imageUrl={inspectProduct.image_url}
+                    imageUrls={inspectProduct.image_urls}
+                    alt={productName(inspectProduct)}
+                    category={inspectProduct.part_category || inspectProduct.category || 'Display'}
+                    size={48}
+                    rounded="16px"
+                  />
                   <div>
                     <h3 className="text-lg font-black text-slate-900 leading-snug">{productName(inspectProduct)}</h3>
                     <p className="text-xs text-slate-500 font-semibold">
@@ -887,9 +941,10 @@ export default function ModelsPage({
               </div>
 
               <form onSubmit={handleSaveEdit} className="py-5 space-y-4 text-xs">
+                {/* Row 1: Display Name & Compatible Devices */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Display Name</label>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Display Name *</label>
                     <input
                       type="text"
                       value={editForm.short_name}
@@ -900,20 +955,73 @@ export default function ModelsPage({
                   </div>
 
                   <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Brand Manufacturer</label>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Compatible Phone Models (Full List)</label>
                     <input
                       type="text"
-                      value={editForm.brand}
-                      onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
-                      placeholder="e.g. Apple, OnePlus, Samsung"
+                      value={editForm.full_model_list}
+                      onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
+                      placeholder="e.g. iPhone 13, iPhone 13 Pro, A2633"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
                     />
                   </div>
                 </div>
 
+                {/* Row 2: Brand, Manufacturing Brand & Supplier */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Brand *</label>
+                    <select
+                      value={editForm.brand}
+                      onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    >
+                      <option value="">Select Brand</option>
+                      {(reference?.brands || []).map((b) => (
+                        <option key={b.id || b.name} value={b.name}>{b.name}</option>
+                      ))}
+                      {editForm.brand && !(reference?.brands || []).some(b => b.name === editForm.brand) && (
+                        <option value={editForm.brand}>{editForm.brand}</option>
+                      )}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
+                    <select
+                      value={editForm.manufacturing_brand_id}
+                      onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    >
+                      <option value="">Select Mfg Brand</option>
+                      {(reference?.manufacturingBrands || [])
+                        .filter(mb => mb.is_active || String(mb.id) === String(editForm.manufacturing_brand_id))
+                        .map((mb) => (
+                          <option key={mb.id} value={mb.id}>{mb.name}</option>
+                        ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Supplier (Optional)</label>
+                    <select
+                      value={editForm.supplier_id}
+                      onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                    >
+                      <option value="">Select Supplier</option>
+                      {(reference?.suppliers || [])
+                        .filter(s => s.is_active || String(s.id) === String(editForm.supplier_id))
+                        .map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Row 3: Part Category & Quality Variant */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Type (Part Type)</label>
+                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Part Category *</label>
                     <input
                       type="text"
                       value={editForm.product_type || editForm.category || ''}
@@ -929,12 +1037,13 @@ export default function ModelsPage({
                       type="text"
                       value={editForm.quality_variant || ''}
                       onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
-                      placeholder="e.g. OLED, Incell, With Frame, Set Remove"
+                      placeholder="e.g. OLED, Incell, With Frame, Fresh New"
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
                     />
                   </div>
                 </div>
 
+                {/* Row 4: Pricing Tiers */}
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">Product Pricing Tiers</span>
@@ -1009,68 +1118,23 @@ export default function ModelsPage({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Category</label>
-                    <select
-                      value={editForm.category}
-                      onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    >
-                      <option value="">Choose Category</option>
-                      {(reference?.categories || []).map((cat) => (
-                        <option key={cat.id || cat.name} value={cat.name}>{cat.name}</option>
-                      ))}
-                      {editForm.category && !(reference?.categories || []).some(c => c.name === editForm.category) && (
-                        <option value={editForm.category}>{editForm.category}</option>
-                      )}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Compatible Devices List</label>
-                    <input
-                      type="text"
-                      value={editForm.full_model_list}
-                      onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
-                      placeholder="e.g. iPhone 13, iPhone 13 Pro, A2633"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    />
-                  </div>
+                {/* Cloudflare R2 Product Image Storage */}
+                <div className="pt-1">
+                  <ProductImageUpload
+                    imageUrl={editForm.image_url || ''}
+                    imageUrls={editForm.image_urls || []}
+                    onImageChange={({ imageUrl, imageUrls }) => {
+                      setEditForm(prev => ({
+                        ...prev,
+                        image_url: imageUrl,
+                        image_urls: imageUrls,
+                      }));
+                    }}
+                    category={editForm.product_type || editForm.category || 'Display'}
+                    disabled={savingEdit}
+                  />
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
-                    <select
-                      value={editForm.manufacturing_brand_id}
-                      onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    >
-                      <option value="">Choose Manufacturing Brand</option>
-                      {(reference?.manufacturingBrands || [])
-                        .filter(mb => mb.is_active || String(mb.id) === String(editForm.manufacturing_brand_id))
-                        .map((mb) => (
-                          <option key={mb.id} value={mb.id}>{mb.name}</option>
-                        ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Supplier (Optional)</label>
-                    <select
-                      value={editForm.supplier_id}
-                      onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    >
-                      <option value="">Choose Supplier</option>
-                      {(reference?.suppliers || [])
-                        .filter(s => s.is_active || String(s.id) === String(editForm.supplier_id))
-                        .map((s) => (
-                          <option key={s.id} value={s.id}>{s.name}</option>
-                        ))}
-                    </select>
-                  </div>
-                </div>
                 {/* Stock Status Selector Section */}
                 <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
                   <div className="flex items-center justify-between">
