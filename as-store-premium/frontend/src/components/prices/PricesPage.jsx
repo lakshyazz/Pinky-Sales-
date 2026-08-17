@@ -5,6 +5,7 @@ import Pagination from '../ui/Pagination';
 import SearchInput from '../ui/SearchInput';
 import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
+import ProductImageUpload from '../ui/ProductImageUpload';
 
 export default function PricesPage({
   role,
@@ -167,6 +168,21 @@ export default function PricesPage({
             </div>
           )}
           <Input label="Description" className="md:col-span-4" value={productForm.description} onChange={(value) => onProductFieldChange('description', value)} />
+          
+          {/* Product Image Upload Section */}
+          <div className="md:col-span-4 pt-1">
+            <ProductImageUpload
+              imageUrl={productForm.image_url}
+              imageUrls={productForm.image_urls}
+              category={productForm.category || 'Display'}
+              disabled={saving}
+              onImageChange={({ imageUrl, imageUrls }) => {
+                onProductFieldChange('image_url', imageUrl);
+                onProductFieldChange('image_urls', imageUrls);
+              }}
+            />
+          </div>
+
           <Select
             label="Add Colour"
             className="md:col-span-1"
