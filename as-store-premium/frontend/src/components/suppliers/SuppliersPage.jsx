@@ -27,7 +27,9 @@ export default function SuppliersPage({
   const [supplierFormError, setSupplierFormError] = useState(null);
 
   const searchVal = internalSearch;
-  const isSuperAdmin = session?.role === 'superadmin' || session?.role === 'owner' || !session?.role;
+  const isSuperAdmin = session?.role === 'superadmin' || session?.role === 'owner';
+  const isShopkeeper = session?.role === 'shopkeeper' || session?.role === 'admin';
+  const canManageSuppliers = isSuperAdmin || isShopkeeper;
 
   // Retrieve suppliers list from reference data
   const supplierList = React.useMemo(() => {
@@ -82,8 +84,8 @@ export default function SuppliersPage({
   // Toggle Active/Inactive status directly
   const handleToggleStatus = async (item, e) => {
     if (e) e.stopPropagation();
-    if (!isSuperAdmin) {
-      if (setGlobalToast) setGlobalToast('Only Super Admin can update status', 'error');
+    if (!canManageSuppliers) {
+      if (setGlobalToast) setGlobalToast('You do not have permission to update status', 'error');
       return;
     }
     const newStatus = !item.is_active;
@@ -128,11 +130,19 @@ export default function SuppliersPage({
       {/* Header Toolbar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white/90 border border-slate-200/80 rounded-3xl p-6 shadow-xl shadow-slate-200/40 backdrop-blur-xl">
         <div>
-          <span className="text-xs uppercase font-extrabold tracking-wider text-teal-600">Inventory Sourcing</span>
-          <h2 className="text-2xl font-black text-slate-900 mt-1">Suppliers Registry</h2>
-          <p className="text-xs text-slate-500 font-medium">Manage parts suppliers and trace which vendor supplied individual spare parts batches.</p>
+          <span className="text-xs uppercase font-extrabold tracking-wider text-teal-600">
+            {isShopkeeper ? `${session?.shop_name || 'Branch'} Workspace` : 'Inventory Sourcing'}
+          </span>
+          <h2 className="text-2xl font-black text-slate-900 mt-1">
+            {isShopkeeper ? 'Branch Suppliers Registry' : 'Suppliers Registry'}
+          </h2>
+          <p className="text-xs text-slate-500 font-medium">
+            {isShopkeeper 
+              ? 'Manage and maintain your branch-specific parts suppliers independently.' 
+              : 'Manage global parts suppliers and trace which vendor supplied spare parts batches.'}
+          </p>
         </div>
-        {isSuperAdmin && (
+        {canManageSuppliers && (
           <div className="flex items-center gap-3">
             <span className="px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 font-extrabold text-xs border border-teal-200/60">
               {supplierList.length} Suppliers
@@ -210,13 +220,13 @@ export default function SuppliersPage({
                     type="button"
                     title={item.is_active ? 'Set Inactive' : 'Set Active'}
                     onClick={(e) => handleToggleStatus(item, e)}
-                    disabled={!isSuperAdmin}
+                    disabled={!canManageSuppliers}
                     className={`p-2 rounded-xl border transition-all cursor-pointer ${item.is_active ? 'bg-slate-100 hover:bg-rose-50 text-emerald-600 hover:text-rose-600 border-slate-200 hover:border-rose-200' : 'bg-rose-50 hover:bg-emerald-50 text-rose-600 hover:text-emerald-600 border-rose-200 hover:border-emerald-200'}`}
                   >
                     {item.is_active ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                   </button>
 
-                  {isSuperAdmin && (
+                  {canManageSuppliers && (
                     <>
                       <button
                         type="button"

@@ -26,9 +26,10 @@ const upload = multer({
 const app = express();
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'as-store-multishop-local-secret';
-const VALID_ROLES = new Set(['superadmin', 'shopkeeper', 'admin', 'customer', 'user']);
+const VALID_ROLES = new Set(['superadmin', 'shopkeeper', 'admin', 'customer', 'user', 'supplier']);
 const isShopStaffRole = (role) => role === 'shopkeeper' || role === 'admin';
 const isCustomerRole = (role) => role === 'customer' || role === 'user';
+const isSupplierRole = (role) => role === 'supplier';
 const allowedCorsOrigins = String(process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean);
 
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
@@ -183,7 +184,13 @@ const getCached = async (key, ttlMs, loader) => {
     throw error;
   }
 };
-const invalidateCache = (...keys) => keys.forEach((key) => responseCache.delete(key));
+const invalidateCache = (...keys) => keys.forEach((key) => {
+  for (const cacheKey of responseCache.keys()) {
+    if (cacheKey === key || cacheKey.startsWith(`${key}-`) || cacheKey.startsWith(`${key}:`)) {
+      responseCache.delete(cacheKey);
+    }
+  }
+});
 const getSessionUser = async (userId) => {
   const cached = sessionUserCache.get(Number(userId));
   if (cached && cached.expiresAt > Date.now()) return cached.user;
@@ -291,47 +298,106 @@ const getPriceVisibility = async () => {
   const settings = await getSettings();
   return {
     show_official_price_shopkeeper: settingEnabled(settings, 'show_official_price_shopkeeper', true),
-    show_wholesale_price_shopkeeper: settingEnabled(settings, 'show_wholesale_price_shopkeeper'),
-    show_purchase_price_shopkeeper: settingEnabled(settings, 'show_purchase_price_shopkeeper'),
+    show_wholesale_price_shopkeeper: settingEnabled(settings, 'show_wholesale_price_shopkeeper', true),
+    show_purchase_price_shopkeeper: settingEnabled(settings, 'show_purchase_price_shopkeeper', false),
   };
 };
-const productColumnsForRole = async (role, query = {}) => {
-  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'image_url', 'image_urls', 'is_active', 'updated_at'];
+const productColumnsForRole = async (role, query = {}, user = null) => {
+  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'image_url', 'image_urls', 'is_active', 'shop_id', 'branch_id', 'scope', 'updated_at'];
   let cols = [...base];
-  if (role === 'superadmin') cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
-  else {
+  if (role === 'superadmin') {
+    cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
+  } else if (role === 'supplier' || isShopStaffRole(role)) {
+    // Shopkeeper and Supplier roles: Always include wholesale_price and retail_price/sale_price. Strictly exclude purchase_price & cost_price
+    cols.push('wholesale_price');
+  } else {
     const visibility = await getPriceVisibility();
     if (visibility.show_official_price_shopkeeper) cols.push('official_price');
     if (visibility.show_wholesale_price_shopkeeper) cols.push('wholesale_price');
-    if (visibility.show_purchase_price_shopkeeper) cols.push('purchase_price');
   }
 
-  const shopScope = query.shop_id ? `AND ib.shop_id = ${Number(query.shop_id)}` : '';
+  const requestedShopId = query.shop_id || query.shopId;
+  const userShopId = user && isShopStaffRole(user.role) ? Number(user.shop_id) : null;
+  const targetShopId = userShopId || (requestedShopId ? Number(requestedShopId) : null);
+
+  const shopScope = targetShopId ? `AND ib.shop_id = ${Number(targetShopId)}` : `AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)`;
   const stockSubquery = `, COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS stock_quantity,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS available_stock,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS quantity,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id), 0) AS total_stock,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)), 0) AS warehouse_stock`;
 
-  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.supplier_id, s.name AS supplier_name, p.part_category_id, pc.name AS part_category_name, p.product_variant_id, pv.name AS product_variant_name, p.model AS display_model` + stockSubquery;
+  let supplierCols = 'NULL::integer AS supplier_id, NULL::text AS supplier_name';
+  if (role === 'superadmin') {
+    supplierCols = 'p.supplier_id, s.name AS supplier_name';
+  } else if (user && isShopStaffRole(user.role) && user.shop_id) {
+    supplierCols = `CASE WHEN s.shop_id = ${Number(user.shop_id)} THEN p.supplier_id ELSE NULL END AS supplier_id, CASE WHEN s.shop_id = ${Number(user.shop_id)} THEN s.name ELSE NULL END AS supplier_name`;
+  }
+
+  return cols.map(c => `p.${c}`).join(', ') + `, p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, ${supplierCols}, p.part_category_id, pc.name AS part_category_name, p.product_variant_id, pv.name AS product_variant_name, p.model AS display_model` + stockSubquery;
 };
-const getReferenceData = () => getCached('reference-data', 300_000, async () => {
-  const [categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants] = await Promise.all([
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM colours WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM brands WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM manufacturing_brands ORDER BY LOWER(TRIM(name)), id'),
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM suppliers ORDER BY LOWER(TRIM(name)), id'),
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM part_categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
-    allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM product_variants WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
-  ]);
-  return { categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants };
-});
-const getProductsForRole = async (role, query = {}) => {
-  const columns = await productColumnsForRole(role, query);
+
+const getReferenceData = (user = null) => {
+  const role = user?.role;
+  const shopId = user && isShopStaffRole(role) ? Number(user.shop_id) : null;
+  const cacheKey = `reference-data-${role || 'anon'}-${shopId || 'global'}`;
+
+  return getCached(cacheKey, 300_000, async () => {
+    let supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
+    let supplierParams = [];
+
+    if (role === 'superadmin') {
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
+    } else if (shopId) {
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id FROM suppliers WHERE shop_id = ? ORDER BY LOWER(TRIM(name)), id';
+      supplierParams = [shopId];
+    } else {
+      supplierSql = 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE 1=0';
+    }
+
+    const [categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants] = await Promise.all([
+      allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+      allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM colours WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+      allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name FROM brands WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+      allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM manufacturing_brands ORDER BY LOWER(TRIM(name)), id'),
+      allRecords(supplierSql, supplierParams),
+      allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM part_categories WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+      allRecords('SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active FROM product_variants WHERE is_active = TRUE ORDER BY LOWER(TRIM(name)), id'),
+    ]);
+    return { categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants };
+  });
+};
+
+const getProductsForRole = async (role, query = {}, user = null) => {
+  const columns = await productColumnsForRole(role, query, user);
   const pagination = parsePagination(query);
   const params = [];
   const where = ['p.is_active = 1', 'p.name IS NOT NULL'];
+
+  // Scope Isolation: Warehouse vs Branch
+  const requestedShopId = query.shop_id || query.shopId;
+  const userShopId = user && isShopStaffRole(user.role) ? Number(user.shop_id) : null;
+  const activeShopId = userShopId || (requestedShopId ? Number(requestedShopId) : null);
+
+  let isWarehouseScope = false;
+  if (!activeShopId) {
+    isWarehouseScope = true;
+  } else {
+    const shopRecord = await getRecord('SELECT id, location_type FROM shops WHERE id = ?', [activeShopId]);
+    if (shopRecord?.location_type === 'warehouse') {
+      isWarehouseScope = true;
+    }
+  }
+
+  if (isWarehouseScope) {
+    // Warehouse / Owner Catalog: Strictly return only global/warehouse items. Exclude all branch-exclusive products!
+    where.push(`(p.shop_id IS NULL OR p.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1))`);
+  } else {
+    // Branch / Shopkeeper Scope: Return global catalog items + items belonging to this branch. Exclude other branches' items!
+    where.push(`(p.shop_id IS NULL OR p.shop_id = ?)`);
+    params.push(activeShopId);
+  }
+
   appendSearchFilter(where, params, query.search, [
     'p.name',
     "COALESCE(p.short_name, '')",
@@ -632,11 +698,11 @@ app.get('/api/me', authenticateToken, async (req, res) => {
   res.json({ ...user, token: createToken(user) });
 });
 
-app.get('/api/bootstrap', authenticateToken, requireShopStaff, async (req, res) => {
+app.get('/api/bootstrap', authenticateToken, async (req, res) => {
   const [shops, products, reference, priceVisibility, warehouse] = await Promise.all([
     getShopsForUser(req.user),
-    getProductsForRole(req.user.role),
-    getReferenceData(),
+    getProductsForRole(req.user.role, {}, req.user),
+    getReferenceData(req.user),
     getPriceVisibility(),
     getWarehouse(),
   ]);
@@ -952,8 +1018,19 @@ app.delete('/api/shopkeepers/:id', authenticateToken, requireSuperAdmin, async (
   }
 });
 
-app.get('/api/reference-data', async (_req, res) => {
-  res.json(await getReferenceData());
+app.get('/api/reference-data', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(' ')[1];
+  let user = null;
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET);
+      user = await getSessionUser(decoded.id);
+    } catch {
+      // ignore invalid token for reference-data
+    }
+  }
+  res.json(await getReferenceData(user));
 });
 
 app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async (req, res) => {
@@ -962,12 +1039,35 @@ app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async
   const name = String(req.body.name || '').trim();
   if (!table || !name) return res.status(400).json({ error: 'Choose a valid reference type and enter a name.' });
   
-  // Non-superadmins (shopkeepers) can only add colours. Brands and categories and suppliers are superadmin-only.
-  if (req.user.role !== 'superadmin' && req.params.type !== 'colours') {
-    return res.status(403).json({ error: 'Only the Super Admin can add categories, brands, or suppliers.' });
+  // Non-superadmins (shopkeepers) can add colours and suppliers. Brands and categories are superadmin-only.
+  if (req.user.role !== 'superadmin' && req.params.type !== 'colours' && req.params.type !== 'suppliers') {
+    return res.status(403).json({ error: 'Only the Super Admin can add categories or brands.' });
   }
   
-  const reference = await ensureReference(table, name);
+  let reference;
+  if (table === 'suppliers') {
+    const isSuperAdmin = req.user.role === 'superadmin';
+    const shopId = isSuperAdmin ? null : Number(req.user.shop_id);
+    const existing = await getRecord(
+      shopId 
+        ? 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id = ?' 
+        : 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id IS NULL',
+      shopId ? [name, shopId] : [name]
+    );
+    if (existing) {
+      await runQuery('UPDATE suppliers SET is_active = TRUE WHERE id = ?', [existing.id]);
+      reference = { ...existing, is_active: true };
+    } else {
+      const result = await runQuery(
+        'INSERT INTO suppliers (name, shop_id, branch_id, created_by, is_active) VALUES (?, ?, ?, ?, TRUE)',
+        [name, shopId, shopId, req.user.id]
+      );
+      reference = { id: result.id, name, shop_id: shopId, branch_id: shopId, is_active: true };
+    }
+  } else {
+    reference = await ensureReference(table, name);
+  }
+
   const singularType = { categories: 'category', colours: 'colour', brands: 'brand', 'manufacturing-brands': 'manufacturing_brand', suppliers: 'supplier' }[req.params.type];
   invalidateCache('reference-data');
   await audit(req, `Added ${singularType}`, singularType, reference.id, reference.name);
@@ -981,17 +1081,35 @@ app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, as
   const id = Number(req.params.id);
   if (!table || !name || isNaN(id)) return res.status(400).json({ error: 'Invalid reference update request.' });
 
-  // Only Super Admin can rename brands, categories, and suppliers. Colours can be renamed by both.
-  if (req.user.role !== 'superadmin' && table !== 'colours') {
-    return res.status(403).json({ error: 'Only the Super Admin can rename categories, brands, or suppliers.' });
+  // Only Super Admin can rename brands, categories. Colours and suppliers can be modified by shop staff.
+  if (req.user.role !== 'superadmin' && table !== 'colours' && table !== 'suppliers') {
+    return res.status(403).json({ error: 'Only the Super Admin can modify categories or brands.' });
   }
 
-  // Case-insensitive duplicate check
-  const duplicate = await getRecord(`SELECT id FROM ${table} WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ?`, [name, id]);
-  if (duplicate) return res.status(409).json({ error: 'A reference item with this name already exists.' });
-
-  const oldItem = await getRecord(`SELECT name FROM ${table} WHERE id = ?`, [id]);
+  const oldItem = await getRecord(`SELECT id, name, ${table === 'suppliers' ? 'shop_id' : 'NULL'} AS shop_id FROM ${table} WHERE id = ?`, [id]);
   if (!oldItem) return res.status(404).json({ error: 'Reference item not found.' });
+
+  if (table === 'suppliers' && req.user.role !== 'superadmin') {
+    const ownShopId = Number(req.user.shop_id);
+    if (!oldItem.shop_id || Number(oldItem.shop_id) !== ownShopId) {
+      return res.status(403).json({ error: 'You can only modify suppliers belonging to your branch.' });
+    }
+  }
+
+  // Case-insensitive duplicate check scoped by shop
+  let duplicate = null;
+  if (table === 'suppliers') {
+    const shopId = oldItem.shop_id ? Number(oldItem.shop_id) : null;
+    duplicate = await getRecord(
+      shopId
+        ? `SELECT id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id = ? AND id != ?`
+        : `SELECT id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id IS NULL AND id != ?`,
+      shopId ? [name, shopId, id] : [name, id]
+    );
+  } else {
+    duplicate = await getRecord(`SELECT id FROM ${table} WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND id != ?`, [name, id]);
+  }
+  if (duplicate) return res.status(409).json({ error: 'A reference item with this name already exists.' });
 
   const is_active = req.body.is_active !== undefined ? Boolean(req.body.is_active) : null;
   await runTransaction(async (tx) => {
@@ -1022,13 +1140,20 @@ app.delete('/api/reference-data/:type/:id', authenticateToken, requireShopStaff,
   const id = Number(req.params.id);
   if (!table || isNaN(id)) return res.status(400).json({ error: 'Invalid reference delete request.' });
 
-  // Only Super Admin can delete categories, brands, or suppliers. Colours can be deleted by both.
-  if (req.user.role !== 'superadmin' && table !== 'colours') {
-    return res.status(403).json({ error: 'Only the Super Admin can delete categories, brands, or suppliers.' });
+  // Only Super Admin can delete categories, brands. Colours and suppliers can be deleted by shop staff.
+  if (req.user.role !== 'superadmin' && table !== 'colours' && table !== 'suppliers') {
+    return res.status(403).json({ error: 'Only the Super Admin can delete categories or brands.' });
   }
 
-  const item = await getRecord(`SELECT name FROM ${table} WHERE id = ?`, [id]);
+  const item = await getRecord(`SELECT id, name, ${table === 'suppliers' ? 'shop_id' : 'NULL'} AS shop_id FROM ${table} WHERE id = ?`, [id]);
   if (!item) return res.status(404).json({ error: 'Reference item not found.' });
+
+  if (table === 'suppliers' && req.user.role !== 'superadmin') {
+    const ownShopId = Number(req.user.shop_id);
+    if (!item.shop_id || Number(item.shop_id) !== ownShopId) {
+      return res.status(403).json({ error: 'You can only delete suppliers belonging to your branch.' });
+    }
+  }
 
   if (table === 'manufacturing_brands') {
     const referenced = await getRecord(`
@@ -1087,6 +1212,11 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
   const { type = 'stock', brand = '', category = '', colour = '', shopkeeperId = '', status = '', batchId = '' } = req.query;
   if (type === 'products') {
     const columns = await productColumnsForRole(req.user.role);
+    const exportShopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : (req.query.shopId ? Number(req.query.shopId) : null);
+    let scopeFilter = "(p.shop_id IS NULL OR p.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1))";
+    if (exportShopId) {
+      scopeFilter = `(p.shop_id IS NULL OR p.shop_id = ${exportShopId})`;
+    }
     return res.json(await allRecords(`
       SELECT ${columns} 
       FROM products p 
@@ -1095,18 +1225,17 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
       LEFT JOIN suppliers s ON s.id = p.supplier_id
       LEFT JOIN part_categories pc ON pc.id = p.part_category_id
       LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
-      WHERE p.is_active = 1 
+      WHERE p.is_active = 1 AND ${scopeFilter}
       ORDER BY p.brand, COALESCE(p.short_name, p.name)
     `));
   }
 
   const shopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : Number(req.query.shopId || 0);
   const visibility = await getPriceVisibility();
-  
-  // Use product level prices for the export instead of batch-level prices.
+   // Use product level prices for the export instead of batch-level prices.
   const priceColumns = req.user.role === 'superadmin'
     ? 'p.purchase_price, p.wholesale_price, p.sale_price,'
-    : `${visibility.show_purchase_price_shopkeeper ? 'p.purchase_price,' : ''}${visibility.show_wholesale_price_shopkeeper ? 'p.wholesale_price,' : ''} p.sale_price,`;
+    : 'p.wholesale_price, p.sale_price,';
   const params = [];
   const where = ['1 = 1', 'p.is_active = 1'];
   if (shopId) {
@@ -1135,7 +1264,7 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
     where.push('ib.assigned_user_id = ?');
     params.push(shopkeeperId);
   }
-  
+
   // Filter by stock status
   const stockQuantitySql = 'COALESCE(SUM(ib.quantity_remaining), 0)';
   const having = [];
@@ -1230,12 +1359,14 @@ app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, 
   }
 
   const joinSql = joinClauses.length ? ` AND ${joinClauses.join(' AND ')}` : '';
-  const visibility = await getPriceVisibility();
   const extraPrices = req.user.role === 'superadmin'
     ? ', p.purchase_price, p.wholesale_price'
-    : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}${visibility.show_wholesale_price_shopkeeper ? ', p.wholesale_price' : ''}`;
+    : ', p.wholesale_price';
   const officialPrice = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
-  const rows = await allRecords(`
+  const productScopeSql = shopId 
+    ? `AND (p.shop_id IS NULL OR p.shop_id = ${Number(shopId)})`
+    : `AND (p.shop_id IS NULL OR p.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1))`;
+    const rows = await allRecords(`
     SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category, p.model,
       p.sale_price, p.retail_price, p.description, p.colours, p.updated_at,
       p.company_brand_id, b.name AS company_brand_name,
@@ -1251,7 +1382,7 @@ app.get('/api/brand-products', authenticateToken, requireShopStaff, async (req, 
     LEFT JOIN brands b ON b.id = p.company_brand_id
     LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
     LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${joinSql}
-    WHERE p.is_active = 1 AND LOWER(TRIM(p.brand)) = LOWER(TRIM(?))
+    WHERE p.is_active = 1 ${productScopeSql} AND LOWER(TRIM(p.brand)) = LOWER(TRIM(?))
     GROUP BY p.id, b.id, mb.id
     ORDER BY COALESCE(p.short_name, p.name)
   `, [...joinParams, brand]);
@@ -1561,6 +1692,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       }
     });
 
+    invalidateCache('reference-data', 'catalog');
     res.json({
       success: true,
       message: 'Product selling price & details updated successfully',
@@ -1874,27 +2006,83 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
       ? (typeof image_urls === 'string' ? image_urls : JSON.stringify(image_urls)) 
       : JSON.stringify(targetImageUrl ? [targetImageUrl] : []);
 
-    // Composite Duplicate combination check (requires exact match across ALL core variant attributes)
+    // Determine product creator tenancy scope
+    const isStaff = isShopStaffRole(req.user.role);
+    let creatorShopId = isStaff ? Number(req.user.shop_id) : null;
+    if (!isStaff && req.user.role === 'superadmin' && (req.body.shop_id || req.query.shopId)) {
+      const targetShop = await getRecord('SELECT id, location_type FROM shops WHERE id = ?', [req.body.shop_id || req.query.shopId]);
+      if (targetShop && targetShop.location_type !== 'warehouse') {
+        creatorShopId = Number(targetShop.id);
+      }
+    }
+    const productScope = creatorShopId ? 'BRANCH' : 'GLOBAL';
+
+    // Composite Duplicate combination check (requires exact match across ALL core variant attributes within the same shop tenancy)
     if (cleanModel && effectivePartCategoryId) {
       const duplicateCombination = await getRecord(
-        `SELECT id FROM products 
-         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+        `SELECT id, purchase_price, wholesale_price, official_price, retail_price, sale_price, manufacturing_brand_id, supplier_id, shop_id FROM products 
+         WHERE COALESCE(shop_id, 0) = COALESCE(?, 0)
+           AND company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
            AND part_category_id IS NOT DISTINCT FROM ?
            AND product_variant_id IS NOT DISTINCT FROM ?
            AND manufacturing_brand_id IS NOT DISTINCT FROM ?
            AND supplier_id IS NOT DISTINCT FROM ?
            AND is_active = 1`,
-        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId, effectiveMfgBrandId, effectiveSupplierId]
+        [creatorShopId, companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId, effectiveMfgBrandId, effectiveSupplierId]
       );
       if (duplicateCombination) {
-        return res.status(409).json({ error: `A product with this exact Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.` });
+        const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
+        const targetShopId = creatorShopId || scopeShopId(req) || (await allRecords('SELECT id FROM shops'))[0]?.id;
+
+        if (openingStockNum > 0 && targetShopId) {
+          const effectiveAssignedUserId = isShopStaffRole(req.user.role) ? req.user.id : null;
+          await runQuery(
+            `INSERT INTO inventory_batches (
+              shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+              quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              targetShopId, duplicateCombination.id, effectiveAssignedUserId,
+              duplicateCombination.purchase_price, duplicateCombination.wholesale_price, duplicateCombination.official_price, duplicateCombination.retail_price || duplicateCombination.sale_price,
+              openingStockNum, openingStockNum, today(), 'Stock added from product form', req.user.id,
+              duplicateCombination.manufacturing_brand_id, duplicateCombination.supplier_id
+            ]
+          );
+
+          await runQuery(
+            'INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = stock.quantity + EXCLUDED.quantity',
+            [targetShopId, duplicateCombination.id, openingStockNum]
+          );
+        }
+
+        invalidateCache('reference-data', 'catalog');
+
+        const existingProduct = await getRecord(`
+          SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name
+          FROM products p
+          LEFT JOIN brands b ON b.id = p.company_brand_id
+          LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+          LEFT JOIN suppliers s ON s.id = p.supplier_id
+          WHERE p.id = ?
+        `, [duplicateCombination.id]);
+
+        await audit(req, 'Updated existing product branch stock', 'product', duplicateCombination.id, `${displayName} (${canonicalBrand})`);
+
+        return res.status(200).json({
+          success: true,
+          message: openingStockNum > 0 ? `Product exists in catalog. Added ${openingStockNum} pcs to your branch stock.` : 'Product already exists in catalog.',
+          data: existingProduct,
+          id: duplicateCombination.id,
+          already_exists: true,
+        });
       }
 
       // Check if a soft-deleted / archived product exists with the exact same FULL composite combination -> RESTORE IT!
       const inactiveProduct = await getRecord(
         `SELECT id FROM products 
-         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         WHERE COALESCE(shop_id, 0) = COALESCE(?, 0)
+           AND company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
            AND part_category_id IS NOT DISTINCT FROM ?
            AND product_variant_id IS NOT DISTINCT FROM ?
@@ -1902,7 +2090,7 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
            AND supplier_id IS NOT DISTINCT FROM ?
            AND is_active = 0
          ORDER BY id DESC LIMIT 1`,
-        [companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId, effectiveMfgBrandId, effectiveSupplierId]
+        [creatorShopId, companyBrandId, cleanModel, effectivePartCategoryId, effectiveProductVariantId, effectiveMfgBrandId, effectiveSupplierId]
       );
 
       if (inactiveProduct) {
@@ -1912,19 +2100,22 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
             official_price = ?, purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?, description = ?, colours = ?,
             company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?,
             image_url = COALESCE(?, image_url), image_urls = COALESCE(?::jsonb, image_urls),
+            shop_id = ?, branch_id = ?, scope = ?,
             is_active = 1, updated_at = CURRENT_TIMESTAMP
            WHERE id = ?`,
           [
             compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
             purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
             companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId,
-            targetImageUrl, targetImageUrls, inactiveProduct.id
+            targetImageUrl, targetImageUrls,
+            creatorShopId, creatorShopId, productScope,
+            inactiveProduct.id
           ]
         );
 
         const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
         const shops = await allRecords('SELECT id FROM shops');
-        const targetShopId = scopeShopId(req) || shops[0]?.id;
+        const targetShopId = creatorShopId || scopeShopId(req) || shops[0]?.id;
         for (const shop of shops) {
           const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
           await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, inactiveProduct.id, qty]);
@@ -1939,27 +2130,46 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
         name, short_name, full_model_list, brand, category, part_category, quality_variant, model, official_price,
         purchase_price, sale_price, wholesale_price, retail_price, description, colours,
         company_brand_id, manufacturing_brand_id, supplier_id, part_category_id, product_variant_id,
-        image_url, image_urls, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, 1)`,
+        image_url, image_urls, is_active, shop_id, branch_id, scope
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, 1, ?, ?, ?)`,
       [
-        compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
+        compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
         purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
         companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId,
-        targetImageUrl, targetImageUrls
+        targetImageUrl, targetImageUrls,
+        creatorShopId, creatorShopId, productScope
       ]
     );
 
+    const productId = result.id;
     const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
     const shops = await allRecords('SELECT id FROM shops');
-    const targetShopId = scopeShopId(req) || shops[0]?.id;
+    const targetShopId = creatorShopId || scopeShopId(req) || shops[0]?.id;
     for (const shop of shops) {
       const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
-      await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, result.id, qty]);
+      await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, productId, qty]);
     }
-    await audit(req, 'Created product and official price', 'product', result.id, `${displayName} at ${officialPriceNum}`);
-    res.status(201).json({ id: result.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels });
+
+    invalidateCache('reference-data', 'catalog');
+    
+    const createdProduct = await getRecord(`
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+      WHERE p.id = ?
+    `, [productId]);
+
+    await audit(req, 'Created product', 'product', productId, `${displayName} (${canonicalBrand})`);
+    
+    res.status(201).json({
+      success: true,
+      message: 'Product created successfully',
+      data: createdProduct
+    });
   } catch (error) {
-    console.error('[API POST PRODUCTS ERROR]', error.message, error.stack);
+    console.error('Error in POST /api/products:', error);
     res.status(500).json({
       success: false,
       error: error.message || 'Failed to create product',
@@ -1970,8 +2180,20 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
 
 app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
   try {
+    const isSuperAdmin = req.user.role === 'superadmin';
+    const isSupplier = req.user.role === 'supplier';
+    const isShopkeeper = isShopStaffRole(req.user.role);
+    const ownShopId = isShopkeeper ? Number(req.user.shop_id) : null;
+
+    let supplierCol = 'NULL::integer AS supplier_id, NULL::text AS supplier_name';
+    if (isSuperAdmin) {
+      supplierCol = 'p.supplier_id, s.name AS supplier_name';
+    } else if (ownShopId) {
+      supplierCol = `CASE WHEN s.shop_id = ${ownShopId} THEN p.supplier_id ELSE NULL END AS supplier_id, CASE WHEN s.shop_id = ${ownShopId} THEN s.name ELSE NULL END AS supplier_name`;
+    }
+
     const product = await getRecord(`
-      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, ${supplierCol}
       FROM products p
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
@@ -1979,6 +2201,16 @@ app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       WHERE p.id = ?
     `, [req.params.id]);
     if (!product) return res.status(404).json({ error: 'Product not found.' });
+
+    if (isShopkeeper && product.shop_id && Number(product.shop_id) !== ownShopId) {
+      return res.status(404).json({ error: 'Product not found.' });
+    }
+
+    if (isSupplier || isShopkeeper) {
+      delete product.purchase_price;
+      delete product.official_price;
+    }
+
     res.json(product);
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to fetch product.' });
@@ -2035,8 +2267,11 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
 
     let effectiveSupplierId = supplier_id ? Number(supplier_id) : null;
     if (effectiveSupplierId) {
-      const supplier = await getRecord('SELECT id FROM suppliers WHERE id = ?', [effectiveSupplierId]);
-      if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
+      const isSuperAdmin = req.user.role === 'superadmin';
+      const supplier = isSuperAdmin
+        ? await getRecord('SELECT id FROM suppliers WHERE id = ? AND is_active = TRUE', [effectiveSupplierId])
+        : await getRecord('SELECT id FROM suppliers WHERE id = ? AND shop_id = ? AND is_active = TRUE', [effectiveSupplierId, Number(req.user.shop_id)]);
+      if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid, inactive, or belongs to another branch.' });
     }
     const targetSupplierId = effectiveSupplierId !== null ? effectiveSupplierId : oldProduct.supplier_id;
 
@@ -2070,12 +2305,17 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
     const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
     const canonicalQualityVariant = productVariantRef ? productVariantRef.name : String(quality_variant || '').trim();
 
-    // Check duplicate composite combination
+    if (isShopStaffRole(req.user.role) && oldProduct.shop_id && Number(oldProduct.shop_id) !== Number(req.user.shop_id)) {
+      return res.status(403).json({ error: 'Cannot modify a product belonging to another branch.' });
+    }
+
+    // Check duplicate composite combination within same shop scope
     let duplicate = null;
     if (cleanModel && targetPartCategoryId) {
       duplicate = await getRecord(
         `SELECT id FROM products 
-         WHERE company_brand_id IS NOT DISTINCT FROM ? 
+         WHERE COALESCE(shop_id, 0) = COALESCE(?, 0)
+           AND company_brand_id IS NOT DISTINCT FROM ? 
            AND LOWER(TRIM(model)) = LOWER(?) 
            AND part_category_id IS NOT DISTINCT FROM ?
            AND product_variant_id IS NOT DISTINCT FROM ?
@@ -2084,6 +2324,7 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
            AND is_active = 1
            AND id <> ?`,
         [
+          oldProduct.shop_id,
           companyBrandId,
           cleanModel,
           targetPartCategoryId,
@@ -2112,6 +2353,7 @@ app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, re
         finalImageUrl, finalImageUrls, req.params.id,
       ]
     );
+    invalidateCache('reference-data', 'catalog');
     await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${officialPriceNum}`);
     res.json({ success: true });
   } catch (error) {
@@ -2461,7 +2703,7 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
             shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
             official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
             delta, delta, received_date || today(), notes || 'Stock quantity increase', req.user.id, product?.manufacturing_brand_id,
-            supplier_id ? Number(supplier_id) : null
+            req.user.role === 'superadmin' && supplier_id ? Number(supplier_id) : null
           ]
         );
       } else if (delta < 0) {

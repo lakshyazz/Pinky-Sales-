@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Download, IndianRupee, Trash2, Search, Eye, Edit3, MoreHorizontal } from 'lucide-react';
+import { Download, IndianRupee, Trash2, Search, Eye, Edit3, MoreHorizontal, Plus } from 'lucide-react';
 import { motion } from 'framer-motion';
 import Pagination from '../ui/Pagination';
 import SearchInput from '../ui/SearchInput';
@@ -10,7 +10,7 @@ import ProductImageUpload from '../ui/ProductImageUpload';
 export default function PricesPage({
   role,
   forms = { product: {} },
-  reference = { categories: [], colours: [], brands: [], manufacturingBrands: [] },
+  reference = { categories: [], colours: [], brands: [], manufacturingBrands: [], partCategories: [], productVariants: [] },
   priceVisibility = {},
   newReference = {},
   editingProductId,
@@ -41,10 +41,10 @@ export default function PricesPage({
       <button type="submit" className="primary mt-4">{action}</button>
     </form>
   ),
-  Input = ({ label, value, onChange, type = "text", className = "" }) => (
+  Input = ({ label, value, onChange, type = "text", className = "", placeholder = "" }) => (
     <div className={className}>
       <label className="text-xs font-extrabold text-slate-500 uppercase tracking-wider block mb-1">{label}</label>
-      <input type={type} value={value || ""} onChange={(e) => onChange(e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-cyan-500" />
+      <input type={type} placeholder={placeholder} value={value || ""} onChange={(e) => onChange(e.target.value)} className="w-full p-2.5 border border-slate-200 rounded-xl text-xs font-semibold outline-none focus:border-cyan-500" />
     </div>
   ),
   Select = ({ label, value, onChange, options = [], className = "" }) => (
@@ -75,9 +75,20 @@ export default function PricesPage({
   ),
 }) {
   const [activeMenuId, setActiveMenuId] = useState(null);
+  const [isCustomPartCategory, setIsCustomPartCategory] = useState(false);
+  const [isCustomQualityVariant, setIsCustomQualityVariant] = useState(false);
+
+  const defaultPartCategories = ['Display', 'Battery', 'Camera', 'Speaker', 'Charging IC', 'Main Flex', 'Frame', 'Charging Port', 'Vibrator', 'Ear Speaker', 'Back Glass', 'Middle Frame', 'Sim Tray', 'Housing', 'Mic'];
+  const refPartCategories = (reference?.partCategories || []).map(pc => typeof pc === 'string' ? pc : pc.name).filter(Boolean);
+  const uniquePartCategories = Array.from(new Set([...defaultPartCategories, ...refPartCategories]));
+
+  const defaultQualityVariants = ['OLED', 'Soft OLED', 'Hard OLED', 'Incell', 'With Frame', 'Without Frame', 'Fresh New', 'Set Remove', 'Original', 'Refurbished', 'Copy', 'Premium Copy'];
+  const refQualityVariants = (reference?.productVariants || []).map(qv => typeof qv === 'string' ? qv : qv.name).filter(Boolean);
+  const uniqueQualityVariants = Array.from(new Set([...defaultQualityVariants, ...refQualityVariants]));
+
   const productForm = forms.product || {};
   const appendColour = (value) => {
-    const selected = productForm.colours.split(',').map((item) => item.trim()).filter(Boolean);
+    const selected = (productForm.colours || '').split(',').map((item) => item.trim()).filter(Boolean);
     if (value && !selected.includes(value)) onProductFieldChange('colours', [...selected, value].join(', '));
   };
 
@@ -113,21 +124,28 @@ export default function PricesPage({
         <FormPanel title={editingProductId ? 'Edit product and prices' : 'Add product and prices'} action={saving ? 'Saving...' : editingProductId ? 'Update product' : 'Add product'} onSubmit={onSubmitProduct} disabled={saving}>
           <Input label="Short display name" className="md:col-span-2" value={productForm.short_name} onChange={(value) => onProductFieldChange('short_name', value)} />
           <Input label="Full compatible models" className="md:col-span-2" value={productForm.full_model_list} onChange={(value) => onProductFieldChange('full_model_list', value)} />
-          <Input label="Brand" className="md:col-span-1" value={productForm.brand} onChange={(value) => onProductFieldChange('brand', value)} />
+          
+          <div className="md:col-span-1">
+            <Select
+              label="Brand *"
+              value={productForm.brand}
+              onChange={(value) => {
+                onProductFieldChange('brand', value);
+                if (!productForm.short_name) {
+                  onProductFieldChange('short_name', [value, productForm.part_category].filter(Boolean).join(' '));
+                }
+              }}
+              options={[['', 'Select Brand'], ...(reference?.brands || []).map((b) => [b.name, b.name])]}
+            />
+          </div>
+
           <Select
-            label="Product Category"
-            className="md:col-span-1"
-            value={productForm.category}
-            onChange={(value) => value === '__new__' ? onNewReferenceChange({ type: 'categories', name: '' }) : onProductFieldChange('category', value)}
-            options={[...(reference?.categories || []).map((item) => [item.name, item.name]), ['__new__', '+ Add New Category']]}
-          />
-          <Select
-            label="Manufacturing Brand"
+            label="Manufacturing Brand (Optional)"
             className="md:col-span-1"
             value={productForm.manufacturing_brand_id || ''}
             onChange={(value) => onProductFieldChange('manufacturing_brand_id', value)}
             options={[
-              ['', 'Choose Manufacturing Brand'],
+              ['', 'Select Manufacturing Brand'],
               ...(reference?.manufacturingBrands || [])
                 .filter(mb => mb.is_active || String(mb.id) === String(productForm.manufacturing_brand_id))
                 .map((mb) => [mb.id, mb.name])
@@ -135,22 +153,171 @@ export default function PricesPage({
           />
           <Select
             label="Supplier (Optional)"
-            className="md:col-span-1"
+            className="md:col-span-2"
             value={productForm.supplier_id || ''}
             onChange={(value) => onProductFieldChange('supplier_id', value)}
             options={[
-              ['', 'Choose Supplier'],
+              ['', 'Select Supplier'],
               ...(reference?.suppliers || [])
                 .filter(s => s.is_active || String(s.id) === String(productForm.supplier_id))
                 .map((s) => [s.id, s.name])
             ]}
           />
-          {newReference.type === 'categories' && (
-            <div className="inline-reference-control md:col-span-2">
-              <Input label="New category" value={newReference.name} onChange={(name) => onNewReferenceChange({ type: 'categories', name })} />
-              <button className="soft" type="button" onClick={() => onAddReferenceOption('categories', newReference.name)}>Add category</button>
+
+          {/* Separate Part Category & Quality / Variant Container */}
+          <div className="md:col-span-4 border border-emerald-300 dark:border-teal-800/80 rounded-2xl p-4 bg-emerald-50/20 dark:bg-emerald-950/10 grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Field 1: Part Category */}
+            <div className="flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-black text-slate-800 uppercase tracking-wider block">PART CATEGORY *</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextState = !isCustomPartCategory;
+                      setIsCustomPartCategory(nextState);
+                      if (nextState) {
+                        onProductFieldChange('part_category', '');
+                        onProductFieldChange('category', '');
+                      }
+                    }}
+                    className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus size={12} /> {isCustomPartCategory ? 'Select Part Category' : 'Add New Part Category'}
+                  </button>
+                </div>
+
+                {isCustomPartCategory ? (
+                  <Input
+                    label="New Part Category"
+                    placeholder="Type part category (e.g. Display, Battery, Camera)"
+                    value={productForm.part_category || productForm.category || ''}
+                    onChange={(v) => {
+                      onProductFieldChange('part_category', v);
+                      onProductFieldChange('category', v);
+                    }}
+                  />
+                ) : (
+                  <Select
+                    label="Part Category *"
+                    value={productForm.part_category || productForm.category || ''}
+                    onChange={(v) => {
+                      if (v === '__ADD_NEW__') {
+                        setIsCustomPartCategory(true);
+                        onProductFieldChange('part_category', '');
+                        onProductFieldChange('category', '');
+                      } else {
+                        onProductFieldChange('part_category', v);
+                        onProductFieldChange('category', v);
+                      }
+                    }}
+                    options={[
+                      ['', 'Select Part Category'],
+                      ...uniquePartCategories.map(pc => [pc, pc]),
+                      ['__ADD_NEW__', '➕ Add New Part Category...']
+                    ]}
+                  />
+                )}
+
+                {/* Quick Type Chips */}
+                <div className="mt-2.5 flex flex-wrap items-center gap-1 text-xs">
+                  <span className="text-[10px] font-bold text-slate-400 mr-1">Quick Categories:</span>
+                  {['Display', 'Battery', 'Camera', 'Speaker', 'Charging Port', 'Back Glass', 'Frame'].map((chip) => (
+                    <button
+                      type="button"
+                      key={chip}
+                      onClick={() => {
+                        setIsCustomPartCategory(false);
+                        onProductFieldChange('part_category', chip);
+                        onProductFieldChange('category', chip);
+                      }}
+                      className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
+                        (productForm.part_category || productForm.category) === chip
+                          ? 'bg-teal-600 text-white border-teal-700 shadow-xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-teal-500'
+                      }`}
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-500 font-semibold italic">Defines WHAT spare part this is (Display, Battery, Camera, etc.)</p>
             </div>
-          )}
+
+            {/* Field 2: Product Quality / Variant */}
+            <div className="flex flex-col justify-between space-y-3">
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[11px] font-black text-slate-800 uppercase tracking-wider block">QUALITY / VARIANT (OPTIONAL)</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextState = !isCustomQualityVariant;
+                      setIsCustomQualityVariant(nextState);
+                      if (nextState) {
+                        onProductFieldChange('quality_variant', '');
+                      }
+                    }}
+                    className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus size={12} /> {isCustomQualityVariant ? 'Select Variant' : 'Add New Variant'}
+                  </button>
+                </div>
+
+                {isCustomQualityVariant ? (
+                  <Input
+                    label="New Quality / Variant"
+                    placeholder="Type variant (e.g. OLED, Incell, With Frame)"
+                    value={productForm.quality_variant || ''}
+                    onChange={(v) => onProductFieldChange('quality_variant', v)}
+                  />
+                ) : (
+                  <Select
+                    label="Quality / Variant (Optional)"
+                    value={productForm.quality_variant || ''}
+                    onChange={(v) => {
+                      if (v === '__ADD_NEW__') {
+                        setIsCustomQualityVariant(true);
+                        onProductFieldChange('quality_variant', '');
+                      } else {
+                        onProductFieldChange('quality_variant', v);
+                      }
+                    }}
+                    options={[
+                      ['', '(None / Default)'],
+                      ...uniqueQualityVariants.map(qv => [qv, qv]),
+                      ['__ADD_NEW__', '➕ Add New Variant...']
+                    ]}
+                  />
+                )}
+
+                {/* Quick Variant Chips */}
+                <div className="mt-2.5 flex flex-wrap items-center gap-1 text-xs">
+                  <span className="text-[10px] font-bold text-slate-400 mr-1">Quick Variants:</span>
+                  {['OLED', 'Incell', 'With Frame', 'Without Frame', 'Fresh New', 'Set Remove', 'Original'].map((chip) => (
+                    <button
+                      type="button"
+                      key={chip}
+                      onClick={() => {
+                        setIsCustomQualityVariant(false);
+                        onProductFieldChange('quality_variant', chip);
+                      }}
+                      className={`px-2 py-0.5 rounded-md border text-[10px] font-bold transition-all cursor-pointer ${
+                        productForm.quality_variant === chip
+                          ? 'bg-teal-600 text-white border-teal-700 shadow-xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-teal-500'
+                      }`}
+                    >
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-500 font-semibold italic">Defines WHICH VERSION/QUALITY it is (OLED, Incell, With Frame, etc.)</p>
+            </div>
+          </div>
+
           <Input label="Purchase price" type="number" className="md:col-span-1" value={productForm.purchase_price} onChange={(value) => onProductFieldChange('purchase_price', value)} />
           <Input label="Sale price" type="number" className="md:col-span-1" value={productForm.sale_price} onChange={(value) => onProductFieldChange('sale_price', value)} />
           <Input label="Wholesale price" type="number" className="md:col-span-1" value={productForm.wholesale_price} onChange={(value) => onProductFieldChange('wholesale_price', value)} />
@@ -174,7 +341,7 @@ export default function PricesPage({
             <ProductImageUpload
               imageUrl={productForm.image_url}
               imageUrls={productForm.image_urls}
-              category={productForm.category || 'Display'}
+              category={productForm.part_category || productForm.category || 'Display'}
               disabled={saving}
               onImageChange={({ imageUrl, imageUrls }) => {
                 onProductFieldChange('image_url', imageUrl);
@@ -257,8 +424,8 @@ export default function PricesPage({
       ) : items.length ? (
         <div className="space-y-3">
           {items.map((product) => {
-            const hasPurchase = role === 'superadmin' || priceVisibility.show_purchase_price_shopkeeper;
-            const hasWholesale = role === 'superadmin' || priceVisibility.show_wholesale_price_shopkeeper;
+            const hasPurchase = role === 'superadmin';
+            const hasWholesale = true;
             return (
               <div
                 key={product.id}
@@ -323,7 +490,7 @@ export default function PricesPage({
                   </div>
                   
                   {/* Column 2: Aligned Stock & Pricing details (lg:col-span-5) */}
-                  <div className="w-full lg:col-span-5 grid grid-cols-4 gap-2 text-right pr-0 lg:pr-4 border-b lg:border-b-0 pb-3 lg:pb-0 lg:border-r border-slate-200/60 h-full py-1 items-center">
+                  <div className={`w-full lg:col-span-5 grid ${hasPurchase ? 'grid-cols-4' : 'grid-cols-3'} gap-2 text-right pr-0 lg:pr-4 border-b lg:border-b-0 pb-3 lg:pb-0 lg:border-r border-slate-200/60 h-full py-1 items-center`}>
                     {/* Available Stock */}
                     {(() => {
                       const stockQty = Number(product.quantity ?? product.available_stock ?? product.stock_quantity ?? product.warehouse_stock ?? product.stock ?? 0);
@@ -359,34 +526,18 @@ export default function PricesPage({
                       <span className="text-sm font-black text-emerald-700 mt-0.5">{priceLabel(product.sale_price)}</span>
                     </div>
                     
-                    {/* Purchase Price */}
-                    <div className="flex flex-col justify-center">
-                      {hasPurchase ? (
-                        <>
-                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Purchase</span>
-                          <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.purchase_price)}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-[9px] font-bold text-slate-300 uppercase tracking-wider block">Purchase</span>
-                          <span className="text-xs text-slate-300 italic mt-0.5 block">-</span>
-                        </>
-                      )}
-                    </div>
+                    {/* Purchase Price (Super Admin only) */}
+                    {hasPurchase && (
+                      <div className="flex flex-col justify-center">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Purchase</span>
+                        <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.purchase_price)}</span>
+                      </div>
+                    )}
 
                     {/* Wholesale Price */}
                     <div className="flex flex-col justify-center">
-                      {hasWholesale ? (
-                        <>
-                          <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Wholesale</span>
-                          <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.wholesale_price)}</span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-[9px] font-bold text-slate-300 uppercase tracking-wider block">Wholesale</span>
-                          <span className="text-xs text-slate-300 italic mt-0.5 block">-</span>
-                        </>
-                      )}
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Wholesale</span>
+                      <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.wholesale_price)}</span>
                     </div>
                   </div>
 

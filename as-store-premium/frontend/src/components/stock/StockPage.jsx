@@ -334,7 +334,7 @@ export default function StockPage({
                     }
                   }));
                 }} 
-                options={data.products.map((p) => [p.id, `${productName(p)} · [${p.brand}] · ${priceLabel(p.sale_price)}`])} 
+                options={data.products.map((p) => [p.id, `${productName(p, { hideSupplier: role !== 'superadmin' })} · [${p.brand}] · ${priceLabel(p.sale_price)}`])} 
               />
             </div>
             <button
@@ -386,7 +386,7 @@ export default function StockPage({
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: role === 'shopkeeper' ? '1fr' : '1fr 1fr', gap: '16px' }}>
               <Input 
                 label={role === 'shopkeeper' ? 'New Branch Quantity' : 'New Stock Quantity'} 
                 type="number" 
@@ -394,17 +394,19 @@ export default function StockPage({
                 value={forms.stock.quantity} 
                 onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, quantity: v } }))} 
               />
-              <Select 
-                label="Supplier (Optional)"
-                value={forms.stock.supplier_id || ''}
-                onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, supplier_id: v } }))}
-                options={[
-                  ['', 'Choose Supplier'],
-                  ...(data.reference?.suppliers || [])
-                    .filter(s => s.is_active)
-                    .map(s => [s.id, s.name])
-                ]}
-              />
+              {role !== 'shopkeeper' && (
+                <Select 
+                  label="Supplier (Optional)"
+                  value={forms.stock.supplier_id || ''}
+                  onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, supplier_id: v } }))}
+                  options={[
+                    ['', 'Choose Supplier'],
+                    ...(data.reference?.suppliers || [])
+                      .filter(s => s.is_active)
+                      .map(s => [s.id, s.name])
+                  ]}
+                />
+              )}
             </div>
           </div>
         </FormPanel>

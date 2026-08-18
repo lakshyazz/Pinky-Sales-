@@ -203,6 +203,28 @@ export const initDatabase = async () => {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS colours TEXT[] NOT NULL DEFAULT '{}';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS image_url TEXT;
       ALTER TABLE products ADD COLUMN IF NOT EXISTS image_urls JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS shop_id INTEGER REFERENCES shops(id) ON DELETE SET NULL;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES shops(id) ON DELETE SET NULL;
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS scope TEXT DEFAULT 'GLOBAL';
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS shop_id INTEGER REFERENCES shops(id) ON DELETE CASCADE;
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS branch_id INTEGER REFERENCES shops(id) ON DELETE CASCADE;
+      ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE suppliers DROP CONSTRAINT IF EXISTS suppliers_name_key;
+      CREATE UNIQUE INDEX IF NOT EXISTS suppliers_shop_name_unique_idx ON suppliers (COALESCE(shop_id, 0), LOWER(TRIM(name)));
+      CREATE INDEX IF NOT EXISTS suppliers_shop_id_idx ON suppliers (shop_id);
+      ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
+      DROP INDEX IF EXISTS idx_products_full_composite_unique;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_products_full_composite_unique 
+      ON products (
+        COALESCE(shop_id, 0),
+        company_brand_id, 
+        LOWER(TRIM(model)), 
+        part_category_id, 
+        COALESCE(product_variant_id, -1),
+        COALESCE(manufacturing_brand_id, -1),
+        COALESCE(supplier_id, -1)
+      ) 
+      WHERE is_active = 1;
       UPDATE products
       SET
         full_model_list = COALESCE(NULLIF(full_model_list, ''), name),
@@ -212,6 +234,7 @@ export const initDatabase = async () => {
       WHERE full_model_list IS NULL OR short_name IS NULL OR sale_price IS NULL OR retail_price IS NULL;
       UPDATE products SET short_name = LEFT(short_name, 57) || '...' WHERE LENGTH(short_name) > 60;
       CREATE INDEX IF NOT EXISTS products_short_name_idx ON products (short_name);
+      CREATE INDEX IF NOT EXISTS idx_products_shop_scope ON products (COALESCE(shop_id, 0), is_active);
     `);
   } catch (ddlErr) {
     console.warn('[Database] Non-fatal init DDL notice:', ddlErr.message);

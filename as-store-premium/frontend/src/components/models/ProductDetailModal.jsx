@@ -60,8 +60,9 @@ export default function ProductDetailModal({
 
   const isSuperAdmin = role === 'superadmin';
   const isShopkeeper = role === 'shopkeeper' || role === 'admin';
-  const canViewWholesale = isSuperAdmin || Boolean(priceVisibility?.show_wholesale_price_shopkeeper) || isShopkeeper;
-  const canViewPurchase = isSuperAdmin || Boolean(priceVisibility?.show_purchase_price_shopkeeper);
+  const isSupplier = role === 'supplier';
+  const canViewWholesale = isSuperAdmin || isSupplier || Boolean(priceVisibility?.show_wholesale_price_shopkeeper) || isShopkeeper;
+  const canViewPurchase = !isSupplier && (isSuperAdmin || Boolean(priceVisibility?.show_purchase_price_shopkeeper));
 
   // Normalize image list across all possible schema variations
   const imageList = useMemo(() => {

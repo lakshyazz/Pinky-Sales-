@@ -131,11 +131,22 @@ const compactModelName = (value) => {
   const firstModel = name.split('/')[0].trim();
   return firstModel.length <= 60 ? firstModel : `${firstModel.slice(0, 57)}...`;
 };
-const productName = (item) => {
-  const baseName = compactModelName(item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name || item?.model_name);
+const productName = (item, options = {}) => {
+  let rawBase = item?.short_name || item?.product_short_name || item?.display_name || item?.name || item?.product_name || item?.model_name || '';
+  
+  // Sanitize any internal supplier suffixes from rawBase (e.g. "- JENNY", " - JENNY", "(... - JENNY)")
+  const supplierName = item?.supplier_name || (typeof item?.supplier === 'string' ? item?.supplier : '');
+  if (supplierName) {
+    const escaped = supplierName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    rawBase = rawBase.replace(new RegExp(`\\s*[-–—/]?\\s*${escaped}\\b`, 'gi'), '');
+  }
+  // Strip uppercase vendor tags like " - JENNY"
+  rawBase = rawBase.replace(/\s*[-–—]\s*[A-Z0-9_]{3,20}\s*$/g, '').trim();
+
+  const baseName = compactModelName(rawBase);
   const mfg = item?.manufacturing_brand_name || item?.mfg_brand_name || (typeof item?.manufacturing_brand === 'string' ? item?.manufacturing_brand : null);
   const variant = item?.quality_variant || item?.product_variant_name || (typeof item?.variant === 'string' ? item?.variant : null);
-  const supplier = item?.supplier_name || (typeof item?.supplier === 'string' ? item?.supplier : null);
+  const supplier = options.hideSupplier ? null : (item?.supplier_name || (typeof item?.supplier === 'string' ? item?.supplier : null));
 
   const parts = [];
   if (mfg && !baseName.toLowerCase().includes(mfg.toLowerCase())) parts.push(`Mfg: ${mfg}`);
@@ -179,6 +190,16 @@ const cleanReferenceData = (reference = {}) => ({
   partCategories: uniqueNamedItems(reference.partCategories),
   productVariants: uniqueNamedItems(reference.productVariants),
 });
+const sanitizeFormText = (value) => String(value || '').trim().replace(/\s+/g, ' ');
+const buildDeviceModelGroups = (models = []) => {
+  const groups = new Map();
+  models.forEach((model) => {
+    const brand = model.brand || 'Unassigned';
+    if (!groups.has(brand)) groups.set(brand, []);
+    groups.get(brand).push(model);
+  });
+  return [...groups.values()];
+};
 const combineLowStockAlerts = (items = []) => {
   const combined = new Map();
   items.forEach((item) => {
@@ -293,6 +314,11 @@ const navByRole = {
     ['payments', 'Pending', CreditCard],
     ['reports', 'Reports', FileText],
   ],
+  supplier: [
+    ['dashboard', 'Dashboard', BarChart3],
+    ['models', 'Models', Smartphone],
+    ['prices', 'Prices', IndianRupee],
+  ],
   customer: [
     ['catalog', 'Catalog', ShoppingBag],
     ['models', 'Models', Smartphone],
@@ -313,6 +339,9 @@ const sidebarSectionsByRole = {
     { title: 'Inventory', ids: ['stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
+  ],
+  supplier: [
+    { title: 'Catalog & Prices', ids: ['dashboard', 'models', 'prices'] },
   ],
   customer: [
     { title: 'Catalog', ids: ['catalog', 'models'] },
@@ -1499,7 +1528,7 @@ function App() {
     }
   };
 
-  const loadProductPage = async ({ tab = active, page = productPager.page, search = productSearchForTab(tab) } = {}) => {
+  const loadProductPage = async ({ tab = active, page = productPager.page, search = productSearchForTab(tab), currentShop = shopId } = {}) => {
     if (!token || role === 'customer') return;
     const requestId = ++productLoadSequenceRef.current;
     setProductPageLoading(true);
@@ -1508,6 +1537,9 @@ function App() {
         page: String(page),
         limit: String(productPager.limit),
       });
+      if (currentShop) {
+        params.set('shop_id', String(currentShop));
+      }
       const cleanSearch = search.trim();
       if (cleanSearch) params.set('search', cleanSearch);
       const response = await authedFetch(`/products?${params.toString()}`);
@@ -1561,7 +1593,8 @@ function App() {
         ]);
         priceVisibility = data.priceVisibility;
       } else {
-        ({ shops, products, reference, priceVisibility, warehouse } = await authedFetch('/bootstrap'));
+        const bootstrapQuery = shopId ? `?shopId=${encodeURIComponent(shopId)}` : '';
+        ({ shops, products, reference, priceVisibility, warehouse } = await authedFetch(`/bootstrap${bootstrapQuery}`));
       }
       const isVercelHost = typeof window !== 'undefined' && window.location.hostname.endsWith('vercel.app');
       const loadedProducts = getPaginatedRows(products);
@@ -2574,6 +2607,7 @@ function App() {
       colours: (forms.product.colours || '').split(',').map((colour) => colour.trim()).filter(Boolean),
       manufacturing_brand_id: forms.product.manufacturing_brand_id ? Number(forms.product.manufacturing_brand_id) : null,
       supplier_id: forms.product.supplier_id ? Number(forms.product.supplier_id) : null,
+      shop_id: shopId || null,
       image_url: forms.product.image_url || null,
       image_urls: forms.product.image_urls || [],
     };
@@ -2598,17 +2632,15 @@ function App() {
     }
     if (openingStock > 0 && !openingStockLocationId) return showToast('Warehouse is not configured yet');
 
-    // Client-side Deduplication / Unique Check before creating new product
+    // Client-side Deduplication / Existing Product Check
     if (!editingProductId && data.products && Array.isArray(data.products)) {
       const targetPayloadModel = (payload.model || payload.short_name || payload.full_model_list || '').toLowerCase().trim();
 
-      const isDuplicate = data.products.some((existing) => {
+      const existingProduct = data.products.find((existing) => {
         const isInactiveOrDeleted = existing.is_active === 0 || existing.is_active === false || existing.is_deleted === true || (existing.deleted_at !== null && existing.deleted_at !== undefined);
         if (isInactiveOrDeleted) return false;
 
         const existingModel = (existing.model || existing.short_name || existing.full_model_list || '').toLowerCase().trim();
-
-        // Do not match empty model to empty model
         if (!targetPayloadModel || !existingModel) return false;
 
         const brandMatch = (existing.brand || '').toLowerCase().trim() === (payload.brand || '').toLowerCase().trim();
@@ -2627,8 +2659,33 @@ function App() {
         return brandMatch && modelMatch && catMatch && variantMatch && mfgMatch && supplierMatch;
       });
 
-      if (isDuplicate) {
-        return showToast('A product with this Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.');
+      if (existingProduct) {
+        if (openingStock > 0 && openingStockLocationId) {
+          try {
+            setSaving(true);
+            await authedFetch('/stock', {
+              method: 'PUT',
+              body: JSON.stringify({ shop_id: openingStockLocationId, product_id: existingProduct.id, quantity: openingStock }),
+            });
+            setForms((prev) => ({ ...prev, product: initialForms.product }));
+            setEditingProductId('');
+            showToast(`Product exists in catalog. Added ${openingStock} pcs to your branch stock.`);
+            await loadCore();
+            if (active === 'stock') await loadTab('stock', shopId);
+            return;
+          } catch (err) {
+            showToast(err.message || 'Unable to update branch stock');
+            return;
+          } finally {
+            setSaving(false);
+          }
+        } else {
+          setForms((prev) => ({
+            ...prev,
+            stock: { ...prev.stock, product_id: existingProduct.id }
+          }));
+          return showToast('Product already exists in catalog. Selected in "Set My Stock Quantity" above to update your branch.');
+        }
       }
     }
 
@@ -2675,6 +2732,8 @@ function App() {
         full_model_list: product.full_model_list || product.name || '',
         brand: product.brand || '',
         category: product.category || 'Display',
+        part_category: product.part_category || product.part_category_name || product.category || 'Display',
+        quality_variant: product.quality_variant || product.product_variant_name || '',
         model: product.model || '',
         official_price: product.official_price || '',
         purchase_price: product.purchase_price || '',
