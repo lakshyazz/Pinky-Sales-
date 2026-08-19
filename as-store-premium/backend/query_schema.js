@@ -8,7 +8,7 @@ const pool = new pg.Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-pool.query("SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = 'products'")
+pool.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'inventory_batches' ORDER BY ordinal_position")
   .then(res => {
     console.table(res.rows);
     pool.end();

@@ -1363,16 +1363,26 @@ export default function StockPage({
                   >
                     Set Stock
                   </button>
-                  <button 
-                    type="button" 
-                    title={role === 'superadmin' ? 'Edit product price' : 'Edit product details'}
-                    onClick={() => onEditProduct(item)}
-                    className="hover:bg-slate-100 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    style={{ padding: role === 'superadmin' ? '6px 12px' : '6px 8px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
-                  >
-                    <Edit3 size={12} />
-                    {role === 'superadmin' && 'Edit Price'}
-                  </button>
+                  {(() => {
+                    const itemQty = Number(item.quantity || item.available_stock || item.stock || item.my_quantity || 0);
+                    const canEdit = role === 'superadmin' || itemQty > 0;
+                    return (
+                      <button 
+                        type="button" 
+                        disabled={!canEdit}
+                        title={!canEdit ? 'Cannot edit: No stock available in your shop' : role === 'superadmin' ? 'Edit product price' : 'Edit product details'}
+                        onClick={() => {
+                          if (!canEdit) return;
+                          onEditProduct(item);
+                        }}
+                        className={`transition-all ${!canEdit ? 'cursor-not-allowed opacity-40' : 'hover:bg-slate-100 hover:scale-[1.02] active:scale-[0.98]'}`}
+                        style={{ padding: role === 'superadmin' ? '6px 12px' : '6px 8px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: !canEdit ? 'not-allowed' : 'pointer', color: !canEdit ? '#94a3b8' : '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
+                      >
+                        <Edit3 size={12} />
+                        {role === 'superadmin' && 'Edit Price'}
+                      </button>
+                    );
+                  })()}
                   {role === 'superadmin' && (
                     <button 
                       type="button" 

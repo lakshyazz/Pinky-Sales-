@@ -108,8 +108,17 @@ export default function ModelsPage({
   };
 
   const handleOpenEdit = (product) => {
+    const availableQty = Number(product.stock_quantity ?? product.available_stock ?? product.quantity ?? product.stock ?? 0);
+    if (!isSuperAdmin && availableQty <= 0) {
+      if (setGlobalToast) {
+        setGlobalToast('Cannot edit model: You can only edit models when you have available stock in your shop.', 'error');
+      } else {
+        alert('Cannot edit model: You can only edit models when you have available stock in your shop.');
+      }
+      return;
+    }
+
     setEditingProduct(product);
-    const availableQty = Number(product.warehouse_stock ?? product.available_stock ?? product.quantity ?? product.stock ?? 0);
     let initialStatus = 'in_stock';
     if (availableQty <= 0) {
       initialStatus = 'no_stock';
@@ -803,17 +812,28 @@ export default function ModelsPage({
                       >
                         <PackagePlus className="w-3.5 h-3.5" /> Stock
                       </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenEdit(product);
-                        }}
-                        className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all text-xs font-semibold flex items-center gap-1 shadow-sm active:scale-95"
-                        title="Edit Product"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" /> Edit
-                      </button>
+                      {(() => {
+                        const hasStock = isSuperAdmin || Number(product.stock_quantity ?? product.available_stock ?? product.quantity ?? product.stock ?? 0) > 0;
+                        return (
+                          <button
+                            type="button"
+                            disabled={!hasStock}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!hasStock) return;
+                              handleOpenEdit(product);
+                            }}
+                            className={`px-2.5 py-1.5 rounded-lg border transition-all text-xs font-semibold flex items-center gap-1 shadow-sm ${
+                              !hasStock
+                                ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 active:scale-95'
+                            }`}
+                            title={!hasStock ? 'Cannot edit: No stock available in your shop' : 'Edit Product'}
+                          >
+                            <Edit3 className="w-3.5 h-3.5" /> Edit
+                          </button>
+                        );
+                      })()}
                       
                       {/* More Menu Dropdown trigger */}
                       <div className="relative">
@@ -964,13 +984,27 @@ export default function ModelsPage({
                         >
                           <PackagePlus className="w-3.5 h-3.5" /> Stock
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEdit(product)}
-                          className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95 shadow-sm"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" /> Edit
-                        </button>
+                        {(() => {
+                          const hasStock = isSuperAdmin || Number(product.stock_quantity ?? product.available_stock ?? product.quantity ?? product.stock ?? 0) > 0;
+                          return (
+                            <button
+                              type="button"
+                              disabled={!hasStock}
+                              onClick={() => {
+                                if (!hasStock) return;
+                                handleOpenEdit(product);
+                              }}
+                              className={`px-2.5 py-1.5 rounded-lg border font-semibold transition-all text-xs inline-flex items-center gap-1 shadow-sm ${
+                                !hasStock
+                                  ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 active:scale-95'
+                              }`}
+                              title={!hasStock ? 'Cannot edit: No stock available in your shop' : 'Edit Product'}
+                            >
+                              <Edit3 className="w-3.5 h-3.5" /> Edit
+                            </button>
+                          );
+                        })()}
                         <button
                           type="button"
                           onClick={() => handleOpenDetails(product)}

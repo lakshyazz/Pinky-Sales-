@@ -2723,6 +2723,10 @@ function App() {
   };
 
   const editProduct = (product) => {
+    const itemStock = Number(product.stock_quantity ?? product.available_stock ?? product.quantity ?? product.stock ?? product.my_quantity ?? 0);
+    if (role !== 'superadmin' && itemStock <= 0) {
+      return showToast('Cannot edit: You can only edit a product when you have stock available in your shop.');
+    }
     const prodId = product.product_id || product.id;
     setEditingProductId(String(prodId));
     setForms((prev) => ({
