@@ -791,7 +791,7 @@ function Login({ onLogin }) {
         <div className="brand-lockup">
           <div className="brand-mark"><Store size={28} /></div>
           <div>
-            <h1>AS Store</h1>
+            <h1>Pinky Sales</h1>
             <p>Multi-shop business manager</p>
           </div>
         </div>
@@ -3123,7 +3123,7 @@ function App() {
     const printWindow = window.open('', '_blank');
     const invoiceNo = `INV-${String(sale.id).padStart(6, '0')}`;
     const dateStr = sale.sale_date || new Date().toISOString().slice(0, 10);
-    const shopName = sale.shop_name || 'AS Store';
+    const shopName = sale.shop_name || 'Pinky Sales';
     
     printWindow.document.write(`
       <html>
@@ -3401,7 +3401,7 @@ function App() {
     const invoiceNo = isConsolidated
       ? `C-${String(sale.shop_id || 0).padStart(3, '0')}-${String(sale.customer_id || 0).padStart(5, '0')}`
       : `D-${String(sale.id).padStart(5, '0')}`;
-    const shopName = safe(sale.shop_name || 'AS Store');
+    const shopName = safe(sale.shop_name || 'Pinky Sales');
     const shopLines = [sale.shop_address, sale.shop_area, sale.shop_phone ? `Phone: ${sale.shop_phone}` : '', 'India']
       .filter(Boolean)
       .map((line) => `<div>${safe(line)}</div>`)

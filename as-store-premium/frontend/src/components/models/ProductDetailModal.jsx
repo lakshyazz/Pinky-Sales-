@@ -861,7 +861,7 @@ export default function ProductDetailModal({
             <button
               type="button"
               onClick={() => {
-                const specSheet = `[AS STORE INVENTORY SPEC SHEET]\nProduct: ${productName(activeProduct)}\nBrand: ${activeProduct.brand || 'Generic'}\nCategory: ${partCategory}\nQuality: ${qualityBadge || 'Standard'}\nRetail Price: ${priceLabel(retailPrice)}\nStock: ${stockCount} Units\nSKU: ${skuCode}\nCompatible Models: ${allCompatibleModels.join(', ') || 'Universal'}`;
+                const specSheet = `[PINKY SALES INVENTORY SPEC SHEET]\nProduct: ${productName(activeProduct)}\nBrand: ${activeProduct.brand || 'Generic'}\nCategory: ${partCategory}\nQuality: ${qualityBadge || 'Standard'}\nRetail Price: ${priceLabel(retailPrice)}\nStock: ${stockCount} Units\nSKU: ${skuCode}\nCompatible Models: ${allCompatibleModels.join(', ') || 'Universal'}`;
                 copyToClipboard(specSheet, 'footer_share');
               }}
               className="px-3.5 py-2 rounded-xl bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center gap-1.5 shadow-2xs active:scale-95 transition-all cursor-pointer"

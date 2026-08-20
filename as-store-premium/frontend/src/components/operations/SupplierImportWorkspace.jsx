@@ -392,7 +392,7 @@ export default function SupplierImportWorkspace({
               Supplier Excel & CSV <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">Batch Ingestion</span>
             </h1>
             <p className="text-slate-600 text-xs md:text-sm font-medium leading-relaxed">
-              Upload supplier stock sheets in any custom format. Our intelligent fuzzy engine automatically transforms column headers into AS Store FIFO inventory, catalog models, and valuation records.
+              Upload supplier stock sheets in any custom format. Our intelligent fuzzy engine automatically transforms column headers into Pinky Sales FIFO inventory, catalog models, and valuation records.
             </p>
           </div>
 
@@ -894,7 +894,7 @@ export default function SupplierImportWorkspace({
                 Inventory Ingestion Complete!
               </h3>
               <p className="text-xs md:text-sm text-slate-500 font-medium max-w-md mx-auto">
-                All supplier stock rows have been transformed and saved into AS Store FIFO inventory batches.
+                All supplier stock rows have been transformed and saved into Pinky Sales FIFO inventory batches.
               </p>
             </div>
 
