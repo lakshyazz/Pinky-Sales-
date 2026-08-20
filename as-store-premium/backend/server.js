@@ -303,7 +303,7 @@ const getPriceVisibility = async () => {
   };
 };
 const productColumnsForRole = async (role, query = {}, user = null) => {
-  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'image_url', 'image_urls', 'is_active', 'shop_id', 'branch_id', 'scope', 'updated_at'];
+  const base = ['id', 'name', 'short_name', 'full_model_list', 'brand', 'category', 'part_category', 'quality_variant', 'model', 'sale_price', 'retail_price', 'description', 'colours', 'image_url', 'image_urls', 'is_active', 'shop_id', 'branch_id', 'scope', 'updated_at'];
   let cols = [...base];
   if (role === 'superadmin') {
     cols = [...cols, 'official_price', 'purchase_price', 'wholesale_price'];
@@ -321,11 +321,21 @@ const productColumnsForRole = async (role, query = {}, user = null) => {
   const targetShopId = userShopId || (requestedShopId ? Number(requestedShopId) : null);
 
   const shopScope = targetShopId ? `AND ib.shop_id = ${Number(targetShopId)}` : `AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)`;
+  const shopScopeIb2 = targetShopId ? `AND ib2.shop_id = ${Number(targetShopId)}` : `AND ib2.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)`;
   const stockSubquery = `, COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS stock_quantity,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS available_stock,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS quantity,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id), 0) AS total_stock,
-    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)), 0) AS warehouse_stock`;
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)), 0) AS warehouse_stock,
+    COALESCE((
+      SELECT jsonb_object_agg(COALESCE(NULLIF(TRIM(ib_col.colour), ''), 'Standard'), ib_col.sub_qty)
+      FROM (
+        SELECT ib2.colour, SUM(ib2.quantity_remaining) AS sub_qty
+        FROM inventory_batches ib2
+        WHERE ib2.product_id = p.id ${shopScopeIb2} AND ib2.quantity_remaining > 0
+        GROUP BY ib2.colour
+      ) ib_col
+    ), '{}'::jsonb) AS colour_stock`;
 
   let supplierCols = 'NULL::integer AS supplier_id, NULL::text AS supplier_name';
   if (role === 'superadmin') {
@@ -1504,7 +1514,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   const newSalePrice = canEditSellingPrice && targetSalePrice !== undefined && targetSalePrice !== null && targetSalePrice !== '' ? Number(targetSalePrice) : null;
   const newWholesalePrice = isSuperAdmin && wholesale_price !== undefined && wholesale_price !== null && wholesale_price !== '' ? Number(wholesale_price) : null;
   const newPurchasePrice = isSuperAdmin && purchase_price !== undefined && purchase_price !== null && purchase_price !== '' ? Number(purchase_price) : null;
-  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : null;
+  const newOfficialPrice = isSuperAdmin && official_price !== undefined && official_price !== null && official_price !== '' ? Number(official_price) : (newSalePrice ?? null);
 
   try {
     const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [productId]);
@@ -1521,9 +1531,9 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       : (oldProduct.image_urls ? (typeof oldProduct.image_urls === 'string' ? oldProduct.image_urls : JSON.stringify(oldProduct.image_urls)) : JSON.stringify(finalImageUrl ? [finalImageUrl] : []));
 
     const brandRef = brand ? await ensureReference('brands', brand) : null;
-    const categoryRef = category ? await ensureReference('categories', category) : null;
+    const canonicalBrand = brandRef ? brandRef.name : (brand || oldProduct.brand || null);
     const companyBrandId = brandRef ? brandRef.id : oldProduct.company_brand_id;
-    const targetMfgBrandId = manufacturing_brand_id !== undefined ? manufacturing_brand_id : oldProduct.manufacturing_brand_id;
+    const targetMfgBrandId = manufacturing_brand_id !== undefined ? (manufacturing_brand_id ? Number(manufacturing_brand_id) : null) : oldProduct.manufacturing_brand_id;
 
     if (targetMfgBrandId) {
       const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ?', [targetMfgBrandId]);
@@ -1536,12 +1546,23 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid.' });
     }
 
-    const partCategoryRef = (part_category || req.body.part_category_name || category) ? await ensureReference('part_categories', part_category || req.body.part_category_name || category) : null;
-    const productVariantRef = (quality_variant || req.body.product_variant_name) ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
+    const rawCategoryInput = part_category || req.body.part_category_name || category || oldProduct.part_category || oldProduct.category || 'Display';
+    const partCategoryRef = rawCategoryInput ? await ensureReference('part_categories', rawCategoryInput) : null;
+    const rawVariantInput = quality_variant !== undefined ? quality_variant : (req.body.product_variant_name !== undefined ? req.body.product_variant_name : oldProduct.quality_variant);
+    const productVariantRef = (rawVariantInput && String(rawVariantInput).trim()) ? await ensureReference('product_variants', rawVariantInput) : null;
     const targetPartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : oldProduct.part_category_id);
-    const targetProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : oldProduct.product_variant_id);
-    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : (part_category || oldProduct.part_category || category || oldProduct.category || null);
-    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant || oldProduct.quality_variant || null);
+    const targetProductVariantId = productVariantRef ? productVariantRef.id : (quality_variant === '' || quality_variant === null ? null : oldProduct.product_variant_id);
+    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(rawCategoryInput).trim();
+    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : (quality_variant !== undefined ? (quality_variant ? String(quality_variant).trim() : null) : oldProduct.quality_variant);
+
+    let canonicalColours = undefined;
+    if (colours !== undefined) {
+      canonicalColours = [];
+      for (const colour of normalizeColours(colours)) {
+        const colRef = await ensureReference('colours', colour);
+        if (colRef) canonicalColours.push(colRef.name);
+      }
+    }
 
     // Check duplicate composite combination
     let duplicate = null;
@@ -1578,11 +1599,11 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           short_name = COALESCE(?, short_name),
           name = COALESCE(?, name),
           brand = COALESCE(?, brand),
-          category = COALESCE(?, category),
-          part_category = COALESCE(?, part_category),
-          quality_variant = COALESCE(?, quality_variant),
-          part_category_id = COALESCE(?, part_category_id),
-          product_variant_id = COALESCE(?, product_variant_id),
+          category = ?,
+          part_category = ?,
+          quality_variant = ?,
+          part_category_id = ?,
+          product_variant_id = ?,
           full_model_list = COALESCE(?, full_model_list),
           model = COALESCE(?, model),
           sale_price = COALESCE(?, sale_price),
@@ -1593,7 +1614,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           description = COALESCE(?, description),
           colours = COALESCE(?, colours),
           company_brand_id = COALESCE(?, company_brand_id),
-          manufacturing_brand_id = COALESCE(?, manufacturing_brand_id),
+          manufacturing_brand_id = ?,
           supplier_id = ?,
           image_url = ?,
           image_urls = ?::jsonb,
@@ -1602,8 +1623,8 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       `, [
         short_name || null,
         name || short_name || null,
-        brand || null,
-        category || null,
+        canonicalBrand,
+        canonicalPartCategory,
         canonicalPartCategory,
         canonicalQualityVariant,
         targetPartCategoryId,
@@ -1615,8 +1636,8 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         newWholesalePrice,
         newPurchasePrice,
         newOfficialPrice,
-        description || null,
-        colours || null,
+        description !== undefined ? description : null,
+        canonicalColours !== undefined ? canonicalColours : null,
         companyBrandId,
         targetMfgBrandId,
         targetSupplierId,
@@ -1692,10 +1713,25 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
       }
     });
 
-    invalidateCache('reference-data', 'catalog');
+    const updatedProduct = await getRecord(`
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name,
+        pc.name AS part_category_name, pv.name AS product_variant_name
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
+      WHERE p.id = ?
+    `, [productId]);
+
+    invalidateCache('reference-data', 'catalog', 'products');
     res.json({
       success: true,
       message: 'Product selling price & details updated successfully',
+      id: productId,
+      data: updatedProduct,
+      ...updatedProduct,
     });
   } catch (error) {
     console.error('[ProductsAPI] Error updating product:', error);
@@ -2133,7 +2169,7 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
         image_url, image_urls, is_active, shop_id, branch_id, scope
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, 1, ?, ?, ?)`,
       [
-        compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
+        compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel, officialPriceNum,
         purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours,
         companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId,
         targetImageUrl, targetImageUrls,
@@ -2150,14 +2186,17 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
       await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, productId, qty]);
     }
 
-    invalidateCache('reference-data', 'catalog');
+    invalidateCache('reference-data', 'catalog', 'products');
     
     const createdProduct = await getRecord(`
-      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name,
+        pc.name AS part_category_name, pv.name AS product_variant_name
       FROM products p
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
       LEFT JOIN suppliers s ON s.id = p.supplier_id
+      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
       WHERE p.id = ?
     `, [productId]);
 
@@ -2165,8 +2204,10 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     
     res.status(201).json({
       success: true,
+      id: productId,
       message: 'Product created successfully',
-      data: createdProduct
+      data: createdProduct,
+      ...createdProduct,
     });
   } catch (error) {
     console.error('Error in POST /api/products:', error);
@@ -2193,11 +2234,14 @@ app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     }
 
     const product = await getRecord(`
-      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, ${supplierCol}
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, ${supplierCol},
+        pc.name AS part_category_name, pv.name AS product_variant_name
       FROM products p
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
       LEFT JOIN suppliers s ON s.id = p.supplier_id
+      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
       WHERE p.id = ?
     `, [req.params.id]);
     if (!product) return res.status(404).json({ error: 'Product not found.' });
@@ -2214,155 +2258,6 @@ app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     res.json(product);
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to fetch product.' });
-  }
-});
-
-app.put('/api/products/:id', authenticateToken, requireShopStaff, async (req, res) => {
-  try {
-    const oldProduct = await getRecord('SELECT * FROM products WHERE id = ?', [req.params.id]);
-    if (!oldProduct) return res.status(404).json({ error: 'Product not found.' });
-    const {
-      name, short_name, full_model_list, brand, category, model, official_price,
-      purchase_price, sale_price, wholesale_price, retail_price, description, colours, is_active = 1,
-      manufacturing_brand_id, supplier_id, part_category, quality_variant,
-      image_url, image_urls
-    } = req.body;
-
-    // Clean up old R2 image if image changed/removed
-    if (image_url !== undefined && oldProduct.image_url && oldProduct.image_url !== image_url) {
-      deleteImageFromR2(oldProduct.image_url).catch((err) => console.warn('[R2 Delete Old Image Warning]', err.message));
-    }
-
-    const finalImageUrl = image_url !== undefined ? (image_url ? String(image_url).trim() : null) : oldProduct.image_url;
-    const finalImageUrls = image_urls !== undefined 
-      ? (typeof image_urls === 'string' ? image_urls : JSON.stringify(image_urls))
-      : (oldProduct.image_urls ? (typeof oldProduct.image_urls === 'string' ? oldProduct.image_urls : JSON.stringify(oldProduct.image_urls)) : JSON.stringify(finalImageUrl ? [finalImageUrl] : []));
-
-    let compatibilityModels = String(full_model_list || name || '').trim();
-    let displayName = String(short_name || '').trim();
-    const cleanModel = String(model !== undefined ? (model || '') : (oldProduct.model || '')).trim();
-    if (!displayName) {
-      displayName = compatibilityModels || oldProduct.short_name || oldProduct.name || 'Unnamed Product';
-    }
-    if (!compatibilityModels) {
-      compatibilityModels = cleanModel || displayName;
-    }
-
-    const parsePrice = (val, fallback = null) => {
-      if (val === '' || val === null || val === undefined) return fallback;
-      const num = Number(val);
-      return isNaN(num) ? fallback : num;
-    };
-    
-    const effectiveBrand = String(brand || '').trim() || 'Generic';
-    const effectiveCategory = String(category || '').trim() || 'Other';
-    
-    let effectiveMfgBrandId = manufacturing_brand_id ? Number(manufacturing_brand_id) : null;
-    if (!effectiveMfgBrandId && manufacturing_brand_id === '') {
-      const unknownMfg = await getRecord("SELECT id FROM manufacturing_brands WHERE LOWER(TRIM(name)) = 'unknown' LIMIT 1");
-      if (unknownMfg) {
-        effectiveMfgBrandId = unknownMfg.id;
-      }
-    }
-
-    let effectiveSupplierId = supplier_id ? Number(supplier_id) : null;
-    if (effectiveSupplierId) {
-      const isSuperAdmin = req.user.role === 'superadmin';
-      const supplier = isSuperAdmin
-        ? await getRecord('SELECT id FROM suppliers WHERE id = ? AND is_active = TRUE', [effectiveSupplierId])
-        : await getRecord('SELECT id FROM suppliers WHERE id = ? AND shop_id = ? AND is_active = TRUE', [effectiveSupplierId, Number(req.user.shop_id)]);
-      if (!supplier) return res.status(400).json({ error: 'Selected supplier is invalid, inactive, or belongs to another branch.' });
-    }
-    const targetSupplierId = effectiveSupplierId !== null ? effectiveSupplierId : oldProduct.supplier_id;
-
-    const salePriceNum = sale_price !== undefined && sale_price !== '' && sale_price !== null ? Number(sale_price) : 0;
-    const purchasePriceNum = parsePrice(purchase_price, null);
-    const wholesalePriceNum = parsePrice(wholesale_price, null);
-    const officialPriceNum = salePriceNum;
-    const retailPriceNum = salePriceNum;
-
-    const categoryRef = await ensureReference('categories', effectiveCategory);
-    const brandRef = await ensureReference('brands', effectiveBrand);
-    const canonicalColours = [];
-    for (const colour of normalizeColours(colours)) {
-      const colRef = await ensureReference('colours', colour);
-      if (colRef) canonicalColours.push(colRef.name);
-    }
-    const canonicalBrand = brandRef ? brandRef.name : effectiveBrand.trim();
-    const canonicalCategory = categoryRef ? categoryRef.name : effectiveCategory.trim();
-    const companyBrandId = brandRef ? brandRef.id : oldProduct.company_brand_id;
-    const targetMfgBrandId = effectiveMfgBrandId !== null ? effectiveMfgBrandId : oldProduct.manufacturing_brand_id;
-
-    if (targetMfgBrandId) {
-      const mfgBrand = await getRecord('SELECT id FROM manufacturing_brands WHERE id = ?', [targetMfgBrandId]);
-      if (!mfgBrand) return res.status(400).json({ error: 'Selected manufacturing brand is invalid.' });
-    }
-
-    const partCategoryRef = await ensureReference('part_categories', part_category || req.body.part_category_name || category);
-    const productVariantRef = quality_variant ? await ensureReference('product_variants', quality_variant || req.body.product_variant_name) : null;
-    const targetPartCategoryId = partCategoryRef ? partCategoryRef.id : (req.body.part_category_id ? Number(req.body.part_category_id) : null);
-    const targetProductVariantId = productVariantRef ? productVariantRef.id : (req.body.product_variant_id ? Number(req.body.product_variant_id) : null);
-    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : String(part_category || category || '').trim();
-    const canonicalQualityVariant = productVariantRef ? productVariantRef.name : String(quality_variant || '').trim();
-
-    if (isShopStaffRole(req.user.role) && oldProduct.shop_id && Number(oldProduct.shop_id) !== Number(req.user.shop_id)) {
-      return res.status(403).json({ error: 'Cannot modify a product belonging to another branch.' });
-    }
-
-    // Check duplicate composite combination within same shop scope
-    let duplicate = null;
-    if (cleanModel && targetPartCategoryId) {
-      duplicate = await getRecord(
-        `SELECT id FROM products 
-         WHERE COALESCE(shop_id, 0) = COALESCE(?, 0)
-           AND company_brand_id IS NOT DISTINCT FROM ? 
-           AND LOWER(TRIM(model)) = LOWER(?) 
-           AND part_category_id IS NOT DISTINCT FROM ?
-           AND product_variant_id IS NOT DISTINCT FROM ?
-           AND manufacturing_brand_id IS NOT DISTINCT FROM ?
-           AND supplier_id IS NOT DISTINCT FROM ?
-           AND is_active = 1
-           AND id <> ?`,
-        [
-          oldProduct.shop_id,
-          companyBrandId,
-          cleanModel,
-          targetPartCategoryId,
-          targetProductVariantId,
-          targetMfgBrandId,
-          targetSupplierId,
-          req.params.id
-        ]
-      );
-    }
-    if (duplicate) {
-      return res.status(409).json({ error: 'A product matching this exact Brand, Model, Category, Variant, Manufacturer, and Supplier combination already exists.' });
-    }
-
-    await runQuery(
-      `UPDATE products SET
-        name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, part_category = ?, quality_variant = ?, model = ?, official_price = ?,
-        purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
-        description = ?, colours = ?, is_active = ?, company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?,
-        image_url = ?, image_urls = ?::jsonb, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?`,
-      [
-        compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, model || '', officialPriceNum,
-        purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum, description || '', canonicalColours, is_active,
-        companyBrandId, targetMfgBrandId, targetSupplierId, targetPartCategoryId, targetProductVariantId,
-        finalImageUrl, finalImageUrls, req.params.id,
-      ]
-    );
-    invalidateCache('reference-data', 'catalog');
-    await audit(req, 'Updated official price', 'product', req.params.id, `${oldProduct?.official_price || 0} -> ${officialPriceNum}`);
-    res.json({ success: true });
-  } catch (error) {
-    console.error('[API PUT PRODUCTS ERROR]', error.message, error.stack);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to update product',
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
   }
 });
 
@@ -2598,14 +2493,24 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     const rows = await runPaginatedList({
       dataSql: `
       SELECT MIN(ib.id) AS id, ib.shop_id, sh.name AS shop_name, sh.location_type, p.id AS product_id, p.name, p.short_name, p.full_model_list,
-        p.brand, p.category, p.model, p.sale_price, p.retail_price, p.description, p.colours,
+        p.brand, COALESCE(p.part_category, p.category, 'Display') AS category, COALESCE(p.part_category, p.category, 'Display') AS part_category,
+        p.quality_variant, p.part_category_id, p.product_variant_id, p.model, p.sale_price, p.retail_price, p.description, p.colours,
         p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
         ${officialPrice}${extraPrices},
         ${stockQuantitySql} AS quantity,
         COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS owner_quantity,
         COALESCE(SUM(CASE WHEN ib.assigned_user_id IS NOT NULL THEN ib.quantity_remaining ELSE 0 END), 0) AS shopkeeper_quantity,
         COALESCE(SUM(CASE WHEN ib.assigned_user_id = ${Number(req.user.id)} THEN ib.quantity_remaining ELSE 0 END), 0) AS my_quantity,
-        COUNT(ib.id) FILTER (WHERE ib.quantity_remaining > 0) AS batch_count
+        COUNT(ib.id) FILTER (WHERE ib.quantity_remaining > 0) AS batch_count,
+        COALESCE((
+          SELECT jsonb_object_agg(COALESCE(NULLIF(TRIM(ib_col.colour), ''), 'Standard'), ib_col.sub_qty)
+          FROM (
+            SELECT ib2.colour, SUM(ib2.quantity_remaining) AS sub_qty
+            FROM inventory_batches ib2
+            WHERE ib2.shop_id = ib.shop_id AND ib2.product_id = p.id AND ib2.quantity_remaining > 0
+            GROUP BY ib2.colour
+          ) ib_col
+        ), '{}'::jsonb) AS colour_stock
       ${baseSql}
       ORDER BY ${orderBy}
     `,
@@ -2670,62 +2575,169 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
 app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { product_id, quantity, purchase_price, wholesale_price, official_price, retail_price, colour, received_date, notes, assigned_user_id, supplier_id } = req.body;
-    if (!product_id || quantity === undefined) return res.status(400).json({ error: 'Product and quantity are required.' });
-    const stockQuantity = Number(quantity);
-    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) return res.status(400).json({ error: 'Quantity must be 0 or more.' });
-    const effectiveAssignedUserId = isShopStaffRole(req.user.role) ? req.user.id : assigned_user_id || null;
-    await runTransaction(async (tx) => {
-      // stock remains available for sales, but cannot be reduced from here.
-      const accessSql = ownedBatchAccessSql(req.user);
-      let colourSql = '';
-      let colourParams = [];
-      if (colour) {
-        colourSql = 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))';
-        colourParams = [colour];
-      } else {
-        colourSql = 'AND (colour IS NULL OR TRIM(colour) = \'\')';
-      }
+    const {
+      product_id,
+      quantity,
+      adjustment_mode = 'set', // 'set' | 'add' | 'deduct'
+      color_quantities,
+      colour_breakdown,
+      purchase_price,
+      wholesale_price,
+      official_price,
+      retail_price,
+      colour,
+      received_date,
+      notes,
+      assigned_user_id,
+      supplier_id,
+    } = req.body;
 
-      const current = await tx.getRecord(
-        `SELECT COALESCE(SUM(quantity_remaining), 0) AS quantity FROM inventory_batches ib WHERE shop_id = ? AND product_id = ? ${colourSql} ${accessSql}`,
-        [shopId, product_id, ...colourParams]
-      );
-      let delta = stockQuantity - Number(current?.quantity || 0);
-      if (delta > 0) {
-        const product = await tx.getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price, manufacturing_brand_id FROM products WHERE id = ?', [product_id]);
-        await tx.runQuery(
-          `INSERT INTO inventory_batches (
-            shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
-            colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
-            official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
-            delta, delta, received_date || today(), notes || 'Stock quantity increase', req.user.id, product?.manufacturing_brand_id,
-            req.user.role === 'superadmin' && supplier_id ? Number(supplier_id) : null
-          ]
-        );
-      } else if (delta < 0) {
-        let remaining = Math.abs(delta);
-        const batches = await tx.allRecords(
-          `SELECT id, quantity_remaining FROM inventory_batches ib
-           WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 ${colourSql} ${accessSql}
-           ORDER BY received_date ASC, id ASC`,
+    if (!product_id) return res.status(400).json({ error: 'Product is required.' });
+
+    const effectiveAssignedUserId = isShopStaffRole(req.user.role) ? req.user.id : assigned_user_id || null;
+    const product = await getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price, manufacturing_brand_id FROM products WHERE id = ?', [product_id]);
+    if (!product) return res.status(404).json({ error: 'Product not found.' });
+
+    // Prepare color map if multi-color split is provided
+    let colorEntries = null;
+    if (color_quantities && typeof color_quantities === 'object' && Object.keys(color_quantities).length > 0) {
+      colorEntries = Object.entries(color_quantities).map(([c, q]) => ({
+        colour: c === 'Generic' || c === 'Standard' || c === 'No Colour' || !c ? null : String(c).trim(),
+        quantity: Number(q || 0),
+      }));
+    } else if (Array.isArray(colour_breakdown) && colour_breakdown.length > 0) {
+      colorEntries = colour_breakdown.map((item) => ({
+        colour: item.colour === 'Generic' || item.colour === 'Standard' || item.colour === 'No Colour' || !item.colour ? null : String(item.colour).trim(),
+        quantity: Number(item.quantity || 0),
+      }));
+    }
+
+    await runTransaction(async (tx) => {
+      const accessSql = ownedBatchAccessSql(req.user);
+
+      if (colorEntries && colorEntries.length > 0) {
+        // Multi-color breakdown processing
+        for (const item of colorEntries) {
+          const colName = item.colour;
+          const colQty = Math.max(0, Number(item.quantity || 0));
+
+          let colourSql = '';
+          let colourParams = [];
+          if (colName) {
+            colourSql = 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))';
+            colourParams = [colName];
+          } else {
+            colourSql = 'AND (colour IS NULL OR TRIM(colour) = \'\')';
+          }
+
+          const current = await tx.getRecord(
+            `SELECT COALESCE(SUM(quantity_remaining), 0) AS quantity FROM inventory_batches ib WHERE shop_id = ? AND product_id = ? ${colourSql} ${accessSql}`,
+            [shopId, product_id, ...colourParams]
+          );
+          const currentQty = Number(current?.quantity || 0);
+
+          let targetQty = colQty;
+          if (adjustment_mode === 'add') {
+            targetQty = currentQty + colQty;
+          } else if (adjustment_mode === 'deduct') {
+            targetQty = Math.max(0, currentQty - colQty);
+          }
+
+          const delta = targetQty - currentQty;
+          if (delta > 0) {
+            await tx.runQuery(
+              `INSERT INTO inventory_batches (
+                shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+                colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
+                official_price ?? product?.official_price, retail_price ?? product?.retail_price, colName || null,
+                delta, delta, received_date || today(), notes || (colName ? `Stock update for colour ${colName}` : 'Stock quantity update'), req.user.id, product?.manufacturing_brand_id,
+                req.user.role === 'superadmin' && supplier_id ? Number(supplier_id) : null
+              ]
+            );
+          } else if (delta < 0) {
+            let remaining = Math.abs(delta);
+            const batches = await tx.allRecords(
+              `SELECT id, quantity_remaining FROM inventory_batches ib
+               WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 ${colourSql} ${accessSql}
+               ORDER BY received_date ASC, id ASC`,
+              [shopId, product_id, ...colourParams]
+            );
+            for (const batch of batches) {
+              if (remaining <= 0) break;
+              const used = Math.min(remaining, Number(batch.quantity_remaining));
+              await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?', [used, batch.id]);
+              remaining -= used;
+            }
+          }
+        }
+      } else {
+        // Single color or lump-sum stock adjustment
+        if (quantity === undefined || quantity === null || isNaN(Number(quantity))) {
+          throw new Error('Valid stock quantity is required.');
+        }
+
+        const inputQty = Number(quantity);
+        let colourSql = '';
+        let colourParams = [];
+        if (colour) {
+          colourSql = 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))';
+          colourParams = [colour];
+        } else {
+          colourSql = 'AND (colour IS NULL OR TRIM(colour) = \'\')';
+        }
+
+        const current = await tx.getRecord(
+          `SELECT COALESCE(SUM(quantity_remaining), 0) AS quantity FROM inventory_batches ib WHERE shop_id = ? AND product_id = ? ${colourSql} ${accessSql}`,
           [shopId, product_id, ...colourParams]
         );
-        for (const batch of batches) {
-          if (remaining <= 0) break;
-          const used = Math.min(remaining, Number(batch.quantity_remaining));
-          await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?', [used, batch.id]);
-          remaining -= used;
+        const currentQty = Number(current?.quantity || 0);
+
+        let targetStockQuantity = inputQty;
+        if (adjustment_mode === 'add') {
+          targetStockQuantity = currentQty + inputQty;
+        } else if (adjustment_mode === 'deduct') {
+          targetStockQuantity = Math.max(0, currentQty - inputQty);
         }
-        if (remaining > 0) {
-          const error = new Error('Not enough accessible batch stock to set this quantity.');
-          error.status = 400;
-          throw error;
+
+        const delta = targetStockQuantity - currentQty;
+        if (delta > 0) {
+          await tx.runQuery(
+            `INSERT INTO inventory_batches (
+              shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+              colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
+              official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
+              delta, delta, received_date || today(), notes || 'Stock quantity update', req.user.id, product?.manufacturing_brand_id,
+              req.user.role === 'superadmin' && supplier_id ? Number(supplier_id) : null
+            ]
+          );
+        } else if (delta < 0) {
+          let remaining = Math.abs(delta);
+          const batches = await tx.allRecords(
+            `SELECT id, quantity_remaining FROM inventory_batches ib
+             WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 ${colourSql} ${accessSql}
+             ORDER BY received_date ASC, id ASC`,
+            [shopId, product_id, ...colourParams]
+          );
+          for (const batch of batches) {
+            if (remaining <= 0) break;
+            const used = Math.min(remaining, Number(batch.quantity_remaining));
+            await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?', [used, batch.id]);
+            remaining -= used;
+          }
+          if (remaining > 0) {
+            const error = new Error('Not enough accessible batch stock to deduct this quantity.');
+            error.status = 400;
+            throw error;
+          }
         }
       }
+
       if (retail_price || official_price) {
         const updatePrice = Number(retail_price || official_price);
         if (!isNaN(updatePrice) && updatePrice > 0) {
@@ -2739,10 +2751,13 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
           );
         }
       }
+
       await syncStockFromBatches(tx, shopId, product_id);
     });
-    await audit(req, 'Updated stock', 'stock', product_id, `Shop ${shopId} quantity ${stockQuantity}`);
-    res.json({ success: true });
+
+    invalidateCache('reference-data', 'catalog', 'products');
+    await audit(req, 'Updated stock', 'stock', product_id, `Shop ${shopId} updated stock`);
+    res.json({ success: true, message: 'Stock updated successfully' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to update stock.' });
   }
@@ -3544,7 +3559,9 @@ app.get('/api/catalog', async (req, res) => {
   params.push(minPrice, maxPrice);
 
   const querySql = `
-    SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category,
+    SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, COALESCE(p.part_category, p.category, 'Display') AS category,
+      COALESCE(p.part_category, p.category, 'Display') AS part_category, p.quality_variant, p.part_category_id, p.product_variant_id,
+      pc.name AS part_category_name, pv.name AS product_variant_name,
       p.retail_price, p.description, p.colours,
       p.company_brand_id, b.name AS company_brand_name,
       p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model,
@@ -3553,10 +3570,12 @@ app.get('/api/catalog', async (req, res) => {
     FROM products p
     LEFT JOIN brands b ON b.id = p.company_brand_id
     LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+    LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+    LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
     LEFT JOIN stock st ON st.product_id = p.id ${shopId ? 'AND st.shop_id = ?' : ''}
     LEFT JOIN shops sh ON sh.id = st.shop_id
     WHERE ${where.join(' AND ')}
-    GROUP BY p.id, b.id, mb.id
+    GROUP BY p.id, b.id, mb.id, pc.id, pv.id
     ORDER BY p.brand, COALESCE(p.short_name, p.name)
   `;
 

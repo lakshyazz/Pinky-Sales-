@@ -660,19 +660,35 @@ export default function ProductDetailModal({
                   </div>
                 </div>
 
-                {/* Colors (if available) */}
-                {coloursList.length > 0 && (
-                  <div className="mt-3 p-3 rounded-2xl bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between">
-                    <span className="text-[10px] uppercase font-extrabold text-slate-400 dark:text-slate-500">Available Colors</span>
+                {/* Colors & Variant Stock (if available) */}
+                {(coloursList.length > 0 || (activeProduct.colour_stock && Object.keys(activeProduct.colour_stock).length > 0)) && (
+                  <div className="mt-3 p-3 rounded-2xl bg-slate-50/80 dark:bg-slate-800/40 border border-slate-200/80 dark:border-slate-700/80 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[10px] uppercase font-extrabold text-slate-400 dark:text-slate-500">Color Variants & Stock</span>
                     <div className="flex flex-wrap gap-1.5">
-                      {coloursList.map((col, idx) => (
-                        <span
-                          key={idx}
-                          className="px-2.5 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold shadow-2xs"
-                        >
-                          {col}
-                        </span>
-                      ))}
+                      {activeProduct.colour_stock && Object.keys(activeProduct.colour_stock).length > 0 ? (
+                        Object.entries(activeProduct.colour_stock).map(([col, qty]) => (
+                          <span
+                            key={col}
+                            className={`px-2.5 py-1 rounded-lg border text-xs font-bold shadow-2xs flex items-center gap-1.5 ${
+                              Number(qty) > 0 
+                                ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300' 
+                                : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-400'
+                            }`}
+                          >
+                            <span>{col}:</span>
+                            <b className={Number(qty) > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-400'}>{qty} pcs</b>
+                          </span>
+                        ))
+                      ) : (
+                        coloursList.map((col, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2.5 py-0.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-bold shadow-2xs"
+                          >
+                            {col}
+                          </span>
+                        ))
+                      )}
                     </div>
                   </div>
                 )}

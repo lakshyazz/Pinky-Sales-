@@ -2590,12 +2590,14 @@ function App() {
     const openingStock = forms.product.opening_stock === '' ? 0 : Number(forms.product.opening_stock);
     const openingStockLocationId = shopId || data.warehouse?.id;
     const numericPrice = (value) => value === '' || value === null || value === undefined ? null : Number(value);
+    const targetPartCat = (forms.product.part_category || forms.product.category || 'Display').trim();
     const payload = {
       short_name: (forms.product.short_name || '').trim(),
       full_model_list: (forms.product.full_model_list || '').trim(),
       name: (forms.product.full_model_list || '').trim(),
       brand: (forms.product.brand || '').trim(),
-      part_category: (forms.product.part_category || '').trim(),
+      category: targetPartCat,
+      part_category: targetPartCat,
       quality_variant: (forms.product.quality_variant || '').trim(),
       model: (forms.product.model || '').trim(),
       official_price: numericPrice(forms.product.sale_price),
@@ -2701,20 +2703,49 @@ function App() {
       const created = editingProductId
         ? await authedFetch(`/products/${editingProductId}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await authedFetch('/products', { method: 'POST', body: JSON.stringify(payload) });
-      if (!editingProductId && openingStock > 0) {
+
+      const newProductId = created?.id || created?.data?.id || editingProductId;
+      if (!editingProductId && openingStock > 0 && newProductId) {
         await authedFetch('/stock', {
           method: 'PUT',
-          body: JSON.stringify({ shop_id: openingStockLocationId, product_id: created.id, quantity: openingStock }),
+          body: JSON.stringify({
+            shop_id: openingStockLocationId,
+            product_id: newProductId,
+            quantity: openingStock,
+            color_quantities: forms.product.color_opening_stock || undefined,
+          }),
         });
       }
+
+      const returnedRecord = created?.data || (created?.name ? created : null);
+      if (returnedRecord) {
+        setData((prev) => {
+          const nextProducts = editingProductId
+            ? prev.products.map(p => String(p.id) === String(editingProductId) ? { ...p, ...returnedRecord } : p)
+            : [returnedRecord, ...prev.products.filter(p => String(p.id) !== String(returnedRecord.id))];
+          const nextResults = editingProductId
+            ? (prev.productResults || []).map(p => String(p.id) === String(editingProductId) ? { ...p, ...returnedRecord } : p)
+            : [returnedRecord, ...(prev.productResults || []).filter(p => String(p.id) !== String(returnedRecord.id))];
+          return {
+            ...prev,
+            products: nextProducts,
+            productResults: nextResults,
+            catalog: [returnedRecord, ...(prev.catalog || []).filter(p => String(p.id) !== String(returnedRecord.id))],
+          };
+        });
+      }
+
       setForms((prev) => ({ ...prev, product: initialForms.product }));
       setEditingProductId('');
-      showToast(editingProductId ? 'Product prices and details updated' : openingStock > 0 ? 'Product added with opening stock' : 'Product price added');
+      showToast(editingProductId ? 'Product prices and details updated' : openingStock > 0 ? 'Product added with opening stock' : 'Product added successfully');
+      
       const refData = await api('/reference-data');
       setData((prev) => ({ ...prev, reference: cleanReferenceData(refData) }));
-      await loadCore();
-      if (active === 'stock') await loadTab('stock', shopId);
-      if (active === 'models' || active === 'prices') await loadProductPage({ tab: active, page: productPager.page });
+      await Promise.all([
+        loadCore(),
+        loadProductPage({ tab: active === 'models' || active === 'prices' ? active : 'models', page: 1 }),
+        active === 'stock' ? loadTab('stock', shopId) : Promise.resolve(),
+      ]);
     } catch (error) {
       showToast(error.message || 'Unable to add product right now');
     } finally {
@@ -2725,30 +2756,64 @@ function App() {
   const editProduct = (product) => {
     const prodId = product.product_id || product.id;
     setEditingProductId(String(prodId));
+    const targetCat = product.part_category || product.part_category_name || product.category || 'Display';
+    const targetVariant = product.quality_variant || product.product_variant_name || '';
     setForms((prev) => ({
       ...prev,
       product: {
         short_name: product.short_name || product.name || '',
         full_model_list: product.full_model_list || product.name || '',
         brand: product.brand || '',
-        category: product.category || 'Display',
-        part_category: product.part_category || product.part_category_name || product.category || 'Display',
-        quality_variant: product.quality_variant || product.product_variant_name || '',
+        category: targetCat,
+        part_category: targetCat,
+        quality_variant: targetVariant,
         model: product.model || '',
-        official_price: product.official_price || '',
-        purchase_price: product.purchase_price || '',
-        sale_price: product.sale_price || '',
-        wholesale_price: product.wholesale_price || '',
-        retail_price: product.retail_price || '',
+        official_price: product.official_price !== undefined && product.official_price !== null ? String(product.official_price) : '',
+        purchase_price: product.purchase_price !== undefined && product.purchase_price !== null ? String(product.purchase_price) : '',
+        sale_price: product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : (product.retail_price !== undefined && product.retail_price !== null ? String(product.retail_price) : ''),
+        wholesale_price: product.wholesale_price !== undefined && product.wholesale_price !== null ? String(product.wholesale_price) : '',
+        retail_price: product.retail_price !== undefined && product.retail_price !== null ? String(product.retail_price) : (product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : ''),
         opening_stock: '',
         description: product.description || '',
-        colours: Array.isArray(product.colours) ? product.colours.join(', ') : '',
-        manufacturing_brand_id: product.manufacturing_brand_id || '',
-        supplier_id: product.supplier_id || '',
+        colours: Array.isArray(product.colours) ? product.colours.join(', ') : (product.colours || ''),
+        manufacturing_brand_id: product.manufacturing_brand_id !== undefined && product.manufacturing_brand_id !== null ? String(product.manufacturing_brand_id) : '',
+        supplier_id: product.supplier_id !== undefined && product.supplier_id !== null ? String(product.supplier_id) : '',
         image_url: product.image_url || '',
         image_urls: product.image_urls || [],
       },
     }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cloneProduct = (product) => {
+    setEditingProductId(''); // Ensure it creates a new record
+    const targetCat = product.part_category || product.part_category_name || product.category || 'Display';
+    const targetVariant = product.quality_variant || product.product_variant_name || '';
+    setForms((prev) => ({
+      ...prev,
+      product: {
+        short_name: product.short_name || product.name || '',
+        full_model_list: product.full_model_list || product.name || '',
+        brand: product.brand || '',
+        category: targetCat,
+        part_category: targetCat,
+        quality_variant: targetVariant,
+        model: product.model || '',
+        official_price: product.official_price !== undefined && product.official_price !== null ? String(product.official_price) : '',
+        purchase_price: product.purchase_price !== undefined && product.purchase_price !== null ? String(product.purchase_price) : '',
+        sale_price: product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : (product.retail_price !== undefined && product.retail_price !== null ? String(product.retail_price) : ''),
+        wholesale_price: product.wholesale_price !== undefined && product.wholesale_price !== null ? String(product.wholesale_price) : '',
+        retail_price: product.retail_price !== undefined && product.retail_price !== null ? String(product.retail_price) : (product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : ''),
+        opening_stock: '',
+        description: product.description || '',
+        colours: Array.isArray(product.colours) ? product.colours.join(', ') : (product.colours || ''),
+        manufacturing_brand_id: product.manufacturing_brand_id !== undefined && product.manufacturing_brand_id !== null ? String(product.manufacturing_brand_id) : '',
+        supplier_id: product.supplier_id !== undefined && product.supplier_id !== null ? String(product.supplier_id) : '',
+        image_url: product.image_url || '',
+        image_urls: product.image_urls || [],
+      },
+    }));
+    showToast(`Cloned listing from ${productName(product)}. Edit variant or model and click "Add product" to save as new record.`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -4035,6 +4100,8 @@ function App() {
                     console.warn('Refresh error:', e);
                   }
                 }}
+                onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
                 onDeleteProduct={deleteProduct}
                 pager={productPager}
                 loading={productPageLoading}
@@ -4078,6 +4145,7 @@ function App() {
                 onPageSizeChange={(limit) => setProductPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
                 onViewDetails={setSelectedProductDetails}
                 onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
                 onDeleteProduct={deleteProduct}
                 productName={productName}
                 fullModelList={fullModelList}
@@ -4115,6 +4183,7 @@ function App() {
                 priceLabel={priceLabel}
                 onSubmitProduct={submitProduct}
                 onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
                 onDeleteProduct={deleteProduct}
                 onAddReferenceOption={addReferenceOption}
                 onEditReferenceOption={editReferenceOption}

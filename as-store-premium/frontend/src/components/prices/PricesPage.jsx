@@ -30,6 +30,7 @@ export default function PricesPage({
   onPageSizeChange = () => {},
   onViewDetails = () => {},
   onEditProduct = () => {},
+  onCloneProduct = () => {},
   onDeleteProduct = () => {},
   productName = (p) => p?.name || p?.short_name || 'Product',
   fullModelList = (p) => p?.full_model_list || p?.model || '',
@@ -549,6 +550,14 @@ export default function PricesPage({
                       className="px-2.5 py-1.5 rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 transition-all text-xs font-semibold shadow-sm active:scale-95"
                     >
                       View
+                    </button>
+                    <button
+                      type="button"
+                      title="Duplicate / Clone Product"
+                      onClick={() => onCloneProduct(product)}
+                      className="px-2.5 py-1.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 transition-all text-xs font-semibold shadow-sm active:scale-95"
+                    >
+                      Clone
                     </button>
                     {role === 'superadmin' && (
                       <button

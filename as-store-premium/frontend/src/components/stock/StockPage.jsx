@@ -21,6 +21,7 @@ import {
   AlertCircle,
   Search,
   PackagePlus,
+  Copy,
   CheckCircle2,
   AlertTriangle,
   XCircle
@@ -53,6 +54,7 @@ export default function StockPage({
   priceLabel,
   onSubmitProduct,
   onEditProduct,
+  onCloneProduct,
   onDeleteProduct,
   onAddReferenceOption,
   onEditReferenceOption,
@@ -78,6 +80,11 @@ export default function StockPage({
   const [isCustomPartCategory, setIsCustomPartCategory] = useState(false);
   const [isCustomQualityVariant, setIsCustomQualityVariant] = useState(false);
   const [isCustomNameEdited, setIsCustomNameEdited] = useState(false);
+
+  // Relative Stock Adjustment mode ('add' | 'deduct' | 'set')
+  const [adjustmentMode, setAdjustmentMode] = useState('add');
+  const [isColorSplitMode, setIsColorSplitMode] = useState(false);
+  const [colorSplitQuantities, setColorSplitQuantities] = useState({});
 
   const defaultPartCategories = ['Display', 'Battery', 'Camera', 'Speaker', 'Charging IC', 'Main Flex', 'Frame', 'Charging Port', 'Vibrator', 'Ear Speaker', 'Back Glass', 'Middle Frame', 'Sim Tray', 'Housing', 'Mic'];
   const refPartCategories = (data.reference?.partCategories || []).map(pc => typeof pc === 'string' ? pc : pc.name).filter(Boolean);
@@ -313,9 +320,35 @@ export default function StockPage({
         {/* Set/Add Stock Level Card */}
         <FormPanel 
           title={stockFormTitle}
-          action="Save Quantity" 
-          onSubmit={updateStock}
-          disabled={saving || !forms.stock.product_id || forms.stock.quantity === ''}
+          action={
+            adjustmentMode === 'add' 
+              ? 'Add Stock (+)' 
+              : adjustmentMode === 'deduct' 
+                ? 'Deduct Stock (-)' 
+                : 'Set Total Quantity (=)'
+          } 
+          onSubmit={(e) => {
+            if (e && typeof e.preventDefault === 'function') e.preventDefault();
+            const payload = {
+              ...forms.stock,
+              shop_id: shopId,
+              adjustment_mode: adjustmentMode,
+              color_quantities: (isColorSplitMode && selectedProductColours.length > 0) ? colorSplitQuantities : undefined,
+            };
+            // Call updateStock with extended payload if needed
+            if (setForms) {
+              setForms((prev) => ({
+                ...prev,
+                stock: {
+                  ...prev.stock,
+                  adjustment_mode: adjustmentMode,
+                  color_quantities: (isColorSplitMode && selectedProductColours.length > 0) ? colorSplitQuantities : undefined,
+                }
+              }));
+            }
+            updateStock();
+          }}
+          disabled={saving || !forms.stock.product_id || (!isColorSplitMode && forms.stock.quantity === '')}
         >
           <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr', gap: '16px' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end', justifyContent: 'space-between' }}>
@@ -329,10 +362,11 @@ export default function StockPage({
                     stock: { 
                       ...prev.stock, 
                       product_id: v, 
-                      colour: '', // Reset colour when product changes
-                      quantity: '' // Clear input
+                      colour: '', 
+                      quantity: '' 
                     }
                   }));
+                  setColorSplitQuantities({});
                 }} 
                 options={data.products.map((p) => [p.id, `${productName(p, { hideSupplier: role !== 'superadmin' })} · [${p.brand}] · ${priceLabel(p.sale_price)}`])} 
               />
@@ -359,55 +393,192 @@ export default function StockPage({
             </button>
           </div>
 
-            {/* Current Stock Preview & Optional Colour dropdown */}
+            {/* Current Stock Preview & Mode Selector */}
             {forms.stock.product_id && (
-              <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', display: 'flex', flexWrap: 'wrap', gap: '24px', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
-                    <span style={{ fontSize: '12px', opacity: 0.6, display: 'block' }}>Current Stock Metrics:</span>
+              <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <div>
+                    <span style={{ fontSize: '11.5px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700' }}>Current Warehouse Metrics</span>
                     <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
-                      <span style={{ fontSize: '13px' }}>Total Available: <b style={{ color: '#14b8a6' }}>{stockPreview?.quantity || 0} pcs</b></span>
-                    <span style={{ fontSize: '13px', opacity: 0.8 }}>{ownerQuantityLabel}: <b>{stockPreview?.owner_quantity || 0}</b></span>
-                    <span style={{ fontSize: '13px', opacity: 0.8 }}>{assignedQuantityLabel}: <b>{role === 'shopkeeper' ? stockPreview?.my_quantity || 0 : stockPreview?.shopkeeper_quantity || 0}</b></span>
+                      <span style={{ fontSize: '13.5px' }}>Total Available: <b style={{ color: '#14b8a6', fontWeight: '800' }}>{stockPreview?.quantity || 0} pcs</b></span>
+                      <span style={{ fontSize: '13px', opacity: 0.8 }}>{ownerQuantityLabel}: <b>{stockPreview?.owner_quantity || 0}</b></span>
+                      <span style={{ fontSize: '13px', opacity: 0.8 }}>{assignedQuantityLabel}: <b>{role === 'shopkeeper' ? stockPreview?.my_quantity || 0 : stockPreview?.shopkeeper_quantity || 0}</b></span>
+                    </div>
+                  </div>
+
+                  {/* Segmented Adjustment Mode Selector */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.04)', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustmentMode('add')}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '7px',
+                        border: 'none',
+                        fontSize: '11.5px',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                        background: adjustmentMode === 'add' ? '#0d9488' : 'transparent',
+                        color: adjustmentMode === 'add' ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                        boxShadow: adjustmentMode === 'add' ? '0 2px 8px rgba(13,148,136,0.3)' : 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      + Add Stock
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustmentMode('deduct')}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '7px',
+                        border: 'none',
+                        fontSize: '11.5px',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                        background: adjustmentMode === 'deduct' ? '#e11d48' : 'transparent',
+                        color: adjustmentMode === 'deduct' ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                        boxShadow: adjustmentMode === 'deduct' ? '0 2px 8px rgba(225,29,72,0.3)' : 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      - Deduct Stock
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjustmentMode('set')}
+                      style={{
+                        padding: '6px 12px',
+                        borderRadius: '7px',
+                        border: 'none',
+                        fontSize: '11.5px',
+                        fontWeight: '800',
+                        cursor: 'pointer',
+                        background: adjustmentMode === 'set' ? '#0284c7' : 'transparent',
+                        color: adjustmentMode === 'set' ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                        boxShadow: adjustmentMode === 'set' ? '0 2px 8px rgba(2,132,199,0.3)' : 'none',
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      = Direct Total
+                    </button>
                   </div>
                 </div>
 
-                {selectedProductColours.length > 0 ? (
-                  <div style={{ minWidth: '180px' }}>
-                    <Select
-                      label="Colour (Optional)"
-                      value={forms.stock.colour}
-                      onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, colour: v } }))}
-                      options={[['', 'Generic / No Colour'], ...selectedProductColours.map(c => [c, c])]}
-                    />
+                {/* Live Formula Preview Badge */}
+                {!isColorSplitMode && forms.stock.quantity !== '' && !isNaN(Number(forms.stock.quantity)) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', borderRadius: '8px', background: adjustmentMode === 'add' ? 'rgba(13,148,136,0.08)' : adjustmentMode === 'deduct' ? 'rgba(225,29,72,0.08)' : 'rgba(2,132,199,0.08)', border: `1px solid ${adjustmentMode === 'add' ? 'rgba(13,148,136,0.2)' : adjustmentMode === 'deduct' ? 'rgba(225,29,72,0.2)' : 'rgba(2,132,199,0.2)'}` }}>
+                    <span style={{ fontSize: '11.5px', fontWeight: '700', color: adjustmentMode === 'add' ? '#14b8a6' : adjustmentMode === 'deduct' ? '#f43f5e' : '#38bdf8' }}>
+                      {adjustmentMode === 'add' && `Additive Formula: Current (${stockPreview?.quantity || 0}) + Input (${Number(forms.stock.quantity)}) = New Total: ${(stockPreview?.quantity || 0) + Number(forms.stock.quantity)} pcs`}
+                      {adjustmentMode === 'deduct' && `Deductive Formula: Current (${stockPreview?.quantity || 0}) - Input (${Number(forms.stock.quantity)}) = New Total: ${Math.max(0, (stockPreview?.quantity || 0) - Number(forms.stock.quantity))} pcs`}
+                      {adjustmentMode === 'set' && `Direct Override Formula: Total will be directly set to ${Number(forms.stock.quantity)} pcs`}
+                    </span>
                   </div>
-                ) : (
-                  <span style={{ fontSize: '12px', opacity: 0.5 }}>No colours registered for this product.</span>
+                )}
+
+                {/* Toggle Color Variant Split vs Lump-Sum Mode */}
+                {selectedProductColours.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: '#94a3b8' }}>
+                      Tagged Colours: <b style={{ color: '#e2e8f0' }}>{selectedProductColours.join(', ')}</b>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setIsColorSplitMode(!isColorSplitMode)}
+                      style={{
+                        padding: '5px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid rgba(20,184,166,0.3)',
+                        background: isColorSplitMode ? 'rgba(20,184,166,0.15)' : 'transparent',
+                        color: '#14b8a6',
+                        fontSize: '11px',
+                        fontWeight: '700',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {isColorSplitMode ? 'Switch to Single Input' : '⚡ Split Stock Across Colours'}
+                    </button>
+                  </div>
                 )}
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: role === 'shopkeeper' ? '1fr' : '1fr 1fr', gap: '16px' }}>
-              <Input 
-                label={role === 'shopkeeper' ? 'New Branch Quantity' : 'New Stock Quantity'} 
-                type="number" 
-                placeholder="Example: 15"
-                value={forms.stock.quantity} 
-                onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, quantity: v } }))} 
-              />
-              {role !== 'shopkeeper' && (
-                <Select 
-                  label="Supplier (Optional)"
-                  value={forms.stock.supplier_id || ''}
-                  onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, supplier_id: v } }))}
-                  options={[
-                    ['', 'Choose Supplier'],
-                    ...(data.reference?.suppliers || [])
-                      .filter(s => s.is_active)
-                      .map(s => [s.id, s.name])
-                  ]}
+            {/* Color-Variant Stock Split Grid */}
+            {forms.stock.product_id && isColorSplitMode && selectedProductColours.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: 'rgba(20,184,166,0.03)', border: '1px solid rgba(20,184,166,0.15)', borderRadius: '12px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '800', color: '#14b8a6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Color-Variant Stock Allocation ({adjustmentMode === 'add' ? '+ Add per Colour' : adjustmentMode === 'deduct' ? '- Deduct per Colour' : '= Set Total per Colour'})
+                  </span>
+                  <span style={{ fontSize: '12px', fontWeight: '800', color: '#ffffff' }}>
+                    Total Variant Stock: <b style={{ color: '#14b8a6' }}>{Object.values(colorSplitQuantities).reduce((a, b) => a + Number(b || 0), 0)} pcs</b>
+                  </span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
+                  {selectedProductColours.map((colourName) => {
+                    const currentColourQty = Number(selectedProductDetails?.colour_stock?.[colourName] || 0);
+                    return (
+                      <div key={colourName} style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: '700', color: '#e2e8f0' }}>{colourName}</span>
+                          <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>Curr: <b>{currentColourQty}</b></span>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          placeholder="Qty"
+                          value={colorSplitQuantities[colourName] ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setColorSplitQuantities(prev => ({ ...prev, [colourName]: val }));
+                          }}
+                          style={{
+                            width: '100%',
+                            padding: '6px 10px',
+                            background: 'rgba(255,255,255,0.05)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            borderRadius: '6px',
+                            color: '#ffffff',
+                            fontWeight: '700',
+                            fontSize: '12px',
+                            outline: 'none',
+                          }}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: role === 'shopkeeper' ? '1fr' : '1fr 1fr', gap: '16px' }}>
+                <Input 
+                  label={
+                    adjustmentMode === 'add' 
+                      ? (role === 'shopkeeper' ? 'Quantity to Add (+)' : 'Stock to Add (+)') 
+                      : adjustmentMode === 'deduct' 
+                        ? (role === 'shopkeeper' ? 'Quantity to Deduct (-)' : 'Stock to Deduct (-)') 
+                        : (role === 'shopkeeper' ? 'New Branch Quantity (=)' : 'New Stock Quantity (=)')
+                  } 
+                  type="number" 
+                  placeholder={adjustmentMode === 'add' ? 'e.g. 10 (will add to current)' : adjustmentMode === 'deduct' ? 'e.g. 5 (will subtract)' : 'e.g. 25 (direct total)'}
+                  value={forms.stock.quantity} 
+                  onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, quantity: v } }))} 
                 />
-              )}
-            </div>
+                {role !== 'shopkeeper' && (
+                  <Select 
+                    label="Supplier (Optional)"
+                    value={forms.stock.supplier_id || ''}
+                    onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, supplier_id: v } }))}
+                    options={[
+                      ['', 'Choose Supplier'],
+                      ...(data.reference?.suppliers || [])
+                        .filter(s => s.is_active)
+                        .map(s => [s.id, s.name])
+                    ]}
+                  />
+                )}
+              </div>
+            )}
           </div>
         </FormPanel>
 
@@ -887,6 +1058,68 @@ export default function StockPage({
                         <Plus size={12} /> Add
                       </button>
                     </div>
+
+                    {/* Color-Wise Opening Stock Quantity Input Cards */}
+                    {(() => {
+                      const taggedColours = (forms.product.colours || '').split(',').map(c => c.trim()).filter(Boolean);
+                      if (!taggedColours.length || editingProductId) return null;
+                      const totalColorSum = Object.entries(forms.product.color_opening_stock || {})
+                        .filter(([c]) => taggedColours.includes(c))
+                        .reduce((sum, [, val]) => sum + Number(val || 0), 0);
+
+                      return (
+                        <div className="mt-3 p-4 rounded-2xl bg-white border border-teal-300 dark:border-teal-700/80 shadow-xs space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <span className="text-[11px] font-black text-teal-800 uppercase tracking-wider block">
+                                ⚡ Color-Wise Opening Stock Quantities
+                              </span>
+                              <p className="text-[11px] text-slate-500 font-semibold">
+                                Enter different initial quantities for each tagged colour variant.
+                              </p>
+                            </div>
+                            <span className="px-3 py-1 bg-teal-50 border border-teal-200 text-teal-800 rounded-xl text-xs font-black">
+                              Total Sum: {totalColorSum} pcs
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 pt-1">
+                            {taggedColours.map((colName) => (
+                              <div key={colName} className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-extrabold text-slate-800 truncate block">{colName}</span>
+                                </div>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  placeholder="0 pcs"
+                                  value={forms.product.color_opening_stock?.[colName] ?? ''}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const nextMap = {
+                                      ...(forms.product.color_opening_stock || {}),
+                                      [colName]: val === '' ? '' : Math.max(0, Number(val))
+                                    };
+                                    const newTotal = Object.entries(nextMap)
+                                      .filter(([c]) => taggedColours.includes(c))
+                                      .reduce((sum, [, n]) => sum + Number(n || 0), 0);
+                                    setForms(prev => ({
+                                      ...prev,
+                                      product: {
+                                        ...prev.product,
+                                        color_opening_stock: nextMap,
+                                        opening_stock: String(newTotal),
+                                      }
+                                    }));
+                                  }}
+                                  className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-900 outline-none focus:border-teal-500"
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                 </div>
@@ -1295,18 +1528,37 @@ export default function StockPage({
                   {item.model || <span style={{ color: '#cbd5e1', fontWeight: '400' }}>—</span>}
                 </span>
 
-                {/* Colours Tagged */}
-                <span style={{ fontSize: '12px' }}>
-                  {Array.isArray(item.colours) && item.colours.length > 0 ? (
+                {/* Colours & Variant Stock Breakdown */}
+                <div style={{ fontSize: '12px' }}>
+                  {item.colour_stock && Object.keys(item.colour_stock).length > 0 ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                      {Object.entries(item.colour_stock).map(([colName, colQty]) => (
+                        <span
+                          key={colName}
+                          style={{
+                            padding: '2px 6px',
+                            background: Number(colQty) > 0 ? 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)' : '#fef2f2',
+                            border: Number(colQty) > 0 ? '1px solid #99f6e4' : '1px solid #fecaca',
+                            borderRadius: '6px',
+                            fontSize: '9.5px',
+                            fontWeight: '800',
+                            color: Number(colQty) > 0 ? '#0d9488' : '#dc2626',
+                          }}
+                        >
+                          {colName}: {colQty}
+                        </span>
+                      ))}
+                    </div>
+                  ) : Array.isArray(item.colours) && item.colours.length > 0 ? (
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
                       {item.colours.map((col, idx) => (
-                        <span key={idx} style={{ padding: '2px 6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '9px', fontWeight: '700', color: '#64748b' }}>{col}</span>
+                        <span key={idx} style={{ padding: '2px 6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '9.5px', fontWeight: '700', color: '#64748b' }}>{col}</span>
                       ))}
                     </div>
                   ) : (
-                    <span style={{ color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>No colours</span>
+                    <span style={{ color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>Standard</span>
                   )}
-                </span>
+                </div>
 
                 {/* Price (Sale / Purchase Cost) */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
@@ -1343,7 +1595,7 @@ export default function StockPage({
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
                   <button 
                     type="button" 
                     title="Set Stock Level"
@@ -1356,22 +1608,44 @@ export default function StockPage({
                           colour: '' 
                         }
                       }));
+                      setColorSplitQuantities({});
                       window.scrollTo({ top: 120, behavior: 'smooth' });
                     }}
                     className="hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    style={{ padding: '6px 12px', fontSize: '11px', background: 'linear-gradient(to right, #0d9488, #0f766e)', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#ffffff', fontWeight: '800', boxShadow: '0 2px 6px rgba(13,148,136,0.15)' }}
+                    style={{ padding: '6px 10px', fontSize: '11px', background: 'linear-gradient(to right, #0d9488, #0f766e)', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#ffffff', fontWeight: '800', boxShadow: '0 2px 6px rgba(13,148,136,0.15)' }}
                   >
-                    Set Stock
+                    Stock
+                  </button>
+                  <button 
+                    type="button" 
+                    title="Duplicate / Clone Product"
+                    onClick={() => {
+                      if (onCloneProduct) {
+                        onCloneProduct(item);
+                      } else if (onEditProduct) {
+                        onEditProduct(item);
+                        setEditingProductId('');
+                      }
+                      setIsAddProductOpen(true);
+                    }}
+                    className="hover:bg-sky-50 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                    style={{ padding: '6px 10px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', cursor: 'pointer', color: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
+                  >
+                    <Copy size={12} />
+                    Clone
                   </button>
                   <button 
                     type="button" 
                     title={role === 'superadmin' ? 'Edit product price' : 'Edit product details'}
-                    onClick={() => onEditProduct(item)}
+                    onClick={() => {
+                      onEditProduct(item);
+                      setIsAddProductOpen(true);
+                    }}
                     className="hover:bg-slate-100 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    style={{ padding: role === 'superadmin' ? '6px 12px' : '6px 8px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
+                    style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
                   >
                     <Edit3 size={12} />
-                    {role === 'superadmin' && 'Edit Price'}
+                    Edit
                   </button>
                   {role === 'superadmin' && (
                     <button 

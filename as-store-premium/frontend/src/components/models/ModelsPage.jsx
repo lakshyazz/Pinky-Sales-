@@ -18,6 +18,8 @@ export default function ModelsPage({
   api,
   setGlobalToast,
   onProductUpdated,
+  onEditProduct,
+  onCloneProduct,
   onDeleteProduct,
   pager = {},
   loading = false,
@@ -844,7 +846,7 @@ export default function ModelsPage({
                               }}
                             />
                             {/* Dropdown body */}
-                            <div className="absolute right-0 bottom-full mb-1.5 w-32 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-20 text-xs text-left">
+                            <div className="absolute right-0 bottom-full mb-1.5 w-36 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-20 text-xs text-left">
                               <button
                                 type="button"
                                 onClick={(e) => {
@@ -855,6 +857,18 @@ export default function ModelsPage({
                                 className="w-full px-3 py-1.5 text-slate-700 hover:bg-slate-50 font-semibold flex items-center gap-1.5"
                               >
                                 <Eye className="w-3.5 h-3.5" /> View Specs
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveMenuId(null);
+                                  if (onCloneProduct) onCloneProduct(product);
+                                  else handleOpenEdit(product);
+                                }}
+                                className="w-full px-3 py-1.5 text-sky-700 hover:bg-sky-50 font-semibold flex items-center gap-1.5"
+                              >
+                                <PlusCircle className="w-3.5 h-3.5" /> Clone Listing
                               </button>
                               {isSuperAdmin && onDeleteProduct && (
                                 <button
@@ -963,6 +977,17 @@ export default function ModelsPage({
                           className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95 shadow-sm shadow-emerald-600/10"
                         >
                           <PackagePlus className="w-3.5 h-3.5" /> Stock
+                        </button>
+                        <button
+                          type="button"
+                          title="Duplicate / Clone Listing"
+                          onClick={() => {
+                            if (onCloneProduct) onCloneProduct(product);
+                            else handleOpenEdit(product);
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-sky-50 border border-sky-200 text-sky-700 hover:bg-sky-100 font-semibold transition-all text-xs inline-flex items-center gap-1 active:scale-95 shadow-sm"
+                        >
+                          <PlusCircle className="w-3.5 h-3.5" /> Clone
                         </button>
                         <button
                           type="button"
