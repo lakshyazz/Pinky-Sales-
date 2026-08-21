@@ -368,7 +368,7 @@ export default function StockPage({
                 }
               }));
             }
-            updateStock();
+            updateStock(payload);
           }}
           disabled={saving || !forms.stock.product_id || (!isColorSplitMode && forms.stock.quantity === '')}
         >

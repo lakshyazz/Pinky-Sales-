@@ -2044,14 +2044,21 @@ function App() {
     }
   };
 
-  const updateStock = async () => {
+  const updateStock = async (customPayload) => {
     if (!requireShopSelection('Select a shop before updating stock')) return;
     try {
       setSaving(true);
-      await authedFetch('/stock', { method: 'PUT', body: JSON.stringify({ ...forms.stock, shop_id: shopId }) });
+      const payload = customPayload && typeof customPayload === 'object' && customPayload.product_id
+        ? { ...customPayload, shop_id: customPayload.shop_id || shopId }
+        : { ...forms.stock, shop_id: shopId };
+      await authedFetch('/stock', { method: 'PUT', body: JSON.stringify(payload) });
       setForms((prev) => ({ ...prev, stock: initialForms.stock }));
       showToast(role === 'shopkeeper' ? 'Your stock quantity was updated' : 'Stock updated');
-      await loadTab('stock', shopId);
+      await Promise.all([
+        loadCore(),
+        loadProductPage({ tab: active === 'models' || active === 'prices' ? active : 'models', page: 1 }),
+        active === 'stock' ? loadTab('stock', shopId) : Promise.resolve(),
+      ]);
     } catch (error) {
       showToast(error.message || 'Unable to update stock right now');
     } finally {
