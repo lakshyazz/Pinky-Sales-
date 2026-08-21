@@ -1,6 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { MotionConfig } from 'framer-motion';
+import { Analytics } from '@vercel/analytics/react';
 import App from './App.jsx';
 import './index.css';
 import './components/ui/SkeletonLoader.css';
@@ -43,6 +44,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <MotionConfig reducedMotion="user">
       <ErrorBoundary>
         <App />
+        <Analytics />
       </ErrorBoundary>
     </MotionConfig>
   </React.StrictMode>,
