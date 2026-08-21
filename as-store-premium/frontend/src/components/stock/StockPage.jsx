@@ -254,13 +254,35 @@ export default function StockPage({
   const getStockMetricPreview = () => {
     if (!forms.stock.product_id) return null;
     const matches = stockWithOwnership.filter(item => String(item.product_id) === String(forms.stock.product_id));
-    if (!matches.length) return { quantity: 0, owner_quantity: 0, my_quantity: 0, shopkeeper_quantity: 0 };
-    return matches.reduce((total, item) => ({
-      quantity: total.quantity + Number(item.quantity || 0),
-      owner_quantity: total.owner_quantity + Number(item.owner_quantity || 0),
-      my_quantity: total.my_quantity + Number(item.my_quantity || 0),
-      shopkeeper_quantity: total.shopkeeper_quantity + Number(item.shopkeeper_quantity || 0),
-    }), { quantity: 0, owner_quantity: 0, my_quantity: 0, shopkeeper_quantity: 0 });
+    if (matches.length > 0) {
+      return matches.reduce((total, item) => ({
+        quantity: total.quantity + Number(item.quantity || 0),
+        owner_quantity: total.owner_quantity + Number(item.owner_quantity || 0),
+        my_quantity: total.my_quantity + Number(item.my_quantity || 0),
+        shopkeeper_quantity: total.shopkeeper_quantity + Number(item.shopkeeper_quantity || 0),
+      }), { quantity: 0, owner_quantity: 0, my_quantity: 0, shopkeeper_quantity: 0 });
+    }
+
+    // Fallback to data.products / data.catalog when product is not in the currently loaded paginated stock page
+    const productRecord = (data.products || []).find(p => String(p.id) === String(forms.stock.product_id))
+      || (data.catalog || []).find(p => String(p.id) === String(forms.stock.product_id));
+
+    if (productRecord) {
+      const qty = Number(
+        isWarehouseScope
+          ? (productRecord.warehouse_stock ?? productRecord.available_stock ?? productRecord.quantity ?? 0)
+          : (productRecord.available_stock ?? productRecord.quantity ?? 0)
+      );
+      const ownerQty = Number(productRecord.warehouse_stock ?? productRecord.owner_quantity ?? productRecord.quantity ?? 0);
+      return {
+        quantity: qty,
+        owner_quantity: ownerQty,
+        my_quantity: Number(productRecord.my_quantity || 0),
+        shopkeeper_quantity: Number(productRecord.shopkeeper_quantity || 0),
+      };
+    }
+
+    return { quantity: 0, owner_quantity: 0, my_quantity: 0, shopkeeper_quantity: 0 };
   };
   const stockPreview = getStockMetricPreview();
 
