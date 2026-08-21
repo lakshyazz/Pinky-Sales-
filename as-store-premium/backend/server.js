@@ -1704,11 +1704,10 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         if (activeShopId) {
           await tx.runQuery(`
             UPDATE inventory_batches SET
-              sale_price = ?,
               retail_price = ?,
               official_price = ?
             WHERE product_id = ? AND shop_id = ?
-          `, [newSalePrice, newSalePrice, newSalePrice, productId, activeShopId]);
+          `, [newSalePrice, newSalePrice, productId, activeShopId]);
         }
       }
     });
@@ -1735,7 +1734,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
     });
   } catch (error) {
     console.error('[ProductsAPI] Error updating product:', error);
-    res.status(500).json({ error: 'Failed to update product' });
+    res.status(500).json({ error: error.message || 'Failed to update product' });
   }
 });
 
@@ -2742,8 +2741,8 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
         const updatePrice = Number(retail_price || official_price);
         if (!isNaN(updatePrice) && updatePrice > 0) {
           await tx.runQuery(
-            'UPDATE inventory_batches SET sale_price = ?, retail_price = ?, official_price = ? WHERE shop_id = ? AND product_id = ?',
-            [updatePrice, updatePrice, updatePrice, shopId, product_id]
+            'UPDATE inventory_batches SET retail_price = ?, official_price = ? WHERE shop_id = ? AND product_id = ?',
+            [updatePrice, updatePrice, shopId, product_id]
           );
           await tx.runQuery(
             'UPDATE products SET sale_price = ?, retail_price = ? WHERE id = ?',
