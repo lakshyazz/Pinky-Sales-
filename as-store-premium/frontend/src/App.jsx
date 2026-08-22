@@ -2067,9 +2067,20 @@ function App() {
   };
 
   const addReferenceOption = async (type, name) => {
-    const referenceLabel = { categories: 'category', colours: 'colour', brands: 'brand' }[type] || type;
+    const referenceLabel = {
+      categories: 'category',
+      colours: 'colour',
+      brands: 'brand',
+      'manufacturing-brands': 'manufacturing brand',
+      suppliers: 'supplier',
+      partCategories: 'part category',
+      productVariants: 'quality variant',
+    }[type] || type;
     const cleanName = String(name || '').trim();
-    if (!cleanName) return showToast(`Enter a new ${referenceLabel} name`);
+    if (!cleanName) {
+      showToast(`Enter a new ${referenceLabel} name`);
+      throw new Error(`Enter a new ${referenceLabel} name`);
+    }
     try {
       setSaving(true);
       const createdReference = await authedFetch(`/reference-data/${type}`, { method: 'POST', body: JSON.stringify({ name: cleanName }) });
@@ -2092,8 +2103,10 @@ function App() {
       }
       setNewReference({ type: '', name: '' });
       showToast(`${resolvedName} added`);
+      return createdReference;
     } catch (error) {
       showToast(error.message || `Unable to add ${referenceLabel}`);
+      throw error;
     } finally {
       setSaving(false);
     }
@@ -3843,7 +3856,25 @@ function App() {
                   }}
                 />
                 {globalSearch && (
-                  <button type="button" className="search-clear" aria-label="Clear search" onMouseDown={(event) => event.preventDefault()} onClick={() => setGlobalSearch('')}>
+                  <button
+                    type="button"
+                    className="search-clear cursor-pointer"
+                    aria-label="Clear search"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setGlobalSearch('');
+                      setGlobalSearchFocused(false);
+                      const searchInput = document.querySelector('.global-search input');
+                      if (searchInput) {
+                        searchInput.focus({ preventScroll: true });
+                      }
+                    }}
+                  >
                     <X size={14} />
                   </button>
                 )}
@@ -4200,6 +4231,9 @@ function App() {
                 Input={Input}
                 Select={Select}
                 Empty={Empty}
+                api={authedFetch}
+                setGlobalToast={showToast}
+                loadCore={loadCore}
               />
             </PageWrapper>
           )}

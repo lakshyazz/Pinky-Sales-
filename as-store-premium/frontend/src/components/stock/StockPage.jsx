@@ -31,6 +31,8 @@ import SearchFilter from '../shared/SearchFilter';
 import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
 import ProductImageUpload from '../ui/ProductImageUpload';
+import QuickAddReferenceModal from '../modals/QuickAddReferenceModal';
+import SearchableCombobox from '../ui/SearchableCombobox';
 
 export default function StockPage({
   role,
@@ -71,6 +73,9 @@ export default function StockPage({
   Input,
   Select,
   Empty,
+  api,
+  setGlobalToast,
+  loadCore,
 }) {
   // Collapsible sections toggle states
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
@@ -107,6 +112,88 @@ export default function StockPage({
   const [editingRefName, setEditingRefName] = useState('');
   const stockSummaryTotals = data?.stockSummary?.totals || {};
   const stockModelTotal = Number(stockSummaryTotals.products || 0);
+
+  // Quick Add Reference Modal state
+  const [quickAddModal, setQuickAddModal] = useState({
+    isOpen: false,
+    type: 'brand', // 'brand' | 'manufacturing-brand' | 'supplier'
+  });
+
+  const handleOpenQuickAdd = (type, e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    setQuickAddModal({ isOpen: true, type });
+  };
+
+  const handleCloseQuickAdd = () => {
+    setQuickAddModal((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const handleSaveQuickAdd = async (cleanName) => {
+    const { type } = quickAddModal;
+    if (type === 'brand') {
+      let created = null;
+      if (onAddReferenceOption) {
+        created = await onAddReferenceOption('brands', cleanName);
+      } else if (api) {
+        created = await api('/reference-data/brands', { method: 'POST', body: JSON.stringify({ name: cleanName }) });
+        if (loadCore) await loadCore();
+      }
+      const brandName = created?.name || cleanName;
+      setForms((prev) => {
+        const autoName = [brandName, prev.product.part_category].filter(Boolean).join(' ');
+        return {
+          ...prev,
+          product: {
+            ...prev.product,
+            brand: brandName,
+            short_name: isCustomNameEdited ? prev.product.short_name : autoName,
+          },
+        };
+      });
+      if (setGlobalToast) setGlobalToast(`Brand "${brandName}" added successfully`, 'success');
+    } else if (type === 'manufacturing-brand') {
+      let created = null;
+      if (onAddReferenceOption) {
+        created = await onAddReferenceOption('manufacturing-brands', cleanName);
+      } else if (api) {
+        created = await api('/reference-data/manufacturing-brands', { method: 'POST', body: JSON.stringify({ name: cleanName }) });
+        if (loadCore) await loadCore();
+      }
+      const mfgId = created?.id ? String(created.id) : '';
+      if (mfgId) {
+        setForms((prev) => ({
+          ...prev,
+          product: {
+            ...prev.product,
+            manufacturing_brand_id: mfgId,
+          },
+        }));
+      }
+      if (setGlobalToast) setGlobalToast(`Manufacturing brand "${cleanName}" created successfully`, 'success');
+    } else if (type === 'supplier') {
+      let created = null;
+      if (onAddReferenceOption) {
+        created = await onAddReferenceOption('suppliers', cleanName);
+      } else if (api) {
+        created = await api('/reference-data/suppliers', { method: 'POST', body: JSON.stringify({ name: cleanName }) });
+        if (loadCore) await loadCore();
+      }
+      const supplierId = created?.id ? String(created.id) : '';
+      if (supplierId) {
+        setForms((prev) => ({
+          ...prev,
+          product: {
+            ...prev.product,
+            supplier_id: supplierId,
+          },
+        }));
+      }
+      if (setGlobalToast) setGlobalToast(`Supplier "${cleanName}" created successfully`, 'success');
+    }
+  };
 
   // Inline color adder & category creator for product creation form
   const [inlineColorInput, setInlineColorInput] = useState('');
@@ -662,50 +749,107 @@ export default function StockPage({
                     />
                   </div>                  {/* Row 2: Brand, Manufacturing Brand & Supplier */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <Select 
-                      label="BRAND *" 
-                      placeholder="Select Brand"
-                      value={forms.product.brand} 
-                      onChange={(v) => {
-                        const brandName = v;
-                        setForms(prev => {
-                          const autoName = [brandName, prev.product.part_category].filter(Boolean).join(' ');
-                          return {
+                    
+                    {/* Brand Selector */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider block">BRAND *</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenQuickAdd('brand', e)}
+                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300 flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Plus size={12} /> Add Brand
+                        </button>
+                      </div>
+                      <SearchableCombobox
+                        placeholder="Select Brand"
+                        searchPlaceholder="Search brand..."
+                        value={forms.product.brand || ''}
+                        onChange={(brandName) => {
+                          setForms((prev) => {
+                            const autoName = [brandName, prev.product.part_category].filter(Boolean).join(' ');
+                            return {
+                              ...prev,
+                              product: {
+                                ...prev.product,
+                                brand: brandName,
+                                short_name: isCustomNameEdited ? prev.product.short_name : autoName,
+                              },
+                            };
+                          });
+                        }}
+                        options={(data.reference?.brands || []).map((b) => ({
+                          id: typeof b === 'string' ? b : b.name || b.brand,
+                          name: typeof b === 'string' ? b : b.name || b.brand,
+                        }))}
+                        onAddNew={() => handleOpenQuickAdd('brand')}
+                        addNewLabel="+ Add New Brand..."
+                        allowClear={true}
+                      />
+                    </div>
+
+                    {/* Manufacturing Brand Selector */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider block">MANUFACTURING BRAND (OPTIONAL)</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenQuickAdd('manufacturing-brand', e)}
+                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300 flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Plus size={12} /> Add Mfg Brand
+                        </button>
+                      </div>
+                      <SearchableCombobox
+                        placeholder="Select Manufacturing Brand"
+                        searchPlaceholder="Search mfg brand..."
+                        value={forms.product.manufacturing_brand_id || ''}
+                        onChange={(mfgId) => {
+                          setForms((prev) => ({
                             ...prev,
-                            product: {
-                              ...prev.product,
-                              brand: brandName,
-                              short_name: isCustomNameEdited ? prev.product.short_name : autoName
-                            }
-                          };
-                        });
-                      }} 
-                      options={[['', 'Select Brand'], ...data.reference.brands.map(b => [b.name, b.name])]}
-                    />
-                    <Select 
-                      label="MANUFACTURING BRAND (OPTIONAL)" 
-                      placeholder="Select Manufacturing Brand"
-                      value={forms.product.manufacturing_brand_id || ''} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, manufacturing_brand_id: v } }))} 
-                      options={[
-                        ['', 'Select Manufacturing Brand'], 
-                        ...(data.reference.manufacturingBrands || [])
-                          .filter(mb => mb.is_active || String(mb.id) === String(forms.product.manufacturing_brand_id))
-                          .map(mb => [mb.id, mb.name])
-                      ]}
-                    />
-                    <Select 
-                      label="SUPPLIER (OPTIONAL)" 
-                      placeholder="Select Supplier"
-                      value={forms.product.supplier_id || ''} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, supplier_id: v } }))} 
-                      options={[
-                        ['', 'Select Supplier'], 
-                        ...(data.reference.suppliers || [])
-                          .filter(s => s.is_active || String(s.id) === String(forms.product.supplier_id))
-                          .map(s => [s.id, s.name])
-                      ]}
-                    />
+                            product: { ...prev.product, manufacturing_brand_id: mfgId },
+                          }));
+                        }}
+                        options={(data.reference?.manufacturingBrands || [])
+                          .filter((mb) => mb.is_active || String(mb.id) === String(forms.product.manufacturing_brand_id))
+                          .map((mb) => ({ id: mb.id, name: mb.name }))}
+                        onAddNew={() => handleOpenQuickAdd('manufacturing-brand')}
+                        addNewLabel="+ Add New Mfg Brand..."
+                        allowClear={true}
+                      />
+                    </div>
+
+                    {/* Supplier Selector */}
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-black text-slate-800 dark:text-slate-200 uppercase tracking-wider block">SUPPLIER (OPTIONAL)</span>
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenQuickAdd('supplier', e)}
+                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300 flex items-center gap-1 cursor-pointer transition-colors"
+                        >
+                          <Plus size={12} /> Add Supplier
+                        </button>
+                      </div>
+                      <SearchableCombobox
+                        placeholder="Select Supplier"
+                        searchPlaceholder="Search supplier..."
+                        value={forms.product.supplier_id || ''}
+                        onChange={(supplierId) => {
+                          setForms((prev) => ({
+                            ...prev,
+                            product: { ...prev.product, supplier_id: supplierId },
+                          }));
+                        }}
+                        options={(data.reference?.suppliers || [])
+                          .filter((s) => s.is_active || String(s.id) === String(forms.product.supplier_id))
+                          .map((s) => ({ id: s.id, name: s.name }))}
+                        onAddNew={() => handleOpenQuickAdd('supplier')}
+                        addNewLabel="+ Add New Supplier..."
+                        allowClear={true}
+                      />
+                    </div>
                   </div>
 
                   {/* Separate Part Category & Quality / Variant Container */}
@@ -752,33 +896,30 @@ export default function StockPage({
                             }} 
                           />
                         ) : (
-                          <Select 
-                            label="Part Category *" 
-                            placeholder="Select Part Category"
+                          <SearchableCombobox 
+                            placeholder="Select Part Category" 
+                            searchPlaceholder="Search part category..."
                             value={forms.product.part_category || ''} 
-                            onChange={(v) => {
-                              if (v === '__ADD_NEW__') {
-                                setIsCustomPartCategory(true);
-                                setForms(prev => ({ ...prev, product: { ...prev.product, part_category: '' } }));
-                              } else {
-                                const partCat = v;
-                                setForms(prev => {
-                                  const autoName = [prev.product.brand, partCat].filter(Boolean).join(' ');
-                                  return {
-                                    ...prev,
-                                    product: {
-                                      ...prev.product,
-                                      part_category: partCat,
-                                      short_name: isCustomNameEdited ? prev.product.short_name : autoName
-                                    }
-                                  };
-                                });
-                              }
+                            onChange={(partCat) => {
+                              setForms(prev => {
+                                const autoName = [prev.product.brand, partCat].filter(Boolean).join(' ');
+                                return {
+                                  ...prev,
+                                  product: {
+                                    ...prev.product,
+                                    part_category: partCat,
+                                    short_name: isCustomNameEdited ? prev.product.short_name : autoName
+                                  }
+                                };
+                              });
                             }} 
-                            options={[
-                              ...uniquePartCategories.map(pc => [pc, pc]),
-                              ['__ADD_NEW__', '➕ Add New Part Category...']
-                            ]}
+                            options={uniquePartCategories.map(pc => ({ id: pc, name: pc }))}
+                            onAddNew={() => {
+                              setIsCustomPartCategory(true);
+                              setForms(prev => ({ ...prev, product: { ...prev.product, part_category: '' } }));
+                            }}
+                            addNewLabel="+ Add New Part Category..."
+                            allowClear={true}
                           />
                         )}
 
@@ -856,30 +997,26 @@ export default function StockPage({
                             }} 
                           />
                         ) : (
-                          <Select 
-                            label="Quality / Variant (Optional)" 
-                            placeholder="Select Variant"
+                          <SearchableCombobox 
+                            placeholder="Select Variant (Optional)" 
+                            searchPlaceholder="Search variant..."
                             value={forms.product.quality_variant || ''} 
-                            onChange={(v) => {
-                              if (v === '__ADD_NEW__') {
-                                setIsCustomQualityVariant(true);
-                                setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: '' } }));
-                              } else {
-                                const qualVar = v;
-                                setForms(prev => ({
-                                  ...prev,
-                                  product: {
-                                    ...prev.product,
-                                    quality_variant: qualVar
-                                  }
-                                }));
-                              }
+                            onChange={(qualVar) => {
+                              setForms(prev => ({
+                                ...prev,
+                                product: {
+                                  ...prev.product,
+                                  quality_variant: qualVar
+                                }
+                              }));
                             }} 
-                            options={[
-                              ['', '(None / Default)'],
-                              ...uniqueQualityVariants.map(qv => [qv, qv]),
-                              ['__ADD_NEW__', '➕ Add New Quality Variant...']
-                            ]}
+                            options={uniqueQualityVariants.map(qv => ({ id: qv, name: qv }))}
+                            onAddNew={() => {
+                              setIsCustomQualityVariant(true);
+                              setForms(prev => ({ ...prev, product: { ...prev.product, quality_variant: '' } }));
+                            }}
+                            addNewLabel="+ Add New Quality Variant..."
+                            allowClear={true}
                           />
                         )}
 
@@ -1791,6 +1928,21 @@ export default function StockPage({
           </div>
         </div>
       )}
+
+      {/* Quick Add Reference Modal for Brand, Manufacturing Brand & Supplier */}
+      <QuickAddReferenceModal
+        isOpen={quickAddModal.isOpen}
+        onClose={handleCloseQuickAdd}
+        type={quickAddModal.type}
+        existingItems={
+          quickAddModal.type === 'brand'
+            ? (data.reference?.brands || []).map((b) => typeof b === 'string' ? b : b.name || b.brand)
+            : quickAddModal.type === 'manufacturing-brand'
+              ? (data.reference?.manufacturingBrands || []).map((mb) => mb.name)
+              : (data.reference?.suppliers || []).map((s) => s.name)
+        }
+        onSave={handleSaveQuickAdd}
+      />
 
     </section>
   );

@@ -60,7 +60,15 @@ export default function SearchInput({
             transition={{ type: 'spring', stiffness: 500, damping: 25 }}
             type="button"
             className="p-1.5 rounded-full text-slate-400 hover:text-rose-500 hover:bg-rose-50 border border-transparent hover:border-rose-100 transition-colors shrink-0 ml-1"
-            onClick={(e) => onChange('', e)}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onChange('', e);
+            }}
           >
             <X size={18} />
           </motion.button>
