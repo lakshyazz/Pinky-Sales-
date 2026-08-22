@@ -2789,6 +2789,7 @@ function App() {
         image_urls: product.image_urls || [],
       },
     }));
+    setActive('stock');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -2820,6 +2821,7 @@ function App() {
         image_urls: product.image_urls || [],
       },
     }));
+    setActive('stock');
     showToast(`Cloned listing from ${productName(product)}. Edit variant or model and click "Add product" to save as new record.`);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -4128,24 +4130,16 @@ function App() {
             <PageWrapper activeKey="prices" key="prices">
               <PricesPage
                 role={role}
-                forms={forms}
-                reference={data.reference}
-                priceVisibility={data.priceVisibility}
-                newReference={newReference}
-                editingProductId={editingProductId}
+                shopId={shopId}
+                shops={data.shops || []}
+                suppliers={data.reference?.suppliers || []}
+                updateStock={updateStock}
+                showToast={showToast}
                 saving={saving}
                 items={priceItems}
                 search={priceSearch}
                 pager={productPager}
                 loading={productPageLoading}
-                onSubmitProduct={submitProduct}
-                onProductFieldChange={updateProductField}
-                onNewReferenceChange={setNewReference}
-                onAddReferenceOption={addReferenceOption}
-                onCancelEdit={() => {
-                  setEditingProductId('');
-                  setForms((prev) => ({ ...prev, product: initialForms.product }));
-                }}
                 onExportProducts={() => exportCsv('products')}
                 onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setPriceSearch(value); }}
                 onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
@@ -4157,11 +4151,6 @@ function App() {
                 productName={productName}
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
-                Empty={Empty}
-                FormPanel={FormPanel}
-                Input={Input}
-                Select={Select}
-                CardGrid={CardGrid}
               />
             </PageWrapper>
           )}

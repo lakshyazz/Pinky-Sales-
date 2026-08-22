@@ -28,8 +28,12 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Calculator,
+  Calendar,
+  Layers2
 } from 'lucide-react';
 import { getCategoryIconInfo } from '../ui/ProductThumbnail';
+import { calculateConsolidatedProduct } from '../../utils/productConsolidation';
 
 export default function ProductDetailPage({
   product,
@@ -44,7 +48,10 @@ export default function ProductDetailPage({
   fullModelList = (p) => p?.full_model_list || p?.model || '',
   priceLabel = (val) => `₹${Number(val || 0).toLocaleString('en-IN')}`,
 }) {
-  const activeProduct = product || selectedModel || model;
+  const rawProduct = product || selectedModel || model;
+  
+  // Calculate consolidated multi-supplier product metrics
+  const activeProduct = useMemo(() => calculateConsolidatedProduct(rawProduct), [rawProduct]);
 
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [imageErrorMap, setImageErrorMap] = useState({});
@@ -83,7 +90,6 @@ export default function ProductDetailPage({
       }
     };
 
-    // 1. Array properties
     const arraySources = [
       activeProduct.image_urls,
       activeProduct.imageUrls,
@@ -104,7 +110,6 @@ export default function ProductDetailPage({
       }
     }
 
-    // 2. Single string image properties
     const singleSources = [
       activeProduct.image,
       activeProduct.imageUrl,
@@ -136,7 +141,6 @@ export default function ProductDetailPage({
 
   const handleImageError = (imgUrl) => {
     if (!imgUrl) return;
-    
     if (!imageProxyMap[imgUrl] && !imgUrl.startsWith('data:') && !imgUrl.startsWith('blob:')) {
       let key = imgUrl;
       if (key.includes('/public/')) {
@@ -159,11 +163,10 @@ export default function ProductDetailPage({
         }
       }
     }
-
     setImageErrorMap((prev) => ({ ...prev, [imgUrl]: true }));
   };
 
-  // Parse compatible models list across commas, slashes, semicolons and newlines
+  // Parse compatible models list
   const rawCompat = fullModelList(activeProduct);
   const allCompatibleModels = useMemo(() => {
     if (!rawCompat) return [];
@@ -218,13 +221,11 @@ export default function ProductDetailPage({
 
   const retailPrice = Number(activeProduct?.sale_price || activeProduct?.retail_price || 0);
   const wholesalePrice = Number(activeProduct?.wholesale_price || 0);
-  const purchasePrice = Number(activeProduct?.purchase_price || 0);
-  const officialPrice = Number(activeProduct?.official_price || 0);
-
-  const profitAmount = purchasePrice > 0 && retailPrice > purchasePrice ? retailPrice - purchasePrice : 0;
-  const profitMargin = purchasePrice > 0 && retailPrice > purchasePrice 
-    ? Math.round(((retailPrice - purchasePrice) / purchasePrice) * 100)
-    : null;
+  const avgCostPrice = Number(activeProduct?.avg_cost_price ?? activeProduct?.purchase_price ?? 0);
+  const profitAmount = activeProduct?.profit_amount ?? (avgCostPrice > 0 && retailPrice > avgCostPrice ? retailPrice - avgCostPrice : 0);
+  const profitMargin = activeProduct?.profit_margin ?? (avgCostPrice > 0 && retailPrice > avgCostPrice ? Math.round(((retailPrice - avgCostPrice) / avgCostPrice) * 100) : null);
+  const supplierBreakdown = activeProduct?.supplier_breakdown || [];
+  const associatedSuppliers = activeProduct?.associated_suppliers || [];
 
   const coloursList = useMemo(() => {
     if (!activeProduct?.colours) return [];
@@ -297,9 +298,16 @@ export default function ProductDetailPage({
               <span>/</span>
               <span className="text-slate-800 dark:text-slate-200 font-bold truncate">{activeProduct.brand || 'Generic'}</span>
             </div>
-            <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white truncate mt-0.5">
-              {productName(activeProduct)}
-            </h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              <h2 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white truncate">
+                {productName(activeProduct)}
+              </h2>
+              {associatedSuppliers.length > 1 && (
+                <span className="px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-[10px] font-extrabold shrink-0">
+                  {associatedSuppliers.length} Suppliers Unified
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -308,7 +316,7 @@ export default function ProductDetailPage({
           <button
             type="button"
             onClick={() => {
-              const specSheet = `[PINKY SALES INVENTORY SPEC SHEET]\nProduct: ${productName(activeProduct)}\nBrand: ${activeProduct.brand || 'Generic'}\nCategory: ${partCategory}\nQuality: ${qualityBadge || 'Standard'}\nRetail Price: ${priceLabel(retailPrice)}\nStock: ${stockCount} Units\nSKU: ${skuCode}\nCompatible Models: ${allCompatibleModels.join(', ') || 'Universal'}`;
+              const specSheet = `[PINKY SALES INVENTORY SPEC SHEET]\nProduct: ${productName(activeProduct)}\nBrand: ${activeProduct.brand || 'Generic'}\nCategory: ${partCategory}\nQuality: ${qualityBadge || 'Standard'}\nRetail Price: ${priceLabel(retailPrice)}\nWeighted Avg Cost: ${priceLabel(avgCostPrice)}\nStock: ${stockCount} Units\nSKU: ${skuCode}\nCompatible Models: ${allCompatibleModels.join(', ') || 'Universal'}`;
               copyToClipboard(specSheet, 'nav_share');
             }}
             className="px-3 py-2 rounded-xl bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700 font-bold text-xs flex items-center gap-1.5 shadow-2xs active:scale-95 transition-all cursor-pointer"
@@ -449,23 +457,23 @@ export default function ProductDetailPage({
 
             {/* Thumbnails Gallery Strip */}
             {imageList.length > 1 && (
-              <div className="flex items-center gap-2.5 overflow-x-auto pb-1 no-scrollbar">
-                {imageList.map((imgUrl, idx) => (
+              <div className="flex items-center gap-2.5 overflow-x-auto pb-1">
+                {imageList.map((url, idx) => (
                   <button
                     key={idx}
                     type="button"
                     onClick={() => setActiveImageIndex(idx)}
-                    className={`relative w-16 h-16 rounded-xl border-2 overflow-hidden flex-shrink-0 bg-slate-50 dark:bg-slate-800 p-1 transition-all cursor-pointer ${
+                    className={`relative w-16 h-16 rounded-xl overflow-hidden border-2 shrink-0 transition-all cursor-pointer ${
                       activeImageIndex === idx
-                        ? 'border-slate-900 dark:border-white shadow-md scale-105'
-                        : 'border-slate-200 dark:border-slate-700 hover:border-slate-400 opacity-70 hover:opacity-100'
+                        ? 'border-cyan-600 dark:border-cyan-400 shadow-md scale-105'
+                        : 'border-slate-200 dark:border-slate-700 opacity-70 hover:opacity-100'
                     }`}
                   >
                     <img
-                      src={imageProxyMap[imgUrl] || imgUrl}
-                      alt={`Thumb ${idx + 1}`}
-                      className="w-full h-full object-contain"
-                      onError={() => handleImageError(imgUrl)}
+                      src={imageProxyMap[url] || url}
+                      alt={`Thumbnail ${idx + 1}`}
+                      className="w-full h-full object-cover"
+                      onError={() => handleImageError(url)}
                     />
                   </button>
                 ))}
@@ -474,69 +482,34 @@ export default function ProductDetailPage({
           </div>
         </div>
 
-        {/* ================= RIGHT COLUMN: Enterprise Details & Cards ================= */}
-        <div className="lg:col-span-7 flex flex-col space-y-6">
+        {/* ================= RIGHT COLUMN: Specs, Multi-Supplier Pricing & Inventory ================= */}
+        <div className="lg:col-span-7 flex flex-col gap-6">
 
-          {/* Hero Header Card */}
-          <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-3">
-            <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
-              <span>{activeProduct.brand || 'Generic'}</span>
-              <span>•</span>
-              <span>{partCategory}</span>
-              {activeProduct.manufacturing_brand_name && (
-                <>
-                  <span>•</span>
-                  <span className="text-cyan-700 dark:text-cyan-400 font-extrabold">{activeProduct.manufacturing_brand_name}</span>
-                </>
-              )}
-              {qualityBadge && (
-                <>
-                  <span>•</span>
-                  <span className="text-indigo-600 dark:text-indigo-400 font-extrabold">{qualityBadge}</span>
-                </>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight leading-tight">
-                {productName(activeProduct)}
-              </h1>
-
-              {/* Stock Status Pill */}
-              <div
-                className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-extrabold shadow-2xs ${stockBadgeClass}`}
-              >
-                <span className="w-2 h-2 rounded-full bg-current animate-pulse" />
-                <span>{stockLabel}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* 1. Price Intelligence KPI Grid */}
+          {/* 1. Commercial Pricing Tier Matrix */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                <Activity className="w-4 h-4" /> Price Intelligence & Profitability
-              </div>
-              {profitMargin !== null && (
-                <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 text-xs font-black">
-                  +{profitMargin}% Margin
+              <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
+                <Tag className="w-4 h-4" /> Commercial Pricing & Valuation
+              </span>
+              {supplierBreakdown.length > 1 && (
+                <span className="px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                  Blended Multi-Supplier Pricing
                 </span>
               )}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* Retail Price Card */}
+              {/* Retail / Sale Price Card */}
               <motion.div 
-                whileHover={{ y: -2, boxShadow: '0 8px 20px -4px rgba(16, 185, 129, 0.12)' }}
-                className="p-4 rounded-2xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-800/50 flex flex-col justify-between transition-all"
+                whileHover={{ y: -2, boxShadow: '0 8px 20px -4px rgba(13, 148, 136, 0.15)' }}
+                className="p-4 rounded-2xl bg-teal-50/50 dark:bg-teal-950/20 border border-teal-200/80 dark:border-teal-800/50 flex flex-col justify-between transition-all"
               >
-                <span className="text-[10px] uppercase font-extrabold tracking-wider text-emerald-700 dark:text-emerald-400">
-                  Retail Price
+                <span className="text-[10px] uppercase font-extrabold tracking-wider text-teal-700 dark:text-teal-400">
+                  Sale / Retail
                 </span>
                 <div className="mt-2">
-                  <span className="text-2xl sm:text-3xl font-black text-emerald-900 dark:text-emerald-200 tracking-tight">
-                    {priceLabel(retailPrice)}
+                  <span className="text-2xl sm:text-3xl font-black text-teal-950 dark:text-teal-200 tracking-tight">
+                    {retailPrice > 0 ? priceLabel(retailPrice) : '—'}
                   </span>
                 </div>
               </motion.div>
@@ -556,28 +529,38 @@ export default function ProductDetailPage({
                 </div>
               </motion.div>
 
-              {/* Cost Price Card */}
+              {/* Weighted Average Cost Price Card */}
               <motion.div 
                 whileHover={{ y: -2, boxShadow: '0 8px 20px -4px rgba(244, 63, 94, 0.12)' }}
                 className="p-4 rounded-2xl bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200/80 dark:border-rose-800/50 flex flex-col justify-between transition-all"
               >
-                <span className="text-[10px] uppercase font-extrabold tracking-wider text-rose-700 dark:text-rose-400">
-                  Cost Price
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-extrabold tracking-wider text-rose-700 dark:text-rose-400">
+                    Cost Price
+                  </span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-200/60 text-rose-800">
+                    Weighted Avg
+                  </span>
+                </div>
                 <div className="mt-2">
                   <span className="text-2xl sm:text-3xl font-black text-rose-950 dark:text-rose-200 tracking-tight">
-                    {canViewPurchase && purchasePrice > 0 ? priceLabel(purchasePrice) : '—'}
+                    {canViewPurchase && avgCostPrice > 0 ? priceLabel(avgCostPrice) : '—'}
                   </span>
+                  {canViewPurchase && supplierBreakdown.length > 1 && (
+                    <span className="block text-[10px] text-rose-600 font-semibold mt-0.5">
+                      across {supplierBreakdown.length} supplier batches
+                    </span>
+                  )}
                 </div>
               </motion.div>
 
-              {/* Profit Margin Card */}
+              {/* Profit Margin Card (Calculated vs Weighted Average Cost) */}
               <motion.div 
                 whileHover={{ y: -2, boxShadow: '0 8px 20px -4px rgba(16, 185, 129, 0.15)' }}
                 className="p-4 rounded-2xl bg-slate-900 dark:bg-slate-800 text-white border border-slate-800 dark:border-slate-700 flex flex-col justify-between shadow-sm transition-all"
               >
                 <span className="text-[10px] uppercase font-extrabold tracking-wider text-emerald-400 flex items-center gap-1">
-                  <TrendingUp className="w-3.5 h-3.5" /> Profit
+                  <TrendingUp className="w-3.5 h-3.5" /> Profit Margin
                 </span>
                 <div className="mt-2">
                   <span className="text-2xl sm:text-3xl font-black text-emerald-400 tracking-tight">
@@ -585,7 +568,7 @@ export default function ProductDetailPage({
                   </span>
                   {canViewPurchase && profitAmount > 0 && (
                     <span className="block text-[11px] text-slate-300 font-medium mt-0.5">
-                      {priceLabel(profitAmount)} / unit
+                      +{priceLabel(profitAmount)} / unit
                     </span>
                   )}
                 </div>
@@ -593,7 +576,101 @@ export default function ProductDetailPage({
             </div>
           </div>
 
-          {/* 2. Product Specifications Section */}
+          {/* 2. Multi-Supplier & Batches Breakdown Section */}
+          {canViewPurchase && supplierBreakdown.length > 0 && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 dark:text-indigo-400">
+                    <Truck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 dark:text-white">
+                      Suppliers & Batches Breakdown
+                    </h3>
+                    <p className="text-[11px] text-slate-500 font-medium">Individual supplier cost tiers and inventory volume</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs">
+                    {supplierBreakdown.length} Active {supplierBreakdown.length === 1 ? 'Source' : 'Sources'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Multi-Supplier Batches Table */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200/80 dark:border-slate-700/80 text-[10px] uppercase font-extrabold text-slate-400 tracking-wider">
+                      <th className="py-2.5 px-3">Supplier Name</th>
+                      <th className="py-2.5 px-3 text-right">Unit Cost</th>
+                      <th className="py-2.5 px-3 text-right">Stock Qty</th>
+                      <th className="py-2.5 px-3 text-right">Stock Share</th>
+                      <th className="py-2.5 px-3 text-right">Batch Value</th>
+                      <th className="py-2.5 px-3 text-right">Last Restock</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 font-medium">
+                    {supplierBreakdown.map((s, idx) => {
+                      const sharePercent = stockCount > 0 ? Math.round((s.quantity / stockCount) * 100) : 0;
+                      const batchValue = (Number(s.purchase_price) || 0) * (Number(s.quantity) || 0);
+
+                      return (
+                        <tr key={idx} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 transition-colors">
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-2">
+                              <span className="w-2 h-2 rounded-full bg-teal-500 shrink-0" />
+                              <strong className="font-bold text-slate-900 dark:text-slate-100">{s.supplier_name}</strong>
+                              {s.notes && (
+                                <span className="text-[10px] text-slate-400 truncate max-w-[120px]" title={s.notes}>
+                                  ({s.notes})
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="py-3 px-3 text-right font-bold text-rose-600 dark:text-rose-400">
+                            {priceLabel(s.purchase_price)}
+                          </td>
+                          <td className="py-3 px-3 text-right font-extrabold text-slate-900 dark:text-white">
+                            {s.quantity} pcs
+                          </td>
+                          <td className="py-3 px-3 text-right">
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-[10px]">
+                              {sharePercent}%
+                            </span>
+                          </td>
+                          <td className="py-3 px-3 text-right font-semibold text-slate-600 dark:text-slate-300">
+                            {priceLabel(batchValue)}
+                          </td>
+                          <td className="py-3 px-3 text-right text-slate-500 text-[11px]">
+                            {s.received_date ? new Date(s.received_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Weighted Average Formula Info Card */}
+              {supplierBreakdown.length > 1 && (
+                <div className="p-3.5 rounded-2xl bg-gradient-to-r from-slate-50 to-indigo-50/30 dark:from-slate-800/50 dark:to-indigo-950/30 border border-slate-200/80 dark:border-slate-700/80 flex items-start gap-2.5 text-xs text-slate-600 dark:text-slate-300">
+                  <Calculator className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1 leading-relaxed">
+                    <span className="font-bold text-slate-900 dark:text-white block">
+                      Weighted Average Cost Calculation:
+                    </span>
+                    <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                      Avg Cost = ({supplierBreakdown.map(s => `${s.quantity} pcs × ${priceLabel(s.purchase_price)}`).join(' + ')}) ÷ {stockCount} Total Units = <strong className="text-rose-600 font-bold">{priceLabel(avgCostPrice)}</strong>
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 3. Product Specifications Section */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-4">
             <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
               <Cpu className="w-4 h-4" /> Product Specifications
@@ -667,7 +744,7 @@ export default function ProductDetailPage({
             )}
           </div>
 
-          {/* 3. Stock Analytics & Inventory Health Overview */}
+          {/* 4. Stock Analytics & Inventory Health Overview */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
               <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-500 flex items-center gap-1.5">
@@ -681,7 +758,7 @@ export default function ProductDetailPage({
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40">
-                <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Available Stock</span>
+                <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Total Combined Stock</span>
                 <span className="text-lg font-black text-slate-900 dark:text-white mt-0.5 block">{stockCount} Units</span>
               </div>
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40">
@@ -713,7 +790,7 @@ export default function ProductDetailPage({
             </div>
           </div>
 
-          {/* 4. Compatible Device Models Section */}
+          {/* 5. Compatible Device Models Section */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-4">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
@@ -787,7 +864,7 @@ export default function ProductDetailPage({
                   >
                     {isCompatExpanded ? (
                       <>
-                        <ChevronUp className="w-4 h-4" /> Show less
+                        <ChevronDown className="w-4 h-4 rotate-180" /> Show less
                       </>
                     ) : (
                       <>
@@ -806,7 +883,7 @@ export default function ProductDetailPage({
             )}
           </div>
 
-          {/* 5. Description & Catalog Notes */}
+          {/* 6. Description & Catalog Notes */}
           {activeProduct.description && (
             <div className="bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xs space-y-2">
               <span className="text-xs font-extrabold uppercase tracking-wider text-slate-400 dark:text-slate-500 block">

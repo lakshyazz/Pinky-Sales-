@@ -8,6 +8,7 @@ import ProductThumbnail from '../ui/ProductThumbnail';
 import ProductImageUpload from '../ui/ProductImageUpload';
 import ProductDetailModal from './ProductDetailModal';
 import ProductDetailPage from './ProductDetailPage';
+import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
 
 export default function ModelsPage({
   items = [],
@@ -34,7 +35,7 @@ export default function ModelsPage({
       {title || 'No matching models found'}
     </div>
   ),
-  reference = { manufacturingBrands: [] },
+  reference = { manufacturingBrands: [], suppliers: [] },
 }) {
   const isSuperAdmin = role === 'superadmin';
   const isShopkeeper = role === 'shopkeeper' || role === 'admin';
@@ -85,25 +86,36 @@ export default function ModelsPage({
   const [addStockForm, setAddStockForm] = useState({
     quantity: '',
     sale_price: '',
+    purchase_price: '',
+    supplier_id: '',
     colour: '',
     notes: '',
   });
   const [savingStock, setSavingStock] = useState(false);
 
+  // Consolidate identical products from different suppliers
+  const consolidatedItems = useMemo(() => {
+    return consolidateProductList(items);
+  }, [items]);
+
   // Extract unique categories for quick filter pills
   const categories = useMemo(() => {
     const set = new Set(['All']);
-    items.forEach((item) => {
-      if (item.category) set.add(item.category.trim());
+    consolidatedItems.forEach((item) => {
+      const cat = item.category || item.part_category;
+      if (cat) set.add(cat.trim());
     });
     return Array.from(set);
-  }, [items]);
+  }, [consolidatedItems]);
 
   // Filter items by category
   const filteredItems = useMemo(() => {
-    if (selectedCategory === 'All') return items;
-    return items.filter((item) => String(item.category || '').trim().toLowerCase() === selectedCategory.toLowerCase());
-  }, [items, selectedCategory]);
+    if (selectedCategory === 'All') return consolidatedItems;
+    return consolidatedItems.filter((item) => {
+      const cat = String(item.category || item.part_category || '').trim().toLowerCase();
+      return cat === selectedCategory.toLowerCase();
+    });
+  }, [consolidatedItems, selectedCategory]);
 
   const handleOpenDetails = (product) => {
     setInspectProduct(product);
@@ -145,6 +157,8 @@ export default function ModelsPage({
     setAddStockForm({
       quantity: '',
       sale_price: product.sale_price !== undefined && product.sale_price !== null ? String(product.sale_price) : '',
+      purchase_price: product.avg_cost_price !== undefined && product.avg_cost_price !== null ? String(product.avg_cost_price) : (product.purchase_price !== undefined ? String(product.purchase_price) : ''),
+      supplier_id: product.supplier_id ? String(product.supplier_id) : '',
       colour: '',
       notes: '',
     });
@@ -166,7 +180,10 @@ export default function ModelsPage({
       const payload = {
         product_id: addStockProduct.id,
         quantity: qty,
+        adjustment_mode: 'add',
         retail_price: addStockForm.sale_price ? Number(addStockForm.sale_price) : undefined,
+        purchase_price: addStockForm.purchase_price ? Number(addStockForm.purchase_price) : undefined,
+        supplier_id: addStockForm.supplier_id ? Number(addStockForm.supplier_id) : undefined,
         colour: addStockForm.colour || undefined,
         notes: addStockForm.notes || `Stock added via model catalog (${productName(addStockProduct)})`,
       };
@@ -367,6 +384,36 @@ export default function ModelsPage({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Supplier (Batch Source)</label>
+                      <select
+                        value={addStockForm.supplier_id}
+                        onChange={(e) => setAddStockForm({ ...addStockForm, supplier_id: e.target.value })}
+                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
+                      >
+                        <option value="">Direct Stock / Default</option>
+                        {(reference?.suppliers || []).map((s) => (
+                          <option key={s.id} value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {isSuperAdmin && (
+                      <div>
+                        <label className="text-[11px] font-extrabold text-rose-700 uppercase tracking-wider block mb-1">Batch Unit Cost (₹)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={addStockForm.purchase_price}
+                          onChange={(e) => setAddStockForm({ ...addStockForm, purchase_price: e.target.value })}
+                          placeholder="e.g. 390"
+                          className="w-full px-3.5 py-2.5 bg-rose-50/50 border border-rose-200 rounded-xl font-bold text-rose-900 outline-none focus:border-rose-400 focus:bg-white transition-all text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
                       <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Retail Selling Price (₹)</label>
                       <input
                         type="number"
@@ -394,6 +441,31 @@ export default function ModelsPage({
                       />
                     </div>
                   </div>
+
+                  {/* Dynamic Blended Cost Calculation Preview */}
+                  {isSuperAdmin && addStockForm.quantity && addStockForm.purchase_price && (
+                    <div className="p-3 rounded-2xl bg-indigo-50/50 border border-indigo-200/80 text-xs text-indigo-950 flex items-start gap-2.5">
+                      <div className="p-1 rounded-lg bg-indigo-200/60 text-indigo-700 shrink-0 mt-0.5">
+                        <Tag className="w-3.5 h-3.5" />
+                      </div>
+                      <div className="space-y-0.5 min-w-0">
+                        <span className="font-bold block">Weighted Cost Live Forecast</span>
+                        {(() => {
+                          const curQty = Number(addStockProduct.available_stock || 0);
+                          const curCost = Number(addStockProduct.avg_cost_price || addStockProduct.purchase_price || 0);
+                          const addQty = Number(addStockForm.quantity || 0);
+                          const addCost = Number(addStockForm.purchase_price || 0);
+                          const totQty = curQty + addQty;
+                          const newBlendedCost = totQty > 0 ? ((curQty * curCost) + (addQty * addCost)) / totQty : addCost;
+                          return (
+                            <p className="text-[11px] text-indigo-800">
+                              Current: {curQty} pcs @ {priceLabel(curCost)} · Adding: +{addQty} pcs @ {priceLabel(addCost)} → <strong>New Blended Avg: {priceLabel(Math.round(newBlendedCost * 100) / 100)}</strong>
+                            </p>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
 
                   <div>
                     <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Batch Notes (Optional)</label>
@@ -431,174 +503,188 @@ export default function ModelsPage({
         {/* Edit Product Modal */}
         <AnimatePresence>
           {editingProduct && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/40 backdrop-blur-sm overflow-y-auto">
+            <div 
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-black/60 backdrop-blur-sm"
+              onClick={() => setEditingProduct(null)}
+            >
               <motion.div
-                initial={{ opacity: 0, scale: 0.94 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.94 }}
-                className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6 my-8"
+                initial={{ opacity: 0, scale: 0.96, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.96, y: 10 }}
+                transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+                className="relative w-full max-w-3xl max-h-[90vh] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-2xl overflow-hidden my-auto"
+                onClick={(e) => e.stopPropagation()}
               >
-                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                {/* Sticky Header */}
+                <div className="sticky top-0 z-10 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 p-4 sm:px-6 flex items-center justify-between shrink-0">
                   <div className="flex items-center gap-3">
                     <div className="p-2.5 rounded-2xl bg-cyan-600 text-white shadow-md shadow-cyan-600/20">
                       <Edit3 className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-xl font-black text-slate-900">Edit Model Details</h3>
+                      <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">Edit Model Details</h3>
                       <p className="text-xs text-slate-500 font-medium">Update pricing, compatibility, brand, supplier and specifications.</p>
                     </div>
                   </div>
-                  <button onClick={() => setEditingProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl cursor-pointer">
+                  <button 
+                    type="button"
+                    onClick={() => setEditingProduct(null)} 
+                    className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                  >
                     <X className="w-5 h-5" />
                   </button>
                 </div>
 
-                <form onSubmit={handleSaveEdit} className="py-4 space-y-4 text-xs">
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product / Model Name *</label>
-                    <input
-                      type="text"
-                      required
-                      value={editForm.short_name}
-                      onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
-                      placeholder="e.g. iPhone 13 Pro Display Combo"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Form Body Container */}
+                <form onSubmit={handleSaveEdit} className="flex-1 overflow-y-auto flex flex-col min-h-0">
+                  <div className="p-4 sm:p-6 space-y-5 flex-1 text-xs">
                     <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Device Brand</label>
+                      <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Product / Model Name *</label>
                       <input
                         type="text"
-                        value={editForm.brand}
-                        onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
-                        placeholder="e.g. Apple, Samsung, Xiaomi"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Part Category</label>
-                      <input
-                        type="text"
-                        value={editForm.product_type}
-                        onChange={(e) => setEditForm({ ...editForm, product_type: e.target.value, category: e.target.value })}
-                        placeholder="e.g. Display, Battery, Camera"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Quality Variant</label>
-                      <input
-                        type="text"
-                        value={editForm.quality_variant}
-                        onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
-                        placeholder="e.g. OLED, HD+ LCD, Original OEM"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
-                      <select
-                        value={editForm.manufacturing_brand_id}
-                        onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
-                      >
-                        <option value="">Select Manufacturing Brand (Optional)</option>
-                        {reference?.manufacturingBrands?.map((mb) => (
-                          <option key={mb.id} value={mb.id}>{mb.name}</option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Retail Selling Price (₹) *</label>
-                      <input
-                        type="number"
-                        step="any"
                         required
-                        disabled={!canEditSellingPrice}
-                        value={editForm.sale_price}
-                        onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
-                        placeholder="e.g. 1250"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                        value={editForm.short_name}
+                        onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
+                        placeholder="e.g. iPhone 13 Pro Display Combo"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all"
                       />
                     </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Device Brand</label>
+                        <input
+                          type="text"
+                          value={editForm.brand}
+                          onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
+                          placeholder="e.g. Apple, Samsung, Xiaomi"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Part Category</label>
+                        <input
+                          type="text"
+                          value={editForm.product_type}
+                          onChange={(e) => setEditForm({ ...editForm, product_type: e.target.value, category: e.target.value })}
+                          placeholder="e.g. Display, Battery, Camera"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Quality Variant</label>
+                        <input
+                          type="text"
+                          value={editForm.quality_variant}
+                          onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
+                          placeholder="e.g. OLED, HD+ LCD, Original OEM"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
+                        <select
+                          value={editForm.manufacturing_brand_id}
+                          onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                        >
+                          <option value="">Select Manufacturing Brand (Optional)</option>
+                          {reference?.manufacturingBrands?.map((mb) => (
+                            <option key={mb.id} value={mb.id}>{mb.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Retail Selling Price (₹) *</label>
+                        <input
+                          type="number"
+                          step="any"
+                          required
+                          disabled={!canEditSellingPrice}
+                          value={editForm.sale_price}
+                          onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
+                          placeholder="e.g. 1250"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Wholesale Price (₹)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={editForm.wholesale_price}
+                          onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
+                          placeholder="e.g. 1100"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Cost / Purchase (₹)</label>
+                        <input
+                          type="number"
+                          step="any"
+                          disabled={!isSuperAdmin}
+                          value={editForm.purchase_price}
+                          onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
+                          placeholder="e.g. 950"
+                          className={`w-full px-3.5 py-2.5 rounded-xl font-bold text-xs outline-none transition-all ${
+                            !isSuperAdmin
+                              ? 'bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-slate-400 cursor-not-allowed'
+                              : 'bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800'
+                          }`}
+                        />
+                      </div>
+                    </div>
+
                     <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Wholesale Price (₹)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={editForm.wholesale_price}
-                        onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
-                        placeholder="e.g. 1100"
-                        className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all"
+                      <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Compatible Device Models (Comma or Slash separated)</label>
+                      <textarea
+                        rows={2}
+                        value={editForm.full_model_list}
+                        onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
+                        placeholder="e.g. RLM C55, RLM C65 5G, Nord N30, Reno 6"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-medium text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all resize-none"
                       />
                     </div>
+
                     <div>
-                      <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Cost / Purchase (₹)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        disabled={!isSuperAdmin}
-                        value={editForm.purchase_price}
-                        onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
-                        placeholder="e.g. 950"
-                        className={`w-full px-3.5 py-2.5 rounded-xl font-bold text-xs outline-none transition-all ${
-                          !isSuperAdmin
-                            ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
-                            : 'bg-slate-50 border border-slate-200 text-slate-900 focus:border-cyan-500 focus:bg-white'
-                        }`}
+                      <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Product Photo / Image URL</label>
+                      <ProductImageUpload
+                        value={editForm.image_url}
+                        urls={editForm.image_urls}
+                        onChange={({ image_url, image_urls }) => {
+                          setEditForm((prev) => ({
+                            ...prev,
+                            image_url,
+                            image_urls: image_urls || (image_url ? [image_url] : []),
+                          }));
+                        }}
+                        api={api}
+                        session={session}
+                        disabled={savingEdit}
                       />
                     </div>
                   </div>
 
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Compatible Device Models (Comma or Slash separated)</label>
-                    <textarea
-                      rows={2}
-                      value={editForm.full_model_list}
-                      onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
-                      placeholder="e.g. RLM C55, RLM C65 5G, Nord N30, Reno 6"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all resize-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Photo / Image URL</label>
-                    <ProductImageUpload
-                      value={editForm.image_url}
-                      urls={editForm.image_urls}
-                      onChange={({ image_url, image_urls }) => {
-                        setEditForm((prev) => ({
-                          ...prev,
-                          image_url,
-                          image_urls: image_urls || (image_url ? [image_url] : []),
-                        }));
-                      }}
-                      api={api}
-                      session={session}
-                      disabled={savingEdit}
-                    />
-                  </div>
-
-                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                  {/* Sticky Footer */}
+                  <div className="sticky bottom-0 z-10 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 p-4 sm:px-6 flex items-center justify-end gap-3 shrink-0">
                     <button
                       type="button"
                       onClick={() => setEditingProduct(null)}
-                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
+                      className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={savingEdit}
-                      className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md cursor-pointer"
+                      className="px-6 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-white dark:hover:bg-slate-100 dark:text-slate-900 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-1.5 shadow-md transition-all cursor-pointer"
                     >
                       {savingEdit ? 'Saving...' : 'Save Changes'}
                     </button>
@@ -1143,357 +1229,372 @@ export default function ModelsPage({
         )}
       </AnimatePresence>
 
-      {/* Edit Product & Prices Modal */}
+      {/* Edit Product Modal */}
       <AnimatePresence>
         {editingProduct && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md overflow-y-auto">
+          <div 
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 overflow-y-auto bg-black/60 backdrop-blur-sm"
+            onClick={() => setEditingProduct(null)}
+          >
             <motion.div
-              initial={{ opacity: 0, scale: 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.94 }}
-              className="relative w-full max-w-2xl bg-white border border-slate-200 rounded-3xl shadow-2xl overflow-hidden p-6 my-8"
+              initial={{ opacity: 0, scale: 0.96, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.96, y: 10 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+              className="relative w-full max-w-3xl max-h-[90vh] flex flex-col bg-white dark:bg-slate-900 rounded-2xl shadow-2xl overflow-hidden my-auto"
+              onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+              {/* Sticky Header */}
+              <div className="sticky top-0 z-10 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 p-4 sm:px-6 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-3">
                   <div className="p-2.5 rounded-2xl bg-cyan-600 text-white shadow-md shadow-cyan-600/20">
                     <Edit3 className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="text-xl font-black text-slate-900">Edit Product & Pricing</h3>
+                    <h3 className="text-lg sm:text-xl font-black text-slate-900 dark:text-white">Edit Product & Pricing</h3>
                     <p className="text-xs text-slate-500 font-medium">Update model specifications, device compatibility, and selling prices.</p>
                   </div>
                 </div>
-                <button onClick={() => setEditingProduct(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
+                <button 
+                  type="button"
+                  onClick={() => setEditingProduct(null)} 
+                  className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-all cursor-pointer"
+                >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <form onSubmit={handleSaveEdit} className="py-5 space-y-4 text-xs">
-                {/* Row 1: Display Name & Compatible Devices */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Display Name *</label>
-                    <input
-                      type="text"
-                      value={editForm.short_name}
-                      onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
-                      placeholder="e.g. iPhone 13 Display Original"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    />
+              {/* Form Container with Scrollable Body & Sticky Footer */}
+              <form onSubmit={handleSaveEdit} className="flex-1 overflow-y-auto flex flex-col min-h-0">
+                <div className="p-4 sm:p-6 space-y-5 flex-1 text-xs">
+                  {/* Row 1: Display Name & Compatible Devices */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Product Display Name *</label>
+                      <input
+                        type="text"
+                        required
+                        value={editForm.short_name}
+                        onChange={(e) => setEditForm({ ...editForm, short_name: e.target.value })}
+                        placeholder="e.g. iPhone 13 Display Original"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Compatible Phone Models (Full List)</label>
+                      <input
+                        type="text"
+                        value={editForm.full_model_list}
+                        onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
+                        placeholder="e.g. iPhone 13, iPhone 13 Pro, A2633"
+                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                      />
+                    </div>
                   </div>
 
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Compatible Phone Models (Full List)</label>
-                    <input
-                      type="text"
-                      value={editForm.full_model_list}
-                      onChange={(e) => setEditForm({ ...editForm, full_model_list: e.target.value })}
-                      placeholder="e.g. iPhone 13, iPhone 13 Pro, A2633"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    />
-                  </div>
-                </div>
-
-                {/* Row 2: Brand, Manufacturing Brand & Supplier */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Brand *</label>
-                    <select
-                      value={editForm.brand}
-                      onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    >
-                      <option value="">Select Brand</option>
-                      {(reference?.brands || []).map((b) => (
-                        <option key={b.id || b.name} value={b.name}>{b.name}</option>
-                      ))}
-                      {editForm.brand && !(reference?.brands || []).some(b => b.name === editForm.brand) && (
-                        <option value={editForm.brand}>{editForm.brand}</option>
-                      )}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
-                    <select
-                      value={editForm.manufacturing_brand_id}
-                      onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    >
-                      <option value="">Select Mfg Brand</option>
-                      {(reference?.manufacturingBrands || [])
-                        .filter(mb => mb.is_active || String(mb.id) === String(editForm.manufacturing_brand_id))
-                        .map((mb) => (
-                          <option key={mb.id} value={mb.id}>{mb.name}</option>
-                        ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Supplier (Optional)</label>
-                    <select
-                      value={editForm.supplier_id}
-                      onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    >
-                      <option value="">Select Supplier</option>
-                      {(reference?.suppliers || [])
-                        .filter(s => s.is_active || String(s.id) === String(editForm.supplier_id))
-                        .map((s) => (
-                          <option key={s.id} value={s.id}>{s.name}</option>
-                        ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Row 3: Part Category & Quality Variant */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Part Category *</label>
-                    <input
-                      type="text"
-                      value={editForm.product_type || editForm.category || ''}
-                      onChange={(e) => setEditForm({ ...editForm, product_type: e.target.value, category: e.target.value })}
-                      placeholder="e.g. Display, Battery, Camera, Speaker"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Product Quality / Variant</label>
-                    <input
-                      type="text"
-                      value={editForm.quality_variant || ''}
-                      onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
-                      placeholder="e.g. OLED, Incell, With Frame, Fresh New"
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs"
-                    />
-                  </div>
-                </div>
-
-                {/* Row 4: Pricing Tiers */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider">Product Pricing Tiers</span>
-                    {isShopkeeper && !isSuperAdmin && (
-                      <span className="text-[10px] font-bold text-teal-700 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200/60 inline-flex items-center gap-1">
-                        <Check className="w-3 h-3 text-teal-600" /> Shopkeeper Branch Selling Price Control Enabled
-                      </span>
-                    )}
-                    {!isSuperAdmin && !isShopkeeper && (
-                      <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60 inline-flex items-center gap-1">
-                        <Lock className="w-3 h-3" /> Price editing restricted
-                      </span>
-                    )}
-                  </div>
+                  {/* Row 2: Brand, Manufacturing Brand & Supplier */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                      <label className="text-[11px] font-extrabold text-emerald-700 uppercase tracking-wider block mb-1">Retail Sale Price (₹)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        disabled={!canEditSellingPrice}
-                        value={editForm.sale_price}
-                        onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
-                        onWheel={(e) => e.target.blur()}
-                        placeholder="e.g. 540"
-                        title={!canEditSellingPrice ? 'Only Shopkeepers and Super Admin can edit prices' : ''}
-                        className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
-                          !canEditSellingPrice
-                            ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
-                            : 'bg-emerald-50/60 border border-emerald-200 text-emerald-700 focus:border-emerald-500 focus:bg-white'
-                        }`}
-                      />
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Brand *</label>
+                        <select
+                          value={editForm.brand}
+                          onChange={(e) => setEditForm({ ...editForm, brand: e.target.value })}
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                        >
+                          <option value="">Select Brand</option>
+                          {(reference?.brands || []).map((b) => (
+                            <option key={b.id || b.name} value={b.name}>{b.name}</option>
+                          ))}
+                          {editForm.brand && !(reference?.brands || []).some(b => b.name === editForm.brand) && (
+                            <option value={editForm.brand}>{editForm.brand}</option>
+                          )}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Manufacturing Brand</label>
+                        <select
+                          value={editForm.manufacturing_brand_id}
+                          onChange={(e) => setEditForm({ ...editForm, manufacturing_brand_id: e.target.value })}
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                        >
+                          <option value="">Select Mfg Brand</option>
+                          {(reference?.manufacturingBrands || [])
+                            .filter(mb => mb.is_active || String(mb.id) === String(editForm.manufacturing_brand_id))
+                            .map((mb) => (
+                              <option key={mb.id} value={mb.id}>{mb.name}</option>
+                            ))}
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Supplier (Optional)</label>
+                        <select
+                          value={editForm.supplier_id}
+                          onChange={(e) => setEditForm({ ...editForm, supplier_id: e.target.value })}
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                        >
+                          <option value="">Select Supplier</option>
+                          {(reference?.suppliers || [])
+                            .filter(s => s.is_active || String(s.id) === String(editForm.supplier_id))
+                            .map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                        </select>
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="text-[11px] font-extrabold text-indigo-700 uppercase tracking-wider block mb-1">Wholesale Price (₹)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        disabled={!isSuperAdmin}
-                        value={editForm.wholesale_price}
-                        onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
-                        onWheel={(e) => e.target.blur()}
-                        placeholder="e.g. 480"
-                        title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
-                        className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
-                          !isSuperAdmin
-                            ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
-                            : 'bg-indigo-50/60 border border-indigo-200 text-indigo-700 focus:border-indigo-500 focus:bg-white'
-                        }`}
-                      />
+                    {/* Row 3: Part Category & Quality Variant */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Part Category *</label>
+                        <input
+                          type="text"
+                          value={editForm.product_type || editForm.category || ''}
+                          onChange={(e) => setEditForm({ ...editForm, product_type: e.target.value, category: e.target.value })}
+                          placeholder="e.g. Display, Battery, Camera, Speaker"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Product Quality / Variant</label>
+                        <input
+                          type="text"
+                          value={editForm.quality_variant || ''}
+                          onChange={(e) => setEditForm({ ...editForm, quality_variant: e.target.value })}
+                          placeholder="e.g. OLED, Incell, With Frame, Fresh New"
+                          className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs"
+                        />
+                      </div>
                     </div>
 
+                    {/* Row 4: Pricing Tiers */}
                     <div>
-                      <label className="text-[11px] font-extrabold text-rose-700 uppercase tracking-wider block mb-1">Purchase Cost (₹)</label>
-                      <input
-                        type="number"
-                        step="any"
-                        disabled={!isSuperAdmin}
-                        value={editForm.purchase_price}
-                        onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
-                        onWheel={(e) => e.target.blur()}
-                        placeholder="e.g. 380"
-                        title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
-                        className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
-                          !isSuperAdmin
-                            ? 'bg-slate-100 border border-slate-200 text-slate-400 cursor-not-allowed'
-                            : 'bg-rose-50/60 border border-rose-200 text-rose-700 focus:border-rose-500 focus:bg-white'
-                        }`}
-                      />
-                    </div>
-                  </div>
-                </div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider">Product Pricing Tiers</span>
+                        {isShopkeeper && !isSuperAdmin && (
+                          <span className="text-[10px] font-bold text-teal-700 dark:text-teal-400 bg-teal-50 dark:bg-teal-950/40 px-2 py-0.5 rounded-md border border-teal-200/60 dark:border-teal-800/60 inline-flex items-center gap-1">
+                            <Check className="w-3 h-3 text-teal-600" /> Shopkeeper Branch Selling Price Control Enabled
+                          </span>
+                        )}
+                        {!isSuperAdmin && !isShopkeeper && (
+                          <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 px-2 py-0.5 rounded-md border border-amber-200/60 dark:border-amber-800/60 inline-flex items-center gap-1">
+                            <Lock className="w-3 h-3" /> Price editing restricted
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                          <label className="text-[11px] font-extrabold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider block mb-1">Retail Sale Price (₹)</label>
+                          <input
+                            type="number"
+                            step="any"
+                            disabled={!canEditSellingPrice}
+                            value={editForm.sale_price}
+                            onChange={(e) => setEditForm({ ...editForm, sale_price: e.target.value })}
+                            onWheel={(e) => e.target.blur()}
+                            placeholder="e.g. 540"
+                            title={!canEditSellingPrice ? 'Only Shopkeepers and Super Admin can edit prices' : ''}
+                            className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
+                              !canEditSellingPrice
+                                ? 'bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-slate-400 cursor-not-allowed'
+                                : 'bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 focus:border-emerald-500 focus:bg-white dark:focus:bg-slate-800'
+                            }`}
+                          />
+                        </div>
 
-                {/* Cloudflare R2 Product Image Storage */}
-                <div className="pt-1">
-                  <ProductImageUpload
-                    imageUrl={editForm.image_url || ''}
-                    imageUrls={editForm.image_urls || []}
-                    onImageChange={({ imageUrl, imageUrls }) => {
-                      setEditForm(prev => ({
-                        ...prev,
-                        image_url: imageUrl,
-                        image_urls: imageUrls,
-                      }));
-                    }}
-                    category={editForm.product_type || editForm.category || 'Display'}
-                    disabled={savingEdit}
-                  />
-                </div>
+                        <div>
+                          <label className="text-[11px] font-extrabold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider block mb-1">Wholesale Price (₹)</label>
+                          <input
+                            type="number"
+                            step="any"
+                            disabled={!isSuperAdmin}
+                            value={editForm.wholesale_price}
+                            onChange={(e) => setEditForm({ ...editForm, wholesale_price: e.target.value })}
+                            onWheel={(e) => e.target.blur()}
+                            placeholder="e.g. 480"
+                            title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
+                            className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
+                              !isSuperAdmin
+                                ? 'bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-slate-400 cursor-not-allowed'
+                                : 'bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-800'
+                            }`}
+                          />
+                        </div>
 
-                {/* Stock Status Selector Section */}
-                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block">STOCK STATUS</span>
-                      <div className="group relative inline-flex items-center">
-                        <Info className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-600 transition-colors" />
-                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-52 p-2 bg-slate-900 text-white text-[10px] rounded-lg shadow-lg z-20 pointer-events-none text-center">
-                          Selecting "No Stock" sets available warehouse quantity to zero so other shopkeepers see no stock in warehouse.
+                        <div>
+                          <label className="text-[11px] font-extrabold text-rose-700 dark:text-rose-400 uppercase tracking-wider block mb-1">Purchase Cost (₹)</label>
+                          <input
+                            type="number"
+                            step="any"
+                            disabled={!isSuperAdmin}
+                            value={editForm.purchase_price}
+                            onChange={(e) => setEditForm({ ...editForm, purchase_price: e.target.value })}
+                            onWheel={(e) => e.target.blur()}
+                            placeholder="e.g. 380"
+                            title={!isSuperAdmin ? 'Only Super Admin can edit prices' : ''}
+                            className={`w-full px-3.5 py-2.5 rounded-xl font-black text-xs outline-none transition-all ${
+                              !isSuperAdmin
+                                ? 'bg-slate-100 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 text-slate-400 cursor-not-allowed'
+                                : 'bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 focus:border-rose-500 focus:bg-white dark:focus:bg-slate-800'
+                            }`}
+                          />
                         </div>
                       </div>
                     </div>
-                    <span className="text-[10px] text-slate-400 font-semibold">
-                      {editForm.stock_status === 'no_stock'
-                        ? 'Warehouse stock will be set to 0'
-                        : editForm.stock_status === 'low_stock'
-                        ? 'Marked as low stock'
-                        : 'In stock & available'}
-                    </span>
-                  </div>
 
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setEditForm({ ...editForm, stock_status: 'in_stock' })}
-                      className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border ${
-                        editForm.stock_status === 'in_stock'
-                          ? 'bg-emerald-50/90 text-emerald-700 border-emerald-300 shadow-sm ring-2 ring-emerald-500/20'
-                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100/60 hover:text-slate-700'
-                      }`}
-                    >
-                      <CheckCircle2 className={`w-4 h-4 ${editForm.stock_status === 'in_stock' ? 'text-emerald-600' : 'text-emerald-500'}`} />
-                      In Stock
-                    </button>
+                    {/* Cloudflare R2 Product Image Storage */}
+                    <div className="pt-1">
+                      <ProductImageUpload
+                        imageUrl={editForm.image_url || ''}
+                        imageUrls={editForm.image_urls || []}
+                        onImageChange={({ imageUrl, imageUrls }) => {
+                          setEditForm(prev => ({
+                            ...prev,
+                            image_url: imageUrl,
+                            image_urls: imageUrls,
+                          }));
+                        }}
+                        category={editForm.product_type || editForm.category || 'Display'}
+                        disabled={savingEdit}
+                      />
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setEditForm({ ...editForm, stock_status: 'low_stock' })}
-                      className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border ${
-                        editForm.stock_status === 'low_stock'
-                          ? 'bg-amber-50/90 text-amber-700 border-amber-300 shadow-sm ring-2 ring-amber-500/20'
-                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100/60 hover:text-slate-700'
-                      }`}
-                    >
-                      <ShieldAlert className={`w-4 h-4 ${editForm.stock_status === 'low_stock' ? 'text-amber-600' : 'text-amber-500'}`} />
-                      Low Stock
-                    </button>
+                    {/* Stock Status Selector Section */}
+                    <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700 rounded-2xl space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">STOCK STATUS</span>
+                          <div className="group relative inline-flex items-center">
+                            <Info className="w-3.5 h-3.5 text-slate-400 cursor-pointer hover:text-slate-600 transition-colors" />
+                            <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-1.5 hidden group-hover:block w-52 p-2 bg-slate-900 text-white text-[10px] rounded-lg shadow-lg z-20 pointer-events-none text-center">
+                              Selecting "No Stock" sets available warehouse quantity to zero so other shopkeepers see no stock in warehouse.
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-slate-400 font-semibold">
+                          {editForm.stock_status === 'no_stock'
+                            ? 'Warehouse stock will be set to 0'
+                            : editForm.stock_status === 'low_stock'
+                            ? 'Marked as low stock'
+                            : 'In stock & available'}
+                        </span>
+                      </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setEditForm({ ...editForm, stock_status: 'no_stock', stock_quantity: '0' })}
-                      className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border ${
-                        editForm.stock_status === 'no_stock'
-                          ? 'bg-rose-50 text-rose-700 border-rose-300 shadow-sm ring-2 ring-rose-500/20'
-                          : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-100/60 hover:text-slate-700'
-                      }`}
-                    >
-                      <XCircle className={`w-4 h-4 ${editForm.stock_status === 'no_stock' ? 'text-rose-600' : 'text-rose-500'}`} />
-                      No Stock
-                    </button>
-                  </div>
-                </div>
-
-                {/* Color Management Section */}
-                <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block">Model Available Colours</span>
-                    <span className="text-[10px] text-slate-400 font-semibold">Click chip to toggle on/off</span>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {(reference?.colours || []).map((col) => {
-                      const activeColours = (editForm.colours || '').split(',').map(c => c.trim()).filter(Boolean);
-                      const isSelected = activeColours.some(c => c.toLowerCase() === col.name.toLowerCase());
-                      return (
+                      <div className="flex items-center gap-3">
                         <button
                           type="button"
-                          key={col.id || col.name}
-                          onClick={() => {
-                            let next;
-                            if (isSelected) {
-                              next = activeColours.filter(c => c.toLowerCase() !== col.name.toLowerCase());
-                            } else {
-                              next = [...activeColours, col.name];
-                            }
-                            setEditForm({ ...editForm, colours: next.join(', ') });
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border ${
-                            isSelected
-                              ? 'bg-teal-600 text-white border-teal-700 shadow-sm'
-                              : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                          onClick={() => setEditForm({ ...editForm, stock_status: 'in_stock' })}
+                          className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer ${
+                            editForm.stock_status === 'in_stock'
+                              ? 'bg-emerald-50/90 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 shadow-sm ring-2 ring-emerald-500/20'
+                              : 'bg-white dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-100/60 hover:text-slate-700'
                           }`}
                         >
-                          {isSelected ? `✓ ${col.name}` : `+ ${col.name}`}
+                          <CheckCircle2 className={`w-4 h-4 ${editForm.stock_status === 'in_stock' ? 'text-emerald-600' : 'text-emerald-500'}`} />
+                          In Stock
                         </button>
-                      );
-                    })}
+
+                        <button
+                          type="button"
+                          onClick={() => setEditForm({ ...editForm, stock_status: 'low_stock' })}
+                          className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer ${
+                            editForm.stock_status === 'low_stock'
+                              ? 'bg-amber-50/90 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border-amber-300 dark:border-amber-700 shadow-sm ring-2 ring-amber-500/20'
+                              : 'bg-white dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-100/60 hover:text-slate-700'
+                          }`}
+                        >
+                          <ShieldAlert className={`w-4 h-4 ${editForm.stock_status === 'low_stock' ? 'text-amber-600' : 'text-amber-500'}`} />
+                          Low Stock
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setEditForm({ ...editForm, stock_status: 'no_stock', stock_quantity: '0' })}
+                          className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-2 border cursor-pointer ${
+                            editForm.stock_status === 'no_stock'
+                              ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border-rose-300 dark:border-rose-700 shadow-sm ring-2 ring-rose-500/20'
+                              : 'bg-white dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-100/60 hover:text-slate-700'
+                          }`}
+                        >
+                          <XCircle className={`w-4 h-4 ${editForm.stock_status === 'no_stock' ? 'text-rose-600' : 'text-rose-500'}`} />
+                          No Stock
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Color Management Section */}
+                    <div className="p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700 rounded-2xl space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block">Model Available Colours</span>
+                        <span className="text-[10px] text-slate-400 font-semibold">Click chip to toggle on/off</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {(reference?.colours || []).map((col) => {
+                          const activeColours = (editForm.colours || '').split(',').map(c => c.trim()).filter(Boolean);
+                          const isSelected = activeColours.some(c => c.toLowerCase() === col.name.toLowerCase());
+                          return (
+                            <button
+                              type="button"
+                              key={col.id || col.name}
+                              onClick={() => {
+                                let next;
+                                if (isSelected) {
+                                  next = activeColours.filter(c => c.toLowerCase() !== col.name.toLowerCase());
+                                } else {
+                                  next = [...activeColours, col.name];
+                                }
+                                setEditForm({ ...editForm, colours: next.join(', ') });
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                                isSelected
+                                  ? 'bg-teal-600 text-white border-teal-700 shadow-sm'
+                                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-slate-300'
+                              }`}
+                            >
+                              {isSelected ? `✓ ${col.name}` : `+ ${col.name}`}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 uppercase tracking-wider block mb-1">Description & Specs Notes</label>
+                      <textarea
+                        rows={3}
+                        value={editForm.description}
+                        onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                        placeholder="Provide additional details, warranty notes, or specifications..."
+                        className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl font-medium text-slate-900 dark:text-white outline-none focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800 transition-all text-xs resize-none"
+                      />
+                    </div>
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-[11px] font-extrabold text-slate-700 uppercase tracking-wider block mb-1">Description & Specs Notes</label>
-                  <textarea
-                    rows={3}
-                    value={editForm.description}
-                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                    placeholder="Provide additional details, warranty notes, or specifications..."
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900 outline-none focus:border-cyan-500 focus:bg-white transition-all text-xs resize-none"
-                  />
-                </div>
-
-                <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setEditingProduct(null)}
-                    className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={savingEdit}
-                    className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-600/20 active:scale-95 transition-all"
-                  >
-                    <Save className="w-4 h-4" /> {savingEdit ? 'Saving Changes...' : 'Save Product & Prices'}
-                  </button>
-                </div>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+                  {/* Sticky Footer Actions */}
+                  <div className="sticky bottom-0 z-10 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 p-4 sm:px-6 flex items-center justify-end gap-3 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setEditingProduct(null)}
+                      className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs transition-all cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingEdit}
+                      className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-cyan-600/20 active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      <Save className="w-4 h-4" /> {savingEdit ? 'Saving Changes...' : 'Save Changes'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
       {/* Pagination */}
       {role !== 'customer' && pager.loaded && (

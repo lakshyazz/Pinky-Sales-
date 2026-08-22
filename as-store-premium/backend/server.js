@@ -320,11 +320,11 @@ const productColumnsForRole = async (role, query = {}, user = null) => {
   const userShopId = user && isShopStaffRole(user.role) ? Number(user.shop_id) : null;
   const targetShopId = userShopId || (requestedShopId ? Number(requestedShopId) : null);
 
-  const shopScope = targetShopId ? `AND ib.shop_id = ${Number(targetShopId)}` : `AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)`;
-  const shopScopeIb2 = targetShopId ? `AND ib2.shop_id = ${Number(targetShopId)}` : `AND ib2.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)`;
-  const stockSubquery = `, COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS stock_quantity,
-    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS available_stock,
-    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${shopScope}), 0) AS quantity,
+  const targetShopScope = (alias) => targetShopId ? `AND ${alias}.shop_id = ${Number(targetShopId)}` : `AND ${alias}.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)`;
+
+  const stockSubquery = `, COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${targetShopScope('ib')}), 0) AS stock_quantity,
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${targetShopScope('ib')}), 0) AS available_stock,
+    COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id ${targetShopScope('ib')}), 0) AS quantity,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id), 0) AS total_stock,
     COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = (SELECT id FROM shops WHERE location_type = 'warehouse' LIMIT 1)), 0) AS warehouse_stock,
     COALESCE((
@@ -332,10 +332,39 @@ const productColumnsForRole = async (role, query = {}, user = null) => {
       FROM (
         SELECT ib2.colour, SUM(ib2.quantity_remaining) AS sub_qty
         FROM inventory_batches ib2
-        WHERE ib2.product_id = p.id ${shopScopeIb2} AND ib2.quantity_remaining > 0
+        WHERE ib2.product_id = p.id ${targetShopScope('ib2')} AND ib2.quantity_remaining > 0
         GROUP BY ib2.colour
       ) ib_col
-    ), '{}'::jsonb) AS colour_stock`;
+    ), '{}'::jsonb) AS colour_stock,
+    COALESCE((
+      SELECT jsonb_agg(
+        jsonb_build_object(
+          'batch_id', ib_sup.id,
+          'supplier_id', ib_sup.supplier_id,
+          'supplier_name', COALESCE(sup.name, s.name, 'Direct Stock'),
+          'purchase_price', COALESCE(ib_sup.purchase_price, p.purchase_price, 0),
+          'quantity', ib_sup.quantity_remaining,
+          'quantity_received', ib_sup.quantity_received,
+          'received_date', ib_sup.received_date,
+          'notes', ib_sup.notes,
+          'shop_id', ib_sup.shop_id,
+          'colour', ib_sup.colour
+        ) ORDER BY ib_sup.received_date DESC, ib_sup.id DESC
+      )
+      FROM inventory_batches ib_sup
+      LEFT JOIN suppliers sup ON sup.id = ib_sup.supplier_id
+      WHERE ib_sup.product_id = p.id ${targetShopScope('ib_sup')} AND ib_sup.quantity_remaining > 0
+    ), '[]'::jsonb) AS supplier_batches,
+    COALESCE(
+      (SELECT CASE 
+        WHEN SUM(CASE WHEN ib_cost.quantity_remaining > 0 THEN ib_cost.quantity_remaining ELSE 0 END) > 0 
+        THEN ROUND(SUM(CASE WHEN ib_cost.quantity_remaining > 0 THEN COALESCE(ib_cost.purchase_price, p.purchase_price, 0) * ib_cost.quantity_remaining ELSE 0 END)::numeric / SUM(CASE WHEN ib_cost.quantity_remaining > 0 THEN ib_cost.quantity_remaining ELSE 0 END)::numeric, 2)
+        ELSE COALESCE((SELECT AVG(ib_p.purchase_price) FROM inventory_batches ib_p WHERE ib_p.product_id = p.id AND ib_p.purchase_price > 0), p.purchase_price, 0)
+      END
+      FROM inventory_batches ib_cost WHERE ib_cost.product_id = p.id ${targetShopScope('ib_cost')}),
+      p.purchase_price,
+      0
+    ) AS avg_cost_price`;
 
   let supplierCols = 'NULL::integer AS supplier_id, NULL::text AS supplier_name';
   if (role === 'superadmin') {
@@ -2709,10 +2738,10 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
               colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-              shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
+              shopId, product_id, effectiveAssignedUserId, (purchase_price !== undefined && purchase_price !== null && purchase_price !== '') ? Number(purchase_price) : product?.purchase_price, wholesale_price ?? product?.wholesale_price,
               official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
               delta, delta, received_date || today(), notes || 'Stock quantity update', req.user.id, product?.manufacturing_brand_id,
-              req.user.role === 'superadmin' && supplier_id ? Number(supplier_id) : null
+              supplier_id ? Number(supplier_id) : (product?.supplier_id ? Number(product.supplier_id) : null)
             ]
           );
         } else if (delta < 0) {
