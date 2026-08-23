@@ -163,7 +163,7 @@ export default function SearchableCombobox({
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setIsOpen(!isOpen)}
-        className={`w-full min-h-[42px] px-3.5 py-2.5 bg-white dark:bg-slate-850 border rounded-xl flex items-center justify-between gap-2 text-left transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+        className={`w-full min-h-[48px] px-4 py-3 bg-white dark:bg-slate-850 border rounded-xl flex items-center justify-between gap-2.5 text-left transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
           isOpen
             ? 'border-teal-500 ring-2 ring-teal-500/20 shadow-sm'
             : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 shadow-xs'
@@ -171,30 +171,30 @@ export default function SearchableCombobox({
       >
         <div className="flex-1 truncate">
           {selectedOption ? (
-            <span className="text-sm font-semibold text-slate-800 dark:text-white">
+            <span className="text-base font-semibold text-slate-900 dark:text-white">
               {selectedOption.name}
             </span>
           ) : (
-            <span className="text-sm font-medium text-slate-400 dark:text-slate-500">
+            <span className="text-base font-medium text-slate-400 dark:text-slate-500">
               {placeholder}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-1 shrink-0 text-slate-400">
+        <div className="flex items-center gap-1.5 shrink-0 text-slate-400">
           {allowClear && selectedOption && (
             <span
               role="button"
               tabIndex={0}
               onClick={handleClear}
-              className="p-0.5 hover:text-slate-600 dark:hover:text-slate-200 rounded transition-colors"
+              className="p-1 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors"
               title="Clear selection"
             >
-              <X className="w-3.5 h-3.5" />
+              <X className="w-4 h-4" />
             </span>
           )}
           <ChevronDown
-            className={`w-4 h-4 transition-transform duration-200 ${
+            className={`w-5 h-5 transition-transform duration-200 ${
               isOpen ? 'rotate-180 text-teal-600 dark:text-teal-400' : ''
             }`}
           />
@@ -209,16 +209,16 @@ export default function SearchableCombobox({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.98 }}
             transition={{ duration: 0.14, ease: 'easeOut' }}
-            className="absolute z-50 left-0 right-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-xl border border-slate-150 dark:border-slate-800 overflow-hidden flex flex-col"
+            className="absolute z-50 left-0 right-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-150 dark:border-slate-800 overflow-hidden flex flex-col"
             style={{
-              maxHeight: '300px',
-              boxShadow: '0 20px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08)',
+              maxHeight: '340px',
+              boxShadow: '0 20px 25px -5px rgba(15, 23, 42, 0.15), 0 8px 10px -6px rgba(15, 23, 42, 0.1)',
             }}
           >
             {/* Sticky Search Header */}
-            <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-850/80 shrink-0">
+            <div className="p-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-850/90 shrink-0">
               <div className="relative flex items-center w-full">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none shrink-0" />
+                <Search className="w-4.5 h-4.5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none shrink-0" />
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -228,8 +228,8 @@ export default function SearchableCombobox({
                     setHighlightedIndex(0);
                   }}
                   placeholder={searchPlaceholder}
-                  style={{ paddingLeft: '34px', paddingRight: '28px' }}
-                  className="w-full pl-9 pr-7 py-2 text-xs font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 transition-all"
+                  style={{ paddingLeft: '40px', paddingRight: '32px' }}
+                  className="w-full pl-10 pr-8 py-2.5 text-base font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white placeholder-slate-400 placeholder:text-base focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 transition-all"
                 />
                 {search && (
                   <button
@@ -238,9 +238,9 @@ export default function SearchableCombobox({
                       setSearch('');
                       if (searchInputRef.current) searchInputRef.current.focus();
                     }}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-4 h-4" />
                   </button>
                 )}
               </div>
@@ -249,7 +249,7 @@ export default function SearchableCombobox({
             {/* Scrollable Options List */}
             <div
               ref={listRef}
-              className="overflow-y-auto max-h-48 py-1.5 space-y-0.5"
+              className="overflow-y-auto max-h-56 py-1.5 space-y-0.5"
               style={{
                 scrollbarWidth: 'thin',
                 scrollbarColor: '#cbd5e1 transparent',
@@ -265,23 +265,23 @@ export default function SearchableCombobox({
                       key={option.id}
                       onClick={() => handleSelect(option.id)}
                       onMouseEnter={() => setHighlightedIndex(idx)}
-                      className={`px-3 py-2 text-xs font-semibold rounded-lg mx-1.5 transition-colors flex items-center justify-between cursor-pointer ${
+                      className={`px-4 py-3 text-base rounded-xl mx-1.5 transition-colors flex items-center justify-between cursor-pointer ${
                         isSelected
                           ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 font-bold'
                           : isHighlighted
-                          ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white'
-                          : 'text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                          ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                          : 'text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60 font-medium'
                       }`}
                     >
                       <span className="truncate">{option.name}</span>
                       {isSelected && (
-                        <Check className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0 ml-2" />
+                        <Check className="w-4.5 h-4.5 text-teal-600 dark:text-teal-400 shrink-0 ml-2" />
                       )}
                     </div>
                   );
                 })
               ) : (
-                <div className="px-3 py-4 text-center text-xs font-semibold text-slate-400 dark:text-slate-500">
+                <div className="px-4 py-5 text-center text-base font-medium text-slate-400 dark:text-slate-500">
                   No matches for "{search}"
                 </div>
               )}
@@ -289,7 +289,7 @@ export default function SearchableCombobox({
 
             {/* Pinned Action Footer */}
             {onAddNew && (
-              <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/50 p-1 shrink-0">
+              <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850/50 p-2 shrink-0">
                 <button
                   type="button"
                   onClick={(e) => {
@@ -298,9 +298,9 @@ export default function SearchableCombobox({
                     setIsOpen(false);
                     onAddNew();
                   }}
-                  className="w-full px-3 py-2 text-xs font-bold text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/60 hover:text-teal-700 dark:hover:text-teal-300 rounded-lg flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  className="w-full px-4 py-3 text-base font-bold text-teal-600 dark:text-teal-400 hover:bg-teal-50 dark:hover:bg-teal-950/60 hover:text-teal-700 dark:hover:text-teal-300 rounded-xl flex items-center justify-center gap-2 transition-colors cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5" />
+                  <Plus className="w-4.5 h-4.5" />
                   <span>{addNewLabel}</span>
                 </button>
               </div>
