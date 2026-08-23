@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
+import ProductPagination from '../shared/ProductPagination';
 import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
 
 export default function PricesPage({
@@ -426,32 +427,17 @@ export default function PricesPage({
             })}
           </div>
         )}
-
-        {/* Pagination Footer */}
-        {pager.pages > 1 && (
-          <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between">
-            <span className="text-xs text-slate-500 font-medium">
-              Page {pager.page} of {pager.pages} ({pager.total || 0} items)
-            </span>
-            <div className="flex items-center gap-2">
-              <button
-                disabled={pager.page <= 1}
-                onClick={() => onPageChange(pager.page - 1)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-700 disabled:opacity-40 cursor-pointer"
-              >
-                Previous
-              </button>
-              <button
-                disabled={pager.page >= pager.pages}
-                onClick={() => onPageChange(pager.page + 1)}
-                className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-bold text-slate-700 disabled:opacity-40 cursor-pointer"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
       </div>
+
+      {/* Pagination component */}
+      <ProductPagination 
+        meta={pager} 
+        loading={loading} 
+        onPageChange={onPageChange} 
+        onPageSizeChange={onPageSizeChange}
+        totalLabel="models"
+        pageSizeOptions={[25, 50, 100, 200]}
+      />
 
       {/* ========================================================================= */}
       {/* QUICK INLINE STOCK INTAKE / ADJUSTMENT MODAL DIALOG                       */}
