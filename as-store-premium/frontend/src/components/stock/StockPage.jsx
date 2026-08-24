@@ -67,6 +67,7 @@ export default function StockPage({
   setSaving,
   initialForms,
   exportCsv,
+  exportExcel,
   onPrintStock,
   stockWithOwnership,
   FormPanel,
@@ -1489,29 +1490,39 @@ export default function StockPage({
             <div style={{ padding: '20px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
                 
-                {/* Export Stock CSV */}
+                {/* Export Stock Excel */}
                 <button 
                   type="button" 
-                  onClick={() => exportCsv('stock', {
-                    brand: stockFilters.brand,
-                    category: stockFilters.category,
-                    colour: stockFilters.colour,
-                    status: stockFilters.status
-                  })}
+                  onClick={() => {
+                    const exportHandler = exportExcel || exportCsv;
+                    if (exportHandler) {
+                      exportHandler('stock', {
+                        brand: stockFilters.brand,
+                        category: stockFilters.category,
+                        colour: stockFilters.colour,
+                        status: stockFilters.status
+                      });
+                    }
+                  }}
                   style={{ padding: '16px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s ease' }}
                 >
-                  <span style={{ display: 'block', fontWeight: 600, fontSize: '14px', color: '#14b8a6' }}>Export Current Stock (CSV)</span>
-                  <p style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>Download a grouped CSV file based on your active filters and shop selection.</p>
+                  <span style={{ display: 'block', fontWeight: 600, fontSize: '14px', color: '#14b8a6' }}>Export Current Stock (Excel)</span>
+                  <p style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>Download structured Excel spreadsheet (.xlsx) based on active filters and shop selection.</p>
                 </button>
 
-                {/* Export Active Products List */}
+                {/* Export Active Products List Excel */}
                 <button 
                   type="button" 
-                  onClick={() => exportCsv('products')}
+                  onClick={() => {
+                    const exportHandler = exportExcel || exportCsv;
+                    if (exportHandler) {
+                      exportHandler('products');
+                    }
+                  }}
                   style={{ padding: '16px', borderRadius: '12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', textAlign: 'left', cursor: 'pointer', transition: 'all 0.15s ease' }}
                 >
-                  <span style={{ display: 'block', fontWeight: 600, fontSize: '14px', color: '#14b8a6' }}>Export Product Catalog (CSV)</span>
-                  <p style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>Download list of all active products, brands, model codes, and price list.</p>
+                  <span style={{ display: 'block', fontWeight: 600, fontSize: '14px', color: '#14b8a6' }}>Export Product Catalog (Excel)</span>
+                  <p style={{ fontSize: '11px', opacity: 0.6, marginTop: '4px' }}>Download structured Excel catalog (.xlsx) of active items, brands, model codes, and prices.</p>
                 </button>
 
                 {/* PDF Print view */}

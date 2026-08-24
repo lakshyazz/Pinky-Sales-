@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, Layers, Coins, Activity, Clock, SlidersHorizontal, Inbox, ChevronRight } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, Layers, Coins, Activity, Clock, SlidersHorizontal, Inbox, ChevronRight, Download } from 'lucide-react';
+import { exportProductBrandsExcel } from '../../utils/excelExport';
 
 const formatCurrency = (value) => `₹${Number(value || 0).toLocaleString('en-IN')}`;
 
@@ -352,10 +353,25 @@ export default function BrandsPage({
           <h2 className="text-2xl font-black text-slate-900 mt-1">Product Brands</h2>
           <p className="text-xs text-slate-500 font-medium">Browse hardware and spare parts catalog grouped by brand manufacturer.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
           <span className="px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 font-extrabold text-xs border border-teal-200/60">
             {brandList.length} Brands
           </span>
+          <button
+            type="button"
+            onClick={() => {
+              if (!brandList.length) {
+                if (setGlobalToast) setGlobalToast('No brands found to export', 'error');
+                return;
+              }
+              exportProductBrandsExcel(brandList);
+              if (setGlobalToast) setGlobalToast('Product Brands Excel (.xlsx) downloaded', 'success');
+            }}
+            className="px-4 py-3 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 hover:border-teal-300 text-slate-700 hover:text-teal-700 font-bold text-xs flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Download Product Brands spreadsheet (.xlsx)"
+          >
+            <Download className="w-4 h-4 text-teal-600" /> Export Excel
+          </button>
           <button
             type="button"
             onClick={() => {

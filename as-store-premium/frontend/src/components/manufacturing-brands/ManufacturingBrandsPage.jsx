@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, ToggleLeft, ToggleRight, Download } from 'lucide-react';
+import { exportManufacturingBrandsExcel } from '../../utils/excelExport';
 
 const formatCurrency = (value) => `₹${Number(value || 0).toLocaleString('en-IN')}`;
 
@@ -231,11 +232,26 @@ export default function ManufacturingBrandsPage({
           <h2 className="text-2xl font-black text-slate-900 mt-1">Manufacturing Brands</h2>
           <p className="text-xs text-slate-500 font-medium">Browse LCD/display manufacturers (e.g. AS CARE, Kaiku, GX, AS PRO) and manage stock settings.</p>
         </div>
-        {isSuperAdmin && (
-          <div className="flex items-center gap-3">
-            <span className="px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 font-extrabold text-xs border border-teal-200/60">
-              {brandList.length} Brands
-            </span>
+        <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+          <span className="px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 font-extrabold text-xs border border-teal-200/60">
+            {brandList.length} Brands
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              if (!brandList.length) {
+                if (setGlobalToast) setGlobalToast('No manufacturing brands found to export', 'error');
+                return;
+              }
+              exportManufacturingBrandsExcel(brandList);
+              if (setGlobalToast) setGlobalToast('Manufacturing Brands Excel (.xlsx) downloaded', 'success');
+            }}
+            className="px-4 py-3 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 hover:border-teal-300 text-slate-700 hover:text-teal-700 font-bold text-xs flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Download Manufacturing Brands spreadsheet (.xlsx)"
+          >
+            <Download className="w-4 h-4 text-teal-600" /> Export Excel
+          </button>
+          {isSuperAdmin && (
             <button
               type="button"
               onClick={() => {
@@ -249,8 +265,8 @@ export default function ManufacturingBrandsPage({
             >
               <Plus className="w-4 h-4" /> Add Manufacturing Brand
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Search Bar */}

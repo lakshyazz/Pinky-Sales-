@@ -158,24 +158,40 @@ export default function PricesPage({
       {/* Search and Action Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
         <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-10" />
           <input
             type="text"
             placeholder="Search catalog or models..."
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:bg-white transition-all text-slate-900 placeholder-slate-400"
+            style={{ paddingLeft: '42px', paddingRight: search ? '36px' : '16px' }}
+            className="w-full !pl-11 pr-4 py-2.5 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-slate-900 placeholder-gray-400 transition-all shadow-2xs"
           />
+          {search && (
+            <button
+              type="button"
+              onClick={() => onSearchChange('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full cursor-pointer z-10"
+              title="Clear search"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
 
         <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
           <button
             type="button"
-            onClick={onExportProducts}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs cursor-pointer"
+            onClick={() => {
+              if (typeof onExportProducts === 'function') {
+                onExportProducts(consolidatedItems);
+              }
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50 hover:text-emerald-700 hover:border-emerald-300 transition-all shadow-2xs cursor-pointer"
+            title="Download consolidated Stock Prices spreadsheet (.xlsx)"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export CSV</span>
+            <Download className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Export Excel</span>
           </button>
         </div>
       </div>

@@ -53,6 +53,14 @@ import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
 import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
+import { consolidateProductList } from './utils/productConsolidation';
+import { 
+  exportToExcel, 
+  exportStockPricesExcel, 
+  exportCurrentStockExcel, 
+  exportProductCatalogExcel, 
+  getExportDateStr 
+} from './utils/excelExport';
 
 const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
@@ -2173,34 +2181,52 @@ function App() {
     });
   };
 
-  const downloadCsv = (fileName, rows) => {
-    const escapeCsvValue = (value) => {
-      const normalized = Array.isArray(value)
-        ? value.join(', ')
-        : value && typeof value === 'object'
-          ? JSON.stringify(value)
-          : value ?? '';
-      const stringValue = String(normalized);
-      return /[",\n]/.test(stringValue) ? `"${stringValue.replace(/"/g, '""')}"` : stringValue;
-    };
-
-    const csvContent = rows
-      .map((row) => row.map((value) => escapeCsvValue(value)).join(','))
-      .join('\n');
-    const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const exportCsv = async (type = 'stock', filters = {}) => {
+  const exportExcel = async (type = 'stock', filters = {}, preloadedItems = null) => {
     try {
       setSaving(true);
+      const dateStr = getExportDateStr();
+
+      // Case 1: Stock Prices Export (/prices page)
+      if (type === 'prices') {
+        let items = preloadedItems;
+        if (!items || !items.length) {
+          if (data.products && data.products.length) {
+            items = consolidateProductList(data.products);
+          } else {
+            try {
+              const fetched = await authedFetch('/export-data?type=products');
+              items = consolidateProductList(Array.isArray(fetched) ? fetched : []);
+            } catch (fetchErr) {
+              console.warn('Export fetch failed for prices, using local state', fetchErr);
+              items = consolidateProductList(data.products || []);
+            }
+          }
+        }
+        if (!items || !items.length) return showToast('No price catalog items found to export');
+        exportStockPricesExcel(items, `Stock_Prices_${dateStr}.xlsx`);
+        showToast('Stock prices Excel (.xlsx) downloaded');
+        return;
+      }
+
+      // Case 2: Product Catalog Export (/stock page)
+      if (type === 'products') {
+        let items = preloadedItems;
+        if (!items || !items.length) {
+          try {
+            const fetched = await authedFetch('/export-data?type=products');
+            items = Array.isArray(fetched) && fetched.length ? fetched : (data.products || []);
+          } catch (err) {
+            console.warn('Backend product export fetch failed, falling back to local memory state', err);
+            items = data.products || [];
+          }
+        }
+        if (!items || !items.length) return showToast('No products found to export');
+        exportProductCatalogExcel(items, `Product_Catalog_${dateStr}.xlsx`);
+        showToast('Product catalog Excel (.xlsx) downloaded');
+        return;
+      }
+
+      // Case 3: Current Stock or Other Data Exports
       const params = new URLSearchParams({ type, ...(shopId ? { shopId } : {}), ...filters });
       let rows = [];
       try {
@@ -2208,9 +2234,7 @@ function App() {
         rows = Array.isArray(fetched) ? fetched : [];
       } catch (err) {
         console.warn('Backend export fetch failed, falling back to local memory state', err);
-        if (type === 'products') {
-          rows = data.products || [];
-        } else {
+        if (type === 'stock') {
           rows = (data.stock || []).map((item) => ({
             product_name: productName(item),
             model_name: fullModelList(item) || item.model || '',
@@ -2221,8 +2245,8 @@ function App() {
             wholesale_price: item.wholesale_price || 0,
             sale_price: item.sale_price || 0,
             quantity: item.quantity || 0,
-            shopkeeper_name: item.shop_name || 'Main',
-            date_added: item.updated_at ? String(item.updated_at).slice(0, 10) : new Date().toISOString().slice(0, 10),
+            shop_name: item.shop_name || 'Main Warehouse',
+            date_added: item.updated_at ? String(item.updated_at).slice(0, 10) : dateStr,
             stock_status: Number(item.quantity) === 0 ? 'Out of Stock' : Number(item.quantity) <= 3 ? 'Low Stock' : 'In Stock'
           }));
         }
@@ -2230,101 +2254,62 @@ function App() {
 
       if (!rows || !rows.length) return showToast('No matching data to export');
 
-      let columnsMapping = [];
-      if (type === 'products') {
-        columnsMapping = [
-          { label: 'Product Name', key: 'short_name' },
-          { label: 'Model Name', key: 'full_model_list' },
-          { label: 'Brand', key: 'brand' },
-          { label: 'Category', key: 'category' },
-          { label: 'Colour', key: 'colours' },
-          { label: 'Purchase Price', key: 'purchase_price' },
-          { label: 'Wholesale Price', key: 'wholesale_price' },
-          { label: 'Sale Price', key: 'sale_price' }
-        ];
+      if (type === 'stock') {
+        exportCurrentStockExcel(rows, `Current_Stock_${dateStr}.xlsx`);
+        showToast('Current stock Excel (.xlsx) downloaded');
       } else if (type === 'sales') {
-        columnsMapping = [
-          { label: 'Sale ID', key: 'sale_id' },
-          { label: 'Date', key: 'sale_date' },
-          { label: 'Customer', key: 'customer_name' },
-          { label: 'Mobile', key: 'customer_mobile' },
-          { label: 'Product', key: 'product_name' },
-          { label: 'Brand', key: 'brand' },
-          { label: 'Category', key: 'category' },
-          { label: 'Quantity', key: 'quantity' },
-          { label: 'Price Type', key: 'price_type' },
-          { label: 'Total Amount', key: 'total_amount' },
-          { label: 'Paid Amount', key: 'paid_amount' },
-          { label: 'Pending Amount', key: 'pending_amount' },
-          { label: 'Payment Mode', key: 'payment_mode' },
-          { label: 'Shop', key: 'shop_name' },
-          { label: 'Due Date', key: 'due_date' }
-        ];
+        exportToExcel({
+          filename: `Sales_${dateStr}.xlsx`,
+          sheetName: 'Sales',
+          columns: [
+            { header: 'Sale ID', key: 'sale_id' },
+            { header: 'Date', key: 'sale_date' },
+            { header: 'Customer', key: 'customer_name' },
+            { header: 'Mobile', key: 'customer_mobile' },
+            { header: 'Product', key: 'product_name' },
+            { header: 'Brand', key: 'brand' },
+            { header: 'Category', key: 'category' },
+            { header: 'Quantity', key: 'quantity' },
+            { header: 'Price Type', key: 'price_type' },
+            { header: 'Total Amount', key: 'total_amount' },
+            { header: 'Paid Amount', key: 'paid_amount' },
+            { header: 'Pending Amount', key: 'pending_amount' },
+            { header: 'Payment Mode', key: 'payment_mode' },
+            { header: 'Shop', key: 'shop_name' },
+            { header: 'Due Date', key: 'due_date' }
+          ],
+          data: rows
+        });
+        showToast('Sales report Excel (.xlsx) downloaded');
       } else if (type === 'customers') {
-        columnsMapping = [
-          { label: 'Customer ID', key: 'id' },
-          { label: 'Name', key: 'name' },
-          { label: 'Mobile', key: 'mobile' },
-          { label: 'Address', key: 'address' },
-          { label: 'Shop', key: 'shop_name' },
-          { label: 'Total Purchases', key: 'total_purchases' },
-          { label: 'Pending Balance', key: 'pending_balance' },
-          { label: 'Registered Date', key: 'registered_date' }
-        ];
+        exportToExcel({
+          filename: `Customers_${dateStr}.xlsx`,
+          sheetName: 'Customers',
+          columns: [
+            { header: 'Customer ID', key: 'id' },
+            { header: 'Name', key: 'name' },
+            { header: 'Mobile', key: 'mobile' },
+            { header: 'Address', key: 'address' },
+            { header: 'Shop', key: 'shop_name' },
+            { header: 'Total Purchases', key: 'total_purchases' },
+            { header: 'Pending Balance', key: 'pending_balance' },
+            { header: 'Registered Date', key: 'registered_date' }
+          ],
+          data: rows
+        });
+        showToast('Customer directory Excel (.xlsx) downloaded');
       } else {
-        columnsMapping = [
-          { label: 'Product Name', key: 'product_name' },
-          { label: 'Model Name', key: 'model_name' },
-          { label: 'Brand', key: 'brand' },
-          { label: 'Category', key: 'category' },
-          { label: 'Colour', key: 'colour' },
-          { label: 'Purchase Price', key: 'purchase_price' },
-          { label: 'Wholesale Price', key: 'wholesale_price' },
-          { label: 'Sale Price', key: 'sale_price' },
-          { label: 'Quantity', key: 'quantity' },
-          { label: 'Shopkeeper Name', key: 'shopkeeper_name' },
-          { label: 'Date Added', key: 'date_added' },
-          { label: 'Stock Status', key: 'stock_status' }
-        ];
+        exportCurrentStockExcel(rows, `as-store-${type}-${dateStr}.xlsx`);
+        showToast('Excel file downloaded (.xlsx)');
       }
-
-      const sampleRow = rows[0];
-      const activeColumns = columnsMapping.filter((col) => {
-        let val = sampleRow[col.key];
-        if (val === undefined) {
-          if (col.key === 'short_name') val = sampleRow.name;
-          else if (col.key === 'product_name') val = sampleRow.short_name || sampleRow.name;
-          else if (col.key === 'full_model_list' || col.key === 'model_name') val = sampleRow.full_model_list || sampleRow.name;
-          else if (col.key === 'colour' || col.key === 'colours') val = sampleRow.colours || sampleRow.colour;
-        }
-        return val !== undefined;
-      });
-
-      const effectiveColumns = activeColumns.length > 0 ? activeColumns : columnsMapping;
-
-      const csvRows = [
-        effectiveColumns.map((col) => col.label),
-        ...rows.map((row) => effectiveColumns.map((col) => {
-          let val = row[col.key];
-          if (val === undefined) {
-            if (col.key === 'short_name') val = row.name;
-            else if (col.key === 'product_name') val = row.short_name || row.name;
-            else if (col.key === 'full_model_list' || col.key === 'model_name') val = row.full_model_list || row.name;
-            else if (col.key === 'colour' || col.key === 'colours') val = row.colours || row.colour;
-          }
-          if (Array.isArray(val)) val = val.join(', ');
-          return val ?? '';
-        })),
-      ];
-
-      downloadCsv(`as-store-${type}-${new Date().toISOString().slice(0, 10)}.csv`, csvRows);
-      showToast('CSV export downloaded');
     } catch (error) {
-      showToast(error.message || 'Unable to export CSV file');
+      showToast(error.message || 'Unable to export Excel file');
     } finally {
       setSaving(false);
     }
   };
+
+  const exportCsv = exportExcel;
 
   const sellingPriceFor = (productId, priceType) => {
     const stockItem = data.stock.find((item) => String(item.product_id) === String(productId));
@@ -4338,7 +4323,7 @@ function App() {
                 search={priceSearch}
                 pager={productPager}
                 loading={productPageLoading}
-                onExportProducts={() => exportCsv('products')}
+                onExportProducts={(exportItems) => exportExcel('prices', {}, exportItems || priceItems)}
                 onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setPriceSearch(value); }}
                 onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
                 onPageSizeChange={(limit) => setProductPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
@@ -4387,7 +4372,8 @@ function App() {
                 saving={saving}
                 setSaving={setSaving}
                 initialForms={initialForms}
-                exportCsv={exportCsv}
+                exportExcel={exportExcel}
+                exportCsv={exportExcel}
                 onPrintStock={() => printCurrentStockSheet(
                   workspaceScope || 'Current workspace',
                   role === 'shopkeeper' ? session.shop_area : selectedShopRecord?.area || '',

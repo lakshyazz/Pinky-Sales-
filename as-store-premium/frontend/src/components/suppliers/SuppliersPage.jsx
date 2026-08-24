@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Edit2, Trash2, X, Tags, Search, AlertCircle, Check, Loader2, ToggleLeft, ToggleRight } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Tags, Search, AlertCircle, Check, Loader2, ToggleLeft, ToggleRight, Download } from 'lucide-react';
+import { exportSuppliersExcel } from '../../utils/excelExport';
 
 export default function SuppliersPage({
   session,
@@ -31,18 +32,44 @@ export default function SuppliersPage({
   const isShopkeeper = session?.role === 'shopkeeper' || session?.role === 'admin';
   const canManageSuppliers = isSuperAdmin || isShopkeeper;
 
-  // Retrieve suppliers list from reference data
+  // Retrieve suppliers list from reference data with linked metrics
   const supplierList = React.useMemo(() => {
     const refs = data.reference?.suppliers || [];
+    const products = data.products || [];
+    
+    // Map supplier product metrics
+    const supplierMetrics = new Map();
+    products.forEach((p) => {
+      if (p.supplier_id) {
+        const supId = String(p.supplier_id);
+        const existing = supplierMetrics.get(supId) || { count: 0, stock: 0, val: 0 };
+        existing.count += 1;
+        const qty = Number(p.total_stock || p.available_stock || p.quantity || 0);
+        const cost = Number(p.purchase_price || p.avg_cost_price || p.sale_price || 0);
+        existing.stock += qty;
+        existing.val += qty * cost;
+        supplierMetrics.set(supId, existing);
+      }
+    });
+
     return refs
-      .map((s) => ({
-        id: s.id,
-        rawName: s.name,
-        name: s.name,
-        is_active: s.is_active !== undefined ? Boolean(s.is_active) : true,
-      }))
+      .map((s) => {
+        const metrics = supplierMetrics.get(String(s.id)) || { count: 0, stock: 0, val: 0 };
+        return {
+          id: s.id,
+          rawName: s.name,
+          name: s.name,
+          phone: s.phone || s.mobile || '',
+          email: s.email || '',
+          contact_person: s.contact_person || '',
+          linked_products_count: metrics.count,
+          totalStock: metrics.stock,
+          valuation: metrics.val,
+          is_active: s.is_active !== undefined ? Boolean(s.is_active) : true,
+        };
+      })
       .filter((s) => !searchVal || s.name.toLowerCase().includes(searchVal.toLowerCase()));
-  }, [data.reference?.suppliers, searchVal]);
+  }, [data.reference?.suppliers, data.products, searchVal]);
 
   // Add / Edit Supplier submission
   const handleSaveSupplier = async (e) => {
@@ -142,11 +169,26 @@ export default function SuppliersPage({
               : 'Manage global parts suppliers and trace which vendor supplied spare parts batches.'}
           </p>
         </div>
-        {canManageSuppliers && (
-          <div className="flex items-center gap-3">
-            <span className="px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 font-extrabold text-xs border border-teal-200/60">
-              {supplierList.length} Suppliers
-            </span>
+        <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+          <span className="px-3 py-1.5 rounded-xl bg-teal-50 text-teal-700 font-extrabold text-xs border border-teal-200/60">
+            {supplierList.length} Suppliers
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              if (!supplierList.length) {
+                if (setGlobalToast) setGlobalToast('No suppliers found to export', 'error');
+                return;
+              }
+              exportSuppliersExcel(supplierList);
+              if (setGlobalToast) setGlobalToast('Suppliers registry Excel (.xlsx) downloaded', 'success');
+            }}
+            className="px-4 py-3 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 hover:border-teal-300 text-slate-700 hover:text-teal-700 font-bold text-xs flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
+            title="Download Suppliers list spreadsheet (.xlsx)"
+          >
+            <Download className="w-4 h-4 text-teal-600" /> Export Excel
+          </button>
+          {canManageSuppliers && (
             <button
               type="button"
               onClick={() => {
@@ -160,8 +202,8 @@ export default function SuppliersPage({
             >
               <Plus className="w-4 h-4" /> Add Supplier
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Search Bar */}
