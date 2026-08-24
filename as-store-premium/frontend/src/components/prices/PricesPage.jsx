@@ -311,12 +311,6 @@ export default function PricesPage({
                       </button>
                     </div>
 
-                    {/* Sale Price */}
-                    <div className="flex flex-col justify-center">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Sale</span>
-                      <span className="text-sm font-black text-emerald-700 mt-0.5">{priceLabel(product.sale_price)}</span>
-                    </div>
-                    
                     {/* Cost / Purchase Price (Super Admin only - Weighted Average) */}
                     {hasPurchase && (
                       <div className="flex flex-col justify-center">
@@ -334,6 +328,12 @@ export default function PricesPage({
                     <div className="flex flex-col justify-center">
                       <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Wholesale</span>
                       <span className="text-sm font-semibold text-slate-700 mt-0.5">{priceLabel(product.wholesale_price)}</span>
+                    </div>
+
+                    {/* Sale Price */}
+                    <div className="flex flex-col justify-center">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Sale</span>
+                      <span className="text-sm font-black text-emerald-700 mt-0.5">{priceLabel(product.sale_price)}</span>
                     </div>
                   </div>
 
