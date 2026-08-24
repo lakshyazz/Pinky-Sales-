@@ -815,7 +815,8 @@ export default function RedesignedDashboard({
           <motion.div
             variants={{ hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0 } }}
             whileHover={{ y: -4 }}
-            className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl shadow-slate-900/5 hover:border-rose-500/50 transition-all space-y-3 relative overflow-hidden group"
+            onClick={() => setActivePage('low-stock')}
+            className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl shadow-slate-900/5 hover:border-rose-500/50 transition-all space-y-3 relative overflow-hidden group cursor-pointer"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -844,28 +845,29 @@ export default function RedesignedDashboard({
           <motion.div
             variants={{ hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0 } }}
             whileHover={{ y: -4 }}
-            className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl shadow-slate-900/5 hover:border-cyan-500/50 transition-all space-y-3 relative overflow-hidden group"
+            onClick={() => setActivePage('shops')}
+            className="p-5 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl shadow-slate-900/5 hover:border-cyan-500/50 transition-all space-y-3 relative overflow-hidden group cursor-pointer"
           >
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
                 <span className="p-2.5 rounded-2xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400">
                   <Store className="w-5 h-5" />
                 </span>
-                <span className="text-xs font-black uppercase tracking-wider text-slate-400">Active Shops</span>
+                <span className="text-xs font-black uppercase tracking-wider text-slate-400">Branches</span>
               </div>
               <span className="px-2.5 py-1 rounded-full bg-cyan-50 text-cyan-700 dark:bg-cyan-950/60 dark:text-cyan-300 text-[11px] font-black">
-                Branches
+                Active Nodes
               </span>
             </div>
 
             <div className="flex items-end justify-between pt-1">
               <div>
                 <strong className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white block">
-                  <AnimatedCounter value={dashboardShopCount} suffix=" shops" />
+                  <AnimatedCounter value={dashboardShopCount} suffix=" branches" />
                 </strong>
-                <span className="text-[11px] font-bold text-slate-400 block mt-1">Operational Outlets</span>
+                <span className="text-[11px] font-bold text-slate-400 block mt-1">Operational</span>
               </div>
-              <SparklineChart data={[1, 1, 2, 2, 3, 3, 4]} color="#06b6d4" />
+              <SparklineChart data={[1, 2, 2, 3, 3, 3, dashboardShopCount || 3]} color="#06b6d4" />
             </div>
           </motion.div>
         </motion.div>
@@ -965,8 +967,8 @@ export default function RedesignedDashboard({
             </div>
             <button
               type="button"
-              onClick={() => setActivePage('stock')}
-              className="text-xs font-bold text-rose-600 hover:text-rose-700 dark:text-rose-400 flex items-center gap-1"
+              onClick={() => setActivePage('low-stock')}
+              className="text-xs font-bold text-rose-600 hover:text-rose-700 dark:text-rose-400 flex items-center gap-1 cursor-pointer"
             >
               Manage Stock <ChevronRight className="w-3.5 h-3.5" />
             </button>

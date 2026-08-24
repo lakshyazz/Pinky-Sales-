@@ -111,7 +111,7 @@ const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
 const money = (value) => Number(value || 0);
 const productDisplayName = (row) => row.short_name || row.name;
 const DEFAULT_PAGE_LIMIT = 50;
-const MAX_PAGE_LIMIT = 100;
+const MAX_PAGE_LIMIT = 5000;
 const clampInteger = (value, fallback, min, max) => {
   const number = Number(value);
   if (!Number.isInteger(number)) return fallback;
@@ -1525,9 +1525,64 @@ const handleGetBrands = async (req, res) => {
   }
 };
 
-app.get('/api/brands', authenticateToken, handleGetBrands);
-app.get('/api/brands/summary', authenticateToken, handleGetBrands);
-app.get('/brands', authenticateToken, handleGetBrands);
+app.get(['/api/products', '/products'], authenticateToken, async (req, res) => {
+  try {
+    const isSuperAdmin = req.user.role === 'superadmin';
+    const isShopkeeper = isShopStaffRole(req.user.role);
+    const visibility = await getPriceVisibility();
+    const extraPrices = isSuperAdmin
+      ? ', p.purchase_price, p.wholesale_price'
+      : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}${visibility.show_wholesale_price_shopkeeper ? ', p.wholesale_price' : ''}`;
+    const officialPrice = isSuperAdmin || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
+
+    const limit = req.query.limit ? Math.min(Number(req.query.limit), 10000) : 10000;
+    const search = cleanQueryText(req.query.search, 120);
+
+    const where = ['p.is_active = 1'];
+    const params = [];
+
+    if (search) {
+      appendSearchFilter(where, params, search, [
+        'p.name',
+        "COALESCE(p.short_name, '')",
+        "COALESCE(p.full_model_list, '')",
+        "COALESCE(p.brand, '')",
+        "COALESCE(p.category, '')",
+        "COALESCE(p.part_category, '')",
+        "COALESCE(p.quality_variant, '')",
+        "COALESCE(p.model, '')",
+        "COALESCE(p.description, '')",
+      ]);
+    }
+
+    const rows = await allRecords(`
+      SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand,
+        COALESCE(p.part_category, p.category, 'Display') AS category,
+        COALESCE(p.part_category, p.category, 'Display') AS part_category,
+        p.quality_variant, p.part_category_id, p.product_variant_id, p.model,
+        p.sale_price, p.retail_price, p.wholesale_price, p.purchase_price, p.description, p.colours,
+        p.company_brand_id, b.name AS company_brand_name,
+        p.manufacturing_brand_id, mb.name AS manufacturing_brand_name,
+        p.supplier_id, s.name AS supplier_name,
+        pc.name AS part_category_name, pv.name AS product_variant_name
+        ${officialPrice}
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY p.brand, COALESCE(p.short_name, p.name)
+      LIMIT ?
+    `, [...params, limit]);
+
+    res.json(rows);
+  } catch (error) {
+    console.error('[ProductsAPI] Error fetching products:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch products' });
+  }
+});
 
 app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
   const productId = Number(req.params.id);
@@ -3132,9 +3187,9 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
     const { customer_id, paid_amount, due_date, notes, payment_mode = 'cash' } = req.body;
     const items = Array.isArray(req.body.items) && req.body.items.length
       ? req.body.items
-      : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, price_type: req.body.price_type }];
-    if (!customer_id || items.some((item) => !item.product_id || !['retail', 'wholesale'].includes(item.price_type))) {
-      return res.status(400).json({ error: 'Customer, products and selling price types are required.' });
+      : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, selling_price: req.body.selling_price || req.body.unit_price, price_type: req.body.price_type || 'retail' }];
+    if (!customer_id || items.some((item) => !item.product_id)) {
+      return res.status(400).json({ error: 'Customer and products are required.' });
     }
 
     const result = await runTransaction(async (tx) => {
@@ -3148,9 +3203,16 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           throw error;
         }
         const product = await tx.getRecord('SELECT short_name, name, sale_price, wholesale_price, manufacturing_brand_id FROM products WHERE id = ?', [item.product_id]);
-        const unitPrice = money(item.price_type === 'wholesale' ? product?.wholesale_price : product?.sale_price);
+        let unitPrice = 0;
+        if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
+          unitPrice = money(item.selling_price);
+        } else if (item.unit_price !== undefined && item.unit_price !== null && item.unit_price !== '' && !isNaN(Number(item.unit_price))) {
+          unitPrice = money(item.unit_price);
+        } else {
+          unitPrice = money(item.price_type === 'wholesale' ? product?.wholesale_price : product?.sale_price);
+        }
         if (!product || unitPrice <= 0) {
-          const error = new Error(`${item.price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price is not set for ${product?.short_name || product?.name || 'this product'}.`);
+          const error = new Error(`Selling price must be greater than 0 for ${product?.short_name || product?.name || 'this product'}.`);
           error.status = 400;
           throw error;
         }

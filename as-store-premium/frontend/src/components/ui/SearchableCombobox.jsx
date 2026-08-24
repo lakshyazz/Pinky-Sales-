@@ -22,18 +22,28 @@ export default function SearchableCombobox({
   const listRef = useRef(null);
 
   // Normalize options array into [{ id, name }]
+  // Normalize options array into [{ id, name, keywords, brand, category, quality, model }]
   const normalizedOptions = useMemo(() => {
     return options
       .map((opt) => {
         if (Array.isArray(opt)) {
-          const [id, name] = opt;
+          const [id, name, extra] = opt;
           if (id === '' || id === null || id === undefined) return null;
-          return { id, name: String(name || id) };
+          return { 
+            id, 
+            name: String(name || id),
+            keywords: typeof extra === 'string' ? extra : (extra?.keywords || '')
+          };
         }
         if (opt && typeof opt === 'object') {
           return {
             id: opt.id ?? opt.name ?? opt.value,
             name: String(opt.name ?? opt.label ?? opt.id ?? ''),
+            keywords: opt.keywords ?? opt.searchableText ?? '',
+            brand: opt.brand ?? '',
+            category: opt.category ?? opt.part_category ?? '',
+            quality: opt.quality ?? opt.quality_variant ?? '',
+            model: opt.model ?? opt.full_model_list ?? '',
           };
         }
         if (typeof opt === 'string' || typeof opt === 'number') {
@@ -51,13 +61,43 @@ export default function SearchableCombobox({
     return normalizedOptions.find((opt) => String(opt.id) === String(value)) || null;
   }, [normalizedOptions, value]);
 
-  // Filter options based on search query
+  // Multi-field normalized case-insensitive search filter
   const filteredOptions = useMemo(() => {
-    const cleanSearch = search.trim().toLowerCase();
-    if (!cleanSearch) return normalizedOptions;
-    return normalizedOptions.filter((opt) =>
-      opt.name.toLowerCase().includes(cleanSearch)
-    );
+    const rawSearch = search.trim().toLowerCase();
+    if (!rawSearch) return normalizedOptions;
+
+    const normalize = (str = '') => String(str).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanQuery = normalize(rawSearch);
+    const terms = rawSearch.split(/\s+/).filter(Boolean);
+
+    return normalizedOptions.filter((opt) => {
+      const fieldsToSearch = [
+        opt.name,
+        opt.keywords,
+        opt.brand,
+        opt.category,
+        opt.quality,
+        opt.model,
+      ].filter(Boolean).join(' ').toLowerCase();
+
+      // 1. Direct multi-term match (e.g., "viv v27", "v27 oled")
+      const termMatch = terms.every((term) => fieldsToSearch.includes(term));
+      if (termMatch) return true;
+
+      // 2. Full query substring match
+      if (fieldsToSearch.includes(rawSearch)) return true;
+
+      // 3. Normalized alphanumeric match (e.g. "v 27" -> "v27", "ip 7g" -> "ip7g", "v27" in "vivv27full")
+      if (cleanQuery) {
+        const normalizedFields = normalize(fieldsToSearch);
+        if (normalizedFields.includes(cleanQuery)) return true;
+
+        const cleanTerms = terms.map(normalize).filter(Boolean);
+        if (cleanTerms.length > 1 && cleanTerms.every((ct) => normalizedFields.includes(ct))) return true;
+      }
+
+      return false;
+    });
   }, [normalizedOptions, search]);
 
   // Click outside listener
@@ -157,7 +197,12 @@ export default function SearchableCombobox({
   };
 
   return (
-    <div className={`relative select-none ${className}`} ref={containerRef} onKeyDown={handleKeyDown}>
+    <div 
+      className={`relative select-none ${isOpen ? 'z-[9999]' : 'z-auto'} ${className}`} 
+      ref={containerRef} 
+      onKeyDown={handleKeyDown}
+      style={{ zIndex: isOpen ? 9999 : undefined }}
+    >
       {/* Trigger Button */}
       <button
         type="button"
@@ -171,11 +216,11 @@ export default function SearchableCombobox({
       >
         <div className="flex-1 truncate">
           {selectedOption ? (
-            <span className="text-base font-semibold text-slate-900 dark:text-white">
+            <span className="text-sm font-semibold text-slate-900 dark:text-white">
               {selectedOption.name}
             </span>
           ) : (
-            <span className="text-base font-medium text-slate-400 dark:text-slate-500">
+            <span className="text-sm font-medium text-slate-400 dark:text-slate-500">
               {placeholder}
             </span>
           )}
@@ -194,7 +239,7 @@ export default function SearchableCombobox({
             </span>
           )}
           <ChevronDown
-            className={`w-5 h-5 transition-transform duration-200 ${
+            className={`w-4 h-4 transition-transform duration-200 ${
               isOpen ? 'rotate-180 text-teal-600 dark:text-teal-400' : ''
             }`}
           />
@@ -209,16 +254,25 @@ export default function SearchableCombobox({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.98 }}
             transition={{ duration: 0.14, ease: 'easeOut' }}
-            className="absolute z-50 left-0 right-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-150 dark:border-slate-800 overflow-hidden flex flex-col"
+            className="absolute z-[9999] left-0 right-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col"
             style={{
               maxHeight: '340px',
-              boxShadow: '0 20px 25px -5px rgba(15, 23, 42, 0.15), 0 8px 10px -6px rgba(15, 23, 42, 0.1)',
+              backgroundColor: '#ffffff',
+              boxShadow: '0 25px 50px -12px rgba(15, 23, 42, 0.25), 0 10px 15px -3px rgba(15, 23, 42, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05)',
             }}
           >
-            {/* Sticky Search Header */}
-            <div className="p-2.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/90 dark:bg-slate-850/90 shrink-0">
+            {/* Sticky Search Header with absolute magnifying glass icon and generous padding */}
+            <div className="p-2.5 border-b border-slate-150 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 shrink-0">
               <div className="relative flex items-center w-full">
-                <Search className="w-4.5 h-4.5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none shrink-0" />
+                <svg
+                  className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none z-10 shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  strokeWidth="2"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+                </svg>
                 <input
                   ref={searchInputRef}
                   type="text"
@@ -228,8 +282,8 @@ export default function SearchableCombobox({
                     setHighlightedIndex(0);
                   }}
                   placeholder={searchPlaceholder}
-                  style={{ paddingLeft: '40px', paddingRight: '32px' }}
-                  className="w-full pl-10 pr-8 py-2.5 text-base font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white placeholder-slate-400 placeholder:text-base focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 transition-all"
+                  style={{ paddingLeft: '44px', paddingRight: search ? '36px' : '14px', height: '40px' }}
+                  className="w-full !pl-11 pr-8 text-sm font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 transition-all shadow-2xs"
                 />
                 {search && (
                   <button
@@ -238,9 +292,10 @@ export default function SearchableCombobox({
                       setSearch('');
                       if (searchInputRef.current) searchInputRef.current.focus();
                     }}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 cursor-pointer z-10"
+                    title="Clear search"
                   >
-                    <X className="w-4 h-4" />
+                    <X className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
@@ -249,7 +304,7 @@ export default function SearchableCombobox({
             {/* Scrollable Options List */}
             <div
               ref={listRef}
-              className="overflow-y-auto max-h-56 py-1.5 space-y-0.5"
+              className="overflow-y-auto max-h-56 py-1.5 space-y-0.5 bg-white dark:bg-slate-900"
               style={{
                 scrollbarWidth: 'thin',
                 scrollbarColor: '#cbd5e1 transparent',

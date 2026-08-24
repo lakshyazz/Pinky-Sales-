@@ -338,17 +338,163 @@ export function exportProductCatalogExcel(items = [], filename = null) {
 
 /**
  * Export handler for Product Brands (/brands page).
- * Columns:
- * - Brand Name
- * - Product Models Count
- * - Stock Available (units)
- * - Valuation (₹)
+ * Multi-Sheet Excel:
+ * - Sheet 1 (All Products): Full itemized product list with all flattened fields
+ * - Sheet 2 (Brand Summary): High-level brand summary table (Brand Name, Product Models Count, Total Units, Total Valuation)
  */
-export function exportProductBrandsExcel(items = [], filename = null) {
+export function exportBrandProductsInventoryExcel({ brandSummaries = [], products = [], filename = null } = {}) {
   const dateStr = getExportDateStr();
-  const outputFilename = filename || `Product_Brands_${dateStr}.xlsx`;
+  const outputFilename = filename || `Brand_Products_Inventory_${dateStr}.xlsx`;
 
-  const columns = [
+  // Collect itemized products list.
+  let itemizedProducts = [];
+  if (Array.isArray(products) && products.length > 0) {
+    itemizedProducts = [...products];
+  } else if (Array.isArray(brandSummaries)) {
+    brandSummaries.forEach((b) => {
+      if (Array.isArray(b.products) && b.products.length > 0) {
+        b.products.forEach((p) => {
+          itemizedProducts.push({
+            ...p,
+            brand: p.brand || b.name || b.rawName || 'Generic'
+          });
+        });
+      }
+    });
+  }
+
+  // Deduplicate products by ID / key while preserving data
+  const seenProductIds = new Set();
+  const uniqueProducts = [];
+  itemizedProducts.forEach((p) => {
+    const key = p.product_id || p.id || `${p.brand}_${p.name}_${p.model}`;
+    if (!seenProductIds.has(key)) {
+      seenProductIds.add(key);
+      uniqueProducts.push(p);
+    }
+  });
+
+  // Sort by Brand alphabetically, then by Display Name
+  uniqueProducts.sort((a, b) => {
+    const brandA = String(a.brand || a.company_brand_name || '').toLowerCase();
+    const brandB = String(b.brand || b.company_brand_name || '').toLowerCase();
+    if (brandA !== brandB) return brandA.localeCompare(brandB);
+    const nameA = String(a.short_name || a.name || a.product_name || '').toLowerCase();
+    const nameB = String(b.short_name || b.name || b.product_name || '').toLowerCase();
+    return nameA.localeCompare(nameB);
+  });
+
+  // Sheet 1: Itemized Product Inventory Columns
+  const productColumns = [
+    {
+      header: 'Brand',
+      key: 'brand',
+      minWidth: 20,
+      formatter: (_val, row) => row.brand || row.company_brand_name || 'Generic'
+    },
+    {
+      header: 'Display Name',
+      key: 'name',
+      minWidth: 32,
+      formatter: (_val, row) => row.short_name || row.name || row.product_name || 'Product'
+    },
+    {
+      header: 'Compatible Models',
+      key: 'full_model_list',
+      minWidth: 32,
+      maxWidth: 70,
+      formatter: (_val, row) => row.full_model_list || row.compatible_models || row.model || ''
+    },
+    {
+      header: 'Part Category',
+      key: 'part_category',
+      minWidth: 20,
+      formatter: (_val, row) => row.part_category || row.category || row.part_category_name || 'Display'
+    },
+    {
+      header: 'Quality / Variant',
+      key: 'quality_variant',
+      minWidth: 20,
+      formatter: (_val, row) => row.quality_variant || row.product_variant_name || row.quality || 'Standard'
+    },
+    {
+      header: 'Manufacturing Brand',
+      key: 'manufacturing_brand_name',
+      minWidth: 22,
+      formatter: (_val, row) => row.manufacturing_brand_name || row.manufacturing_brand || row.mfg_brand || ''
+    },
+    {
+      header: 'Supplier',
+      key: 'supplier_name',
+      minWidth: 22,
+      formatter: (_val, row) => row.supplier_name || (row.supplier_id ? `Supplier #${row.supplier_id}` : 'Direct Stock')
+    },
+    {
+      header: 'Purchase Price (Cost ₹)',
+      key: 'purchase_price',
+      minWidth: 22,
+      formatter: (_val, row) => Number(row.purchase_price ?? row.avg_cost_price ?? row.cost_price ?? 0) || 0
+    },
+    {
+      header: 'Wholesale Price (₹)',
+      key: 'wholesale_price',
+      minWidth: 20,
+      formatter: (_val, row) => Number(row.wholesale_price ?? 0) || 0
+    },
+    {
+      header: 'Selling Price (Retail ₹)',
+      key: 'sale_price',
+      minWidth: 22,
+      formatter: (_val, row) => Number(row.sale_price ?? row.retail_price ?? 0) || 0
+    },
+    {
+      header: 'Total Available Stock (pcs)',
+      key: 'quantity',
+      minWidth: 24,
+      formatter: (_val, row) => Number(row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0) || 0
+    },
+    {
+      header: 'Color-wise Stock Breakdown',
+      key: 'colour_stock',
+      minWidth: 32,
+      maxWidth: 60,
+      formatter: (_val, row) => {
+        if (row.colour_stock && typeof row.colour_stock === 'object' && Object.keys(row.colour_stock).length > 0) {
+          return Object.entries(row.colour_stock)
+            .map(([col, qty]) => `${col}: ${qty}`)
+            .join(', ');
+        }
+        if (Array.isArray(row.colours) && row.colours.length > 0) {
+          return row.colours.join(', ');
+        }
+        if (row.colour || row.colours) {
+          return String(row.colour || row.colours);
+        }
+        return 'Standard';
+      }
+    },
+    {
+      header: 'Stock Status',
+      key: 'stock_status',
+      minWidth: 16,
+      formatter: (_val, row) => {
+        const qty = Number(row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0);
+        if (qty === 0) return 'No Stock';
+        if (qty <= 3) return 'Low Stock';
+        return 'In Stock';
+      }
+    },
+    {
+      header: 'Description / Notes',
+      key: 'description',
+      minWidth: 30,
+      maxWidth: 65,
+      formatter: (_val, row) => row.description || row.notes || ''
+    }
+  ];
+
+  // Sheet 2: Brand Summary Columns
+  const summaryColumns = [
     {
       header: 'Brand Name',
       key: 'name',
@@ -367,26 +513,81 @@ export function exportProductBrandsExcel(items = [], filename = null) {
       }
     },
     {
-      header: 'Stock Available (units)',
+      header: 'Total Available Stock (units)',
       key: 'totalStock',
-      minWidth: 24,
+      minWidth: 26,
       formatter: (_val, row) => Number(row.totalStock ?? row.quantity ?? 0) || 0
     },
     {
-      header: 'Valuation (₹)',
+      header: 'Total Valuation (₹)',
       key: 'stockValue',
-      minWidth: 20,
+      minWidth: 22,
       formatter: (_val, row) => Number(row.stockValue ?? 0) || 0
     }
   ];
 
-  exportToExcel({
-    filename: outputFilename,
-    sheetName: 'Product Brands',
-    columns,
-    data: items
-  });
+  // Helper to build worksheet with formatted rows and dynamic column widths
+  const createWorksheet = (data, cols) => {
+    const formattedRows = data.map((item) => {
+      const row = {};
+      cols.forEach((col) => {
+        let val = item[col.key];
+        if (col.formatter && typeof col.formatter === 'function') {
+          val = col.formatter(val, item);
+        } else if (val === undefined || val === null) {
+          val = '';
+        } else if (Array.isArray(val)) {
+          val = val.join(', ');
+        }
+        row[col.header] = val;
+      });
+      return row;
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(formattedRows);
+
+    const colWidths = cols.map((col) => {
+      let maxLen = (col.header || '').toString().length;
+      formattedRows.forEach((row) => {
+        const cellVal = row[col.header];
+        if (cellVal !== undefined && cellVal !== null) {
+          const strVal = String(cellVal);
+          if (strVal.length > maxLen) {
+            maxLen = strVal.length;
+          }
+        }
+      });
+      const minW = col.minWidth || 14;
+      const maxW = col.maxWidth || 65;
+      const calculatedWidth = maxLen + 4;
+      return { wch: Math.min(Math.max(calculatedWidth, minW), maxW) };
+    });
+
+    worksheet['!cols'] = colWidths;
+    return worksheet;
+  };
+
+  const workbook = XLSX.utils.book_new();
+
+  // 1. Sheet 1: All Products
+  const sheet1 = createWorksheet(uniqueProducts, productColumns);
+  XLSX.utils.book_append_sheet(workbook, sheet1, 'All Products');
+
+  // 2. Sheet 2: Brand Summary
+  const sheet2 = createWorksheet(brandSummaries, summaryColumns);
+  XLSX.utils.book_append_sheet(workbook, sheet2, 'Brand Summary');
+
+  const cleanFileName = outputFilename.toLowerCase().endsWith('.xlsx') ? outputFilename : `${outputFilename}.xlsx`;
+  XLSX.writeFile(workbook, cleanFileName);
 }
+
+// Alias for backwards compatibility
+export const exportProductBrandsExcel = (itemsOrOptions, filename = null) => {
+  if (Array.isArray(itemsOrOptions)) {
+    return exportBrandProductsInventoryExcel({ brandSummaries: itemsOrOptions, filename });
+  }
+  return exportBrandProductsInventoryExcel(itemsOrOptions);
+};
 
 /**
  * Export handler for Manufacturing Brands (/manufacturing-brands page).
@@ -503,6 +704,121 @@ export function exportSuppliersExcel(items = [], filename = null) {
   exportToExcel({
     filename: outputFilename,
     sheetName: 'Suppliers Registry',
+    columns,
+    data: items
+  });
+}
+
+/**
+ * Export handler for Low & Out of Stock Alerts (/low-stock page).
+ * Downloadable reorder spreadsheet (.xlsx).
+ */
+export function exportLowStockExcel(items = [], filename = null) {
+  const dateStr = getExportDateStr();
+  const outputFilename = filename || `Low_Stock_Inventory_${dateStr}.xlsx`;
+
+  const columns = [
+    {
+      header: 'Brand',
+      key: 'brand',
+      minWidth: 18,
+      formatter: (_val, row) => row.brand || row.company_brand_name || 'Generic'
+    },
+    {
+      header: 'Product / Model Name',
+      key: 'name',
+      minWidth: 32,
+      formatter: (_val, row) => row.short_name || row.name || row.product_name || 'Product'
+    },
+    {
+      header: 'Compatible Models',
+      key: 'full_model_list',
+      minWidth: 30,
+      maxWidth: 70,
+      formatter: (_val, row) => row.full_model_list || row.compatible_models || row.model || ''
+    },
+    {
+      header: 'Part Category',
+      key: 'part_category',
+      minWidth: 18,
+      formatter: (_val, row) => row.part_category || row.category || row.part_category_name || 'Display'
+    },
+    {
+      header: 'Quality / Variant',
+      key: 'quality_variant',
+      minWidth: 20,
+      formatter: (_val, row) => row.quality_variant || row.product_variant_name || row.quality || 'Standard'
+    },
+    {
+      header: 'Manufacturing Brand',
+      key: 'manufacturing_brand_name',
+      minWidth: 22,
+      formatter: (_val, row) => row.manufacturing_brand_name || row.manufacturing_brand || row.mfg_brand || ''
+    },
+    {
+      header: 'Current Stock (pcs)',
+      key: 'quantity',
+      minWidth: 20,
+      formatter: (_val, row) => Number(row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0) || 0
+    },
+    {
+      header: 'Stock Status',
+      key: 'stock_status',
+      minWidth: 18,
+      formatter: (_val, row) => {
+        const qty = Number(row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0);
+        return qty === 0 ? 'Out of Stock (0 pcs)' : `Low Stock (${qty} pcs)`;
+      }
+    },
+    {
+      header: 'Color-wise Breakdown',
+      key: 'colour_stock',
+      minWidth: 28,
+      maxWidth: 60,
+      formatter: (_val, row) => {
+        if (row.colour_stock && typeof row.colour_stock === 'object' && Object.keys(row.colour_stock).length > 0) {
+          return Object.entries(row.colour_stock)
+            .map(([col, qty]) => `${col}: ${qty}`)
+            .join(', ');
+        }
+        if (Array.isArray(row.colours) && row.colours.length > 0) {
+          return row.colours.join(', ');
+        }
+        if (row.colour || row.colours) {
+          return String(row.colour || row.colours);
+        }
+        return 'Standard';
+      }
+    },
+    {
+      header: 'Supplier Name',
+      key: 'supplier_name',
+      minWidth: 22,
+      formatter: (_val, row) => row.supplier_name || (row.supplier_id ? `Supplier #${row.supplier_id}` : 'Unassigned')
+    },
+    {
+      header: 'Purchase Price (Cost ₹)',
+      key: 'purchase_price',
+      minWidth: 22,
+      formatter: (_val, row) => Number(row.purchase_price ?? row.avg_cost_price ?? row.cost_price ?? 0) || 0
+    },
+    {
+      header: 'Wholesale Price (₹)',
+      key: 'wholesale_price',
+      minWidth: 20,
+      formatter: (_val, row) => Number(row.wholesale_price ?? 0) || 0
+    },
+    {
+      header: 'Selling Price (Retail ₹)',
+      key: 'sale_price',
+      minWidth: 22,
+      formatter: (_val, row) => Number(row.sale_price ?? row.retail_price ?? 0) || 0
+    }
+  ];
+
+  exportToExcel({
+    filename: outputFilename,
+    sheetName: 'Low Stock Reorder List',
     columns,
     data: items
   });

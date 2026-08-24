@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useState, useRef } from 'react';
+import React, { useDeferredValue, useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import {
   AlertTriangle,
@@ -43,12 +43,14 @@ import ProductDetailModal from './components/models/ProductDetailModal';
 import ProductDetailPage from './components/models/ProductDetailPage';
 import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
+import LowStockPage from './components/stock/LowStockPage';
 import BrandsPage from './components/brands/BrandsPage';
 import ManufacturingBrandsPage from './components/manufacturing-brands/ManufacturingBrandsPage';
 import SuppliersPage from './components/suppliers/SuppliersPage';
 import Pagination from './components/ui/Pagination';
 import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './components/ui/SkeletonLoader';
 import SearchInput from './components/ui/SearchInput';
+import SearchableCombobox from './components/ui/SearchableCombobox';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
@@ -292,6 +294,7 @@ const navByRole = {
   superadmin: [
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
+    ['low-stock', 'Low Stock', AlertTriangle],
     ['brands', 'Brands', Tags],
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['suppliers', 'Suppliers', Users],
@@ -310,6 +313,7 @@ const navByRole = {
   shopkeeper: [
     ['dashboard', 'Dashboard', BarChart3],
     ['stock', 'Stock', Package],
+    ['low-stock', 'Low Stock', AlertTriangle],
     ['brands', 'Brands', Tags],
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['suppliers', 'Suppliers', Users],
@@ -338,13 +342,13 @@ navByRole.user = navByRole.customer;
 const sidebarSectionsByRole = {
   superadmin: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'low-stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Operations', ids: ['shops', 'shopkeepers', 'import', 'customers', 'sales', 'requests', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
+    { title: 'Inventory', ids: ['stock', 'low-stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -439,6 +443,11 @@ const pageMetaById = {
     title: 'Reports',
     description: 'Export inventory, availability, pending, and audit reports.',
   },
+  'low-stock': {
+    group: 'Inventory',
+    title: 'Low & Out of Stock Alerts',
+    description: 'Monitor critical deficit inventory requiring immediate restock across branches & warehouse.',
+  },
   catalog: {
     group: 'Customer View',
     title: 'Catalog',
@@ -446,7 +455,7 @@ const pageMetaById = {
   },
 };
 
-const validPageIds = new Set(Object.values(navByRole).flatMap((items) => items.map(([id]) => id)));
+const validPageIds = new Set([...Object.values(navByRole).flatMap((items) => items.map(([id]) => id)), 'low-stock']);
 const defaultPageForRole = (role) => (role === 'customer' || role === 'user' ? 'catalog' : 'dashboard');
 const pageFromPath = () => {
   if (typeof window === 'undefined') return '';
@@ -492,17 +501,18 @@ const initialForms = {
     product_id: '',
     customer_id: '',
     quantity: 1,
+    selling_price: '',
     original_total: '',
     final_total_amount: '',
     total_amount: '',
-    discount_amount: '',
-    discount_percentage: '',
+    discount_amount: '0',
+    discount_percentage: '0',
     is_custom_total: false,
     paid_amount: '',
     payment_mode: 'cash',
     due_date: '2026-06-15',
     notes: '',
-    items: [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }],
+    items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
   },
   payment: { sale_id: '', amount: '', note: '' },
   request: { product_id: '', model_name: '', quantity: 1, message: '' },
@@ -619,11 +629,22 @@ function Sparkline({ data = [], tone = 'teal' }) {
 
   return (
     <svg className={`sparkline ${tone}`} viewBox="0 0 84 40" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id={`grad-${tone}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="currentColor" stopOpacity="0.2" />
+          <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path
+        d={`${pathString} L 84 40 L 0 40 Z`}
+        fill={`url(#grad-${tone})`}
+        className="sparkline-area"
+      />
       <motion.path
         d={pathString}
         fill="none"
         stroke="currentColor"
-        strokeWidth="2.4"
+        strokeWidth="2.5"
         strokeLinecap="round"
         strokeLinejoin="round"
         initial={{ pathLength: 0 }}
@@ -636,7 +657,7 @@ function Sparkline({ data = [], tone = 'teal' }) {
         transition={{ delay: 0.6, type: 'spring', stiffness: 200 }}
         cx={lastX} 
         cy={lastY} 
-        r="2.6" 
+        r="3" 
         fill="currentColor"
         stroke="#ffffff"
         strokeWidth="2"
@@ -671,9 +692,7 @@ function Empty({ title }) {
 
 function BillSummary({ sale }) {
   const items = sale.items || [];
-  const grandTotal = Number(sale.final_total_amount || sale.total_amount || 0);
-  const originalTotal = Number(sale.original_total || grandTotal);
-  const discountAmount = Number(sale.discount_amount || (originalTotal > grandTotal ? originalTotal - grandTotal : 0));
+  const grandTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
   const paidAmount = Number(sale.paid_amount || 0);
   const pendingAmount = Math.max(grandTotal - paidAmount, 0);
   return (
@@ -686,11 +705,6 @@ function BillSummary({ sale }) {
       <div>
         <small>Grand total</small>
         <strong>{currency(grandTotal)}</strong>
-        {discountAmount > 0 && (
-          <span className="text-[10px] text-emerald-600 font-semibold block leading-tight mt-0.5">
-            -{currency(discountAmount)} ({sale.discount_percentage || ((discountAmount / originalTotal) * 100).toFixed(1)}%)
-          </span>
-        )}
       </div>
       <div>
         <small>Paid amount</small>
@@ -1111,16 +1125,22 @@ function App() {
   const shopCountDependency = active === 'stock' ? data.shops.length : 0;
   const activeProductSearch = active === 'prices' ? deferredPriceSearch : active === 'models' ? deferredModelSearch : '';
 
-  const syncActivePath = (page, mode = 'push') => {
-    if (typeof window === 'undefined' || !validPageIds.has(page)) return;
-    const nextPath = `/${page}`;
-    if (window.location.pathname === nextPath) return;
+  const syncActivePath = (page, mode = 'push', queryString = '') => {
+    if (typeof window === 'undefined') return;
+    const cleanPage = String(page || '').split('?')[0];
+    if (!validPageIds.has(cleanPage)) return;
+    const searchPart = queryString || (String(page).includes('?') ? `?${String(page).split('?')[1]}` : '');
+    const nextPath = `/${cleanPage}${searchPart}`;
+    if (window.location.pathname + window.location.search === nextPath) return;
     window.history[mode === 'replace' ? 'replaceState' : 'pushState']({}, '', nextPath);
   };
   const setActivePage = (page, options = {}) => {
-    const target = validPageIds.has(page) ? page : defaultPageForRole(role);
+    const rawTarget = String(page || '');
+    const cleanPage = rawTarget.split('?')[0];
+    const target = validPageIds.has(cleanPage) ? cleanPage : defaultPageForRole(role);
+    const queryString = options.queryString || (rawTarget.includes('?') ? `?${rawTarget.split('?')[1]}` : '');
     setActive(target);
-    syncActivePath(target, options.replace ? 'replace' : 'push');
+    syncActivePath(target, options.replace ? 'replace' : 'push', queryString);
   };
 
   const authedFetch = (path, options = {}) => api(path, options, token);
@@ -1489,18 +1509,21 @@ function App() {
       if (filters.date) params.set('date', filters.date);
       const dependencyParams = scopedParams(saleLocation);
       dependencyParams.set('page', '1');
-      dependencyParams.set('limit', '100');
-      const [stockResponse, customerResponse, salesResponse] = await Promise.all([
+      dependencyParams.set('limit', '1000');
+      const [stockResponse, customerResponse, salesResponse, productsResponse] = await Promise.all([
         authedFetch(`/stock?${dependencyParams.toString()}`),
         authedFetch(`/customers?${dependencyParams.toString()}`),
         authedFetch(`/sales?${params.toString()}`),
+        authedFetch(`/products?limit=1000`),
       ]);
       const salesRows = getPaginatedRows(salesResponse);
+      const prodRows = getPaginatedRows(productsResponse);
       setData((prev) => ({
         ...prev,
         stock: getPaginatedRows(stockResponse),
         customers: getPaginatedRows(customerResponse),
         sales: salesRows,
+        products: prodRows.length > 0 ? prodRows : prev.products,
       }));
       updatePagerFromResponse(setSalesPager, salesResponse, page, salesRows, ['totalSales']);
     } catch (error) {
@@ -1682,10 +1705,27 @@ function App() {
       }
       if (tab === 'brands') await loadBrandsPage(currentShop);
       if (tab === 'manufacturing-brands') await loadManufacturingBrandsPage(currentShop);
+      if (tab === 'low-stock') {
+        const stockParams = scopedParams(currentShop);
+        stockParams.set('page', '1');
+        stockParams.set('limit', '5000');
+        stockParams.set('includeSummary', 'true');
+        const [stockResponse, productsResponse] = await Promise.all([
+          authedFetch(`/stock?${stockParams.toString()}`),
+          authedFetch(`/products?limit=5000`),
+        ]);
+        const stockRows = getPaginatedRows(stockResponse);
+        const prodRows = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
+        setData((prev) => ({
+          ...prev,
+          stock: stockRows.length ? stockRows : prev.stock,
+          products: prodRows.length ? prodRows : prev.products,
+        }));
+      }
       if (tab === 'customers') {
         const dependencyParams = scopedParams(currentShop);
         dependencyParams.set('page', '1');
-        dependencyParams.set('limit', '100');
+        dependencyParams.set('limit', '1000');
         const [stockResponse, salesResponse] = await Promise.all([
           authedFetch(`/stock?${dependencyParams.toString()}`),
           authedFetch(`/sales?${dependencyParams.toString()}`),
@@ -1832,6 +1872,23 @@ function App() {
     if (!session || !authReady || role === 'customer' || !['models', 'prices'].includes(active)) return;
     loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch });
   }, [active, activeProductSearch, productPager.page, productPager.limit, session?.token, authReady]);
+
+  // Synchronize stock status filter from URL query params (e.g. /stock?filter=low_stock or ?status=out_of_stock)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const urlParams = new URLSearchParams(window.location.search);
+    const filter = urlParams.get('filter') || urlParams.get('status');
+    if (filter) {
+      const normalized = filter.toLowerCase().trim();
+      if (normalized === 'low_stock' || normalized === 'low' || normalized === 'warning') {
+        setStockFilters((prev) => (prev.status === 'low_stock' ? prev : { ...prev, status: 'low_stock' }));
+      } else if (normalized === 'out_of_stock' || normalized === 'no_stock' || normalized === 'out') {
+        setStockFilters((prev) => (prev.status === 'out_of_stock' ? prev : { ...prev, status: 'out_of_stock' }));
+      } else if (normalized === 'in_stock') {
+        setStockFilters((prev) => (prev.status === 'in_stock' ? prev : { ...prev, status: 'in_stock' }));
+      }
+    }
+  }, [active]);
 
   useEffect(() => {
     if (active !== 'stock') return;
@@ -2312,10 +2369,11 @@ function App() {
   const exportCsv = exportExcel;
 
   const sellingPriceFor = (productId, priceType) => {
-    const stockItem = data.stock.find((item) => String(item.product_id) === String(productId));
-    const product = data.products.find((item) => String(item.id) === String(productId));
-    if (priceType === 'wholesale') return Number(stockItem?.wholesale_price || product?.wholesale_price || 0);
-    if (priceType === 'retail') return Number(stockItem?.sale_price || product?.sale_price || 0);
+    const stockItem = data.stock?.find((item) => String(item.product_id || item.id) === String(productId));
+    const product = data.products?.find((item) => String(item.id || item.product_id) === String(productId));
+    const catalogItem = data.catalog?.find((item) => String(item.id || item.product_id) === String(productId));
+    if (priceType === 'wholesale') return Number(stockItem?.wholesale_price || product?.wholesale_price || catalogItem?.wholesale_price || 0);
+    if (priceType === 'retail') return Number(stockItem?.sale_price || product?.sale_price || catalogItem?.sale_price || product?.retail_price || 0);
     return 0;
   };
 
@@ -2328,151 +2386,114 @@ function App() {
     ];
   };
 
-  const calculateSaleTotals = (items, currentSale, manualOverride = null) => {
-    const originalTotal = (items || []).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    
-    let finalTotal = originalTotal;
-    let isCustom = currentSale?.is_custom_total || false;
-    let discountAmount = 0;
-    let discountPercentage = 0;
+  const salesProductOptions = useMemo(() => {
+    const list = [...(data.products || []), ...(data.catalog || []), ...(data.stock || [])];
+    const map = new Map();
+    list.forEach((p) => {
+      const id = p.product_id || p.id;
+      if (!id) return;
+      if (!map.has(String(id))) {
+        const title = p.short_name || p.name || p.product_name || p.display_name || 'Product';
+        const brand = p.brand || p.company_brand_name || '';
+        const mfg = p.manufacturing_brand_name || p.manufacturing_brand || '';
+        const cat = p.part_category || p.category || '';
+        const variant = p.quality_variant || p.product_variant_name || p.quality || '';
+        const models = p.full_model_list || p.compatible_models || p.model || (Array.isArray(p.compatible) ? p.compatible.join(' ') : p.compatible) || '';
+        const retailPrice = Number(p.sale_price || p.retail_price || 0);
+        const wholesalePrice = Number(p.wholesale_price || 0);
 
-    if (manualOverride !== null) {
-      if (manualOverride.type === 'final_total') {
-        const valStr = manualOverride.value;
-        if (valStr === '') {
-          finalTotal = '';
-          isCustom = true;
-          discountAmount = '';
-          discountPercentage = '';
-        } else {
-          const parsed = Math.max(Number(valStr || 0), 0);
-          finalTotal = parsed;
-          isCustom = parsed !== originalTotal;
-          if (originalTotal > 0 && parsed < originalTotal) {
-            discountAmount = Math.round((originalTotal - parsed) * 100) / 100;
-            discountPercentage = Math.round(((originalTotal - parsed) / originalTotal) * 10000) / 100;
-          } else {
-            discountAmount = 0;
-            discountPercentage = 0;
-          }
-        }
-      } else if (manualOverride.type === 'discount_amount') {
-        const valStr = manualOverride.value;
-        if (valStr === '') {
-          discountAmount = '';
-          discountPercentage = '';
-          finalTotal = originalTotal;
-          isCustom = false;
-        } else {
-          const discAmt = Math.max(Number(valStr || 0), 0);
-          discountAmount = discAmt;
-          finalTotal = Math.max(originalTotal - discAmt, 0);
-          isCustom = discAmt > 0;
-          discountPercentage = originalTotal > 0 ? Math.round((discAmt / originalTotal) * 10000) / 100 : 0;
-        }
-      } else if (manualOverride.type === 'discount_percentage') {
-        const valStr = manualOverride.value;
-        if (valStr === '') {
-          discountPercentage = '';
-          discountAmount = '';
-          finalTotal = originalTotal;
-          isCustom = false;
-        } else {
-          const discPct = Math.max(Math.min(Number(valStr || 0), 100), 0);
-          discountPercentage = discPct;
-          discountAmount = Math.round(((originalTotal * discPct) / 100) * 100) / 100;
-          finalTotal = Math.max(originalTotal - discountAmount, 0);
-          isCustom = discPct > 0;
-        }
-      }
-    } else {
-      if (isCustom && currentSale?.discount_percentage && Number(currentSale.discount_percentage) > 0) {
-        const discPct = Number(currentSale.discount_percentage);
-        discountPercentage = discPct;
-        discountAmount = Math.round(((originalTotal * discPct) / 100) * 100) / 100;
-        finalTotal = Math.max(originalTotal - discountAmount, 0);
-      } else if (isCustom && currentSale?.discount_amount && Number(currentSale.discount_amount) > 0) {
-        const discAmt = Math.min(Number(currentSale.discount_amount), originalTotal);
-        discountAmount = discAmt;
-        finalTotal = Math.max(originalTotal - discAmt, 0);
-        discountPercentage = originalTotal > 0 ? Math.round((discAmt / originalTotal) * 10000) / 100 : 0;
-      } else {
-        finalTotal = originalTotal;
-        isCustom = false;
-        discountAmount = 0;
-        discountPercentage = 0;
-      }
-    }
+        const labelParts = [
+          title,
+          variant ? `(${variant})` : '',
+          cat ? `[${cat}]` : '',
+          brand ? `· ${brand}` : '',
+        ].filter(Boolean);
 
+        const priceDetails = [];
+        if (retailPrice > 0) priceDetails.push(`Retail: ₹${retailPrice.toLocaleString('en-IN')}`);
+        if (wholesalePrice > 0) priceDetails.push(`Wholesale: ₹${wholesalePrice.toLocaleString('en-IN')}`);
+        const priceLabelStr = priceDetails.length > 0 ? ` · (${priceDetails.join(' | ')})` : '';
+
+        const visibleName = `${labelParts.join(' ').replace(/\s+/g, ' ').trim()}${priceLabelStr}`;
+
+        // Searchable text containing all relevant product attributes and aliases (lowercase):
+        const keywords = [
+          p.name,
+          p.short_name,
+          p.display_name,
+          p.product_name,
+          brand,
+          p.company_brand_name,
+          mfg,
+          cat,
+          variant,
+          models,
+          p.model,
+          p.compatible_models,
+          p.full_model_list,
+          Array.isArray(p.colours) ? p.colours.join(' ') : p.colours,
+          'retail',
+          'wholesale',
+          retailPrice > 0 ? retailPrice : '',
+          wholesalePrice > 0 ? wholesalePrice : '',
+          p.description,
+        ].filter(Boolean).join(' ').toLowerCase();
+
+        map.set(String(id), {
+          id: String(id),
+          name: visibleName,
+          keywords,
+          brand,
+          category: cat,
+          quality: variant,
+          model: models,
+          retailPrice: retailPrice > 0 ? retailPrice : '',
+          wholesalePrice: wholesalePrice > 0 ? wholesalePrice : '',
+          defaultPrice: retailPrice > 0 ? retailPrice : (wholesalePrice > 0 ? wholesalePrice : ''),
+        });
+      }
+    });
+
+    return Array.from(map.values())
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [data.products, data.catalog, data.stock]);
+
+  const getProductDefaultPrice = useCallback((productId) => {
+    if (!productId) return '';
+    const allProducts = [...(data.products || []), ...(data.catalog || []), ...(data.stock || [])];
+    const match = allProducts.find((p) => String(p.product_id || p.id) === String(productId));
+    if (!match) return '';
+    const price = Number(match.sale_price || match.retail_price || match.wholesale_price || 0);
+    return price > 0 ? String(price) : '';
+  }, [data.products, data.catalog, data.stock]);
+
+  const calculateSaleTotals = (items) => {
+    const calculatedTotal = (items || []).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
     return {
-      original_total: String(originalTotal),
-      final_total_amount: finalTotal === '' ? '' : String(finalTotal),
-      total_amount: finalTotal === '' ? '' : String(finalTotal),
-      discount_amount: discountAmount !== '' && Number(discountAmount) > 0 ? String(discountAmount) : (discountAmount === '' ? '' : ''),
-      discount_percentage: discountPercentage !== '' && Number(discountPercentage) > 0 ? String(discountPercentage) : (discountPercentage === '' ? '' : ''),
-      is_custom_total: isCustom,
+      original_total: String(calculatedTotal),
+      final_total_amount: String(calculatedTotal),
+      total_amount: String(calculatedTotal),
+      discount_amount: '0',
+      discount_percentage: '0',
+      is_custom_total: false,
     };
-  };
-
-  const handleSaleFinalTotalChange = (value) => {
-    const totals = calculateSaleTotals(forms.sale.items || [], forms.sale, { type: 'final_total', value });
-    setForms((prev) => ({
-      ...prev,
-      sale: {
-        ...prev.sale,
-        ...totals,
-      },
-    }));
-  };
-
-  const handleSaleDiscountAmountChange = (value) => {
-    const totals = calculateSaleTotals(forms.sale.items || [], forms.sale, { type: 'discount_amount', value });
-    setForms((prev) => ({
-      ...prev,
-      sale: {
-        ...prev.sale,
-        ...totals,
-      },
-    }));
-  };
-
-  const handleSaleDiscountPercentageChange = (value) => {
-    const totals = calculateSaleTotals(forms.sale.items || [], forms.sale, { type: 'discount_percentage', value });
-    setForms((prev) => ({
-      ...prev,
-      sale: {
-        ...prev.sale,
-        ...totals,
-      },
-    }));
-  };
-
-  const resetSaleDiscount = () => {
-    const items = forms.sale.items || [];
-    const orig = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    const totals = calculateSaleTotals(items, { ...forms.sale, is_custom_total: false, discount_amount: '', discount_percentage: '' }, { type: 'final_total', value: String(orig) });
-    setForms((prev) => ({
-      ...prev,
-      sale: {
-        ...prev.sale,
-        ...totals,
-        is_custom_total: false,
-      },
-    }));
   };
 
   const updateSaleItemProduct = (index, productId) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const defaultPrice = getProductDefaultPrice(productId);
     const qty = Math.max(Number(currentItems[index]?.quantity || 1), 1);
-    
+    const total = defaultPrice !== '' ? String(Number(defaultPrice) * qty) : '';
+
     currentItems[index] = {
       product_id: productId,
-      price_type: '',
+      selling_price: defaultPrice,
+      price_type: 'retail',
       quantity: qty,
-      total_amount: '',
+      total_amount: total,
     };
 
-    const totals = calculateSaleTotals(currentItems, forms.sale);
+    const totals = calculateSaleTotals(currentItems);
 
     setForms((prev) => ({
       ...prev,
@@ -2487,37 +2508,63 @@ function App() {
   };
 
   const updateSaleItemPriceType = (index, priceType) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
-    const item = currentItems[index];
-    const unitPrice = sellingPriceFor(item?.product_id, priceType);
-    const quantity = Math.max(Number(item?.quantity || 1), 1);
-    if (priceType && unitPrice <= 0) {
-      currentItems[index] = { ...item, price_type: '', total_amount: '' };
-      const totals = calculateSaleTotals(currentItems, forms.sale);
-      setForms((prev) => ({ ...prev, sale: { ...prev.sale, ...totals, items: currentItems } }));
-      return showToast(`${priceType === 'wholesale' ? 'Wholesale' : 'Retail'} price is not set for this item. Add it from Prices first.`);
-    }
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const item = currentItems[index] || {};
+    const unitPrice = sellingPriceFor(item.product_id, priceType);
+    const quantity = Math.max(Number(item.quantity || 1), 1);
+    const priceVal = unitPrice > 0 ? String(unitPrice) : (item.selling_price || '');
+    const total = priceVal !== '' ? String(Number(priceVal) * quantity) : '';
+
     currentItems[index] = {
       ...item,
       price_type: priceType,
-      total_amount: unitPrice ? String(unitPrice * quantity) : '',
+      selling_price: priceVal,
+      total_amount: total,
     };
-    const totals = calculateSaleTotals(currentItems, forms.sale);
+
+    const totals = calculateSaleTotals(currentItems);
     setForms((prev) => ({ ...prev, sale: { ...prev.sale, ...totals, items: currentItems } }));
   };
 
-  const updateSaleItemQuantity = (index, quantity) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
-    const numericQuantity = Math.max(Number(quantity || 0), 0);
-    const price = sellingPriceFor(currentItems[index]?.product_id, currentItems[index]?.price_type);
+  const updateSaleItemSellingPrice = (index, priceVal) => {
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const item = currentItems[index] || {};
+    const qty = Number(item.quantity || 1);
+    const numericPrice = priceVal === '' ? '' : Number(priceVal);
+    const total = (priceVal !== '' && !isNaN(numericPrice)) ? String(numericPrice * qty) : '';
 
     currentItems[index] = {
-      ...currentItems[index],
-      quantity,
-      total_amount: price && numericQuantity ? String(price * numericQuantity) : (currentItems[index]?.total_amount || ''),
+      ...item,
+      selling_price: priceVal,
+      total_amount: total,
     };
 
-    const totals = calculateSaleTotals(currentItems, forms.sale);
+    const totals = calculateSaleTotals(currentItems);
+
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+        items: currentItems,
+      },
+    }));
+  };
+
+  const updateSaleItemQuantity = (index, quantityVal) => {
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const item = currentItems[index] || {};
+    const numericPrice = Number(item.selling_price || 0);
+    const numericQty = quantityVal === '' ? '' : Number(quantityVal);
+    const total = (quantityVal !== '' && !isNaN(numericQty) && numericPrice > 0) ? String(numericPrice * numericQty) : (item.total_amount || '');
+
+    currentItems[index] = {
+      ...item,
+      quantity: quantityVal,
+      total_amount: total,
+    };
+
+    const totals = calculateSaleTotals(currentItems);
 
     setForms((prev) => ({
       ...prev,
@@ -2530,26 +2577,9 @@ function App() {
     }));
   };
 
-  const updateSaleItemPrice = (index, priceVal) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
-    currentItems[index] = {
-      ...currentItems[index],
-      total_amount: priceVal,
-    };
-    const totals = calculateSaleTotals(currentItems, forms.sale);
-    setForms((prev) => ({
-      ...prev,
-      sale: {
-        ...prev.sale,
-        ...totals,
-        items: currentItems,
-      },
-    }));
-  };
-
   const addSaleItem = () => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
-    currentItems.push({ product_id: '', price_type: '', quantity: 1, total_amount: '' });
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' });
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -2560,10 +2590,10 @@ function App() {
   };
 
   const removeSaleItem = (index) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
     if (currentItems.length <= 1) return;
     currentItems.splice(index, 1);
-    const totals = calculateSaleTotals(currentItems, forms.sale);
+    const totals = calculateSaleTotals(currentItems);
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -2603,19 +2633,13 @@ function App() {
     const customerId = forms.sale.customer_id;
     const dueDate = forms.sale.due_date;
     const notes = forms.sale.notes;
-    const items = forms.sale.items || [{ product_id: forms.sale.product_id, quantity: Number(forms.sale.quantity), total_amount: Number(forms.sale.total_amount) }];
+    const items = forms.sale.items || [{ product_id: forms.sale.product_id, selling_price: forms.sale.selling_price, quantity: Number(forms.sale.quantity), total_amount: Number(forms.sale.total_amount) }];
     
-    if (!customerId || !items.length || items.some(i => !i.product_id || !i.price_type || !i.quantity || i.quantity <= 0 || !i.total_amount)) {
-      return showToast('Choose customer, items, Retail or Wholesale price, quantities, and totals');
+    if (!customerId || !items.length || items.some(i => !i.product_id || !i.quantity || Number(i.quantity) <= 0 || !i.total_amount || Number(i.total_amount) <= 0)) {
+      return showToast('Choose customer, items, and valid selling price/quantity for each row');
     }
 
-    const calculatedOriginal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    const originalTotal = Number(forms.sale.original_total || calculatedOriginal);
-    const finalTotalAmount = forms.sale.final_total_amount !== undefined && forms.sale.final_total_amount !== ''
-      ? Number(forms.sale.final_total_amount)
-      : (forms.sale.total_amount !== undefined && forms.sale.total_amount !== '' ? Number(forms.sale.total_amount) : originalTotal);
-    const discountAmount = Number(forms.sale.discount_amount || (originalTotal > finalTotalAmount ? originalTotal - finalTotalAmount : 0));
-    const discountPercentage = Number(forms.sale.discount_percentage || (originalTotal > 0 && discountAmount > 0 ? ((discountAmount / originalTotal) * 100).toFixed(2) : 0));
+    const calculatedTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
 
     try {
       setSaving(true);
@@ -2627,16 +2651,21 @@ function App() {
           paid_amount: String(Number(forms.sale.paid_amount || 0)),
           due_date: dueDate,
           notes,
-          payment_mode: forms.sale.payment_mode,
-          original_total: originalTotal,
-          final_total_amount: finalTotalAmount,
-          discount_amount: discountAmount,
-          discount_percentage: discountPercentage,
-          items: items.map((item) => ({
-            product_id: item.product_id,
-            quantity: Number(item.quantity),
-            price_type: item.price_type,
-          })),
+          payment_mode: forms.sale.payment_mode || 'cash',
+          original_total: calculatedTotal,
+          final_total_amount: calculatedTotal,
+          discount_amount: 0,
+          discount_percentage: 0,
+          items: items.map((item) => {
+            const unitPrice = Number(item.selling_price || (Number(item.total_amount) / Number(item.quantity || 1)));
+            return {
+              product_id: item.product_id,
+              quantity: Number(item.quantity),
+              selling_price: unitPrice,
+              unit_price: unitPrice,
+              price_type: item.price_type || 'retail',
+            };
+          }),
         }),
       });
 
@@ -2644,10 +2673,10 @@ function App() {
         ...prev,
         sale: {
           ...initialForms.sale,
-          items: [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }],
+          items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
         },
       }));
-      showToast('Sales created, stock reduced, pending updated');
+      showToast('Sale created successfully');
       await loadTab(reloadTab, shopId);
       if (!['sales', 'customers', 'stock'].includes(reloadTab)) {
         await loadStockPage({
@@ -4074,7 +4103,12 @@ function App() {
           )}
           <div className={`topbar-actions ${active === 'dashboard' ? 'hidden md:flex' : ''}`}>
             {role !== 'customer' && lowStockAlerts.length > 0 && (
-              <button type="button" className="notification-button" onClick={() => setActivePage('stock')} title="View low stock alerts">
+              <button
+                type="button"
+                className="notification-button"
+                onClick={() => setActivePage('low-stock')}
+                title="View Low & Out of Stock Alerts"
+              >
                 <AlertTriangle size={16} />
                 <span>{lowStockAlerts.length}</span>
               </button>
@@ -4391,6 +4425,25 @@ function App() {
             </PageWrapper>
           )}
 
+          {active === 'low-stock' && role !== 'customer' && (
+            <PageWrapper activeKey="low-stock" key="low-stock">
+              <LowStockPage
+                role={role}
+                session={session}
+                data={data}
+                api={authedFetch}
+                setGlobalToast={showToast}
+                onUpdateStock={updateStock}
+                loadCore={loadCore}
+                setActivePage={setActivePage}
+                priceLabel={priceLabel}
+                productName={productName}
+                fullModelList={fullModelList}
+                Empty={Empty}
+              />
+            </PageWrapper>
+          )}
+
           {active === 'customers' && (
             <PageWrapper activeKey="customers" key="customers">
               <section className="space">
@@ -4416,42 +4469,76 @@ function App() {
                           <Plus size={12} /> Add New Customer
                         </button>
                       </div>
-                      <Select value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
+                      <SearchableCombobox
+                        value={forms.sale.customer_id}
+                        onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })}
+                        options={data.customers.map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}`])}
+                        placeholder="Search or select customer..."
+                        searchPlaceholder="Search customer by name or phone..."
+                        className="w-full"
+                      />
                     </div>
                     
-                    <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4">
+                    <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4 relative z-30">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
-                      {(forms.sale.items || [{ product_id: '', quantity: 1, total_amount: '' }]).map((item, idx) => (
-                        <div key={idx} className="sale-line-item flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative">
-                          <div className="flex-1">
-                            <Select 
-                              label="Item bought" 
+                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }]).map((item, idx) => (
+                        <div key={idx} className="sale-line-item flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative z-30 focus-within:z-40">
+                          <div className="flex-1 min-w-[260px]">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
+                            <SearchableCombobox 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${p.short_name || compactModelName(p.name || p.product_name)} · ${p.quantity} pcs left`])}
+                              options={salesProductOptions}
+                              placeholder="Search catalog or select item..."
+                              searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
+                              className="w-full"
                             />
                           </div>
-                          <div style={{ width: '205px' }}>
+                          <div style={{ width: '185px' }}>
                             <Select
-                              label="Selling price"
-                              placeholder={item.product_id ? 'Select price type' : 'Choose item first'}
+                              label="Price tier"
+                              placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
                               value={item.price_type || ''}
                               onChange={(v) => updateSaleItemPriceType(idx, v)}
                               options={sellingPriceOptions(item.product_id)}
                               disabled={!item.product_id}
                             />
                           </div>
-                          <div style={{ width: '120px' }}>
-                            <Input label="Quantity" type="number" value={item.quantity} onChange={(v) => updateSaleItemQuantity(idx, v)} />
-                          </div>
                           <div style={{ width: '160px' }}>
-                            <Input label="Total price" type="number" value={item.total_amount} readOnly onChange={(v) => updateSaleItemPrice(idx, v)} />
+                            <Input
+                              label="Selling price (₹)"
+                              type="number"
+                              placeholder="₹ 0"
+                              value={item.selling_price !== undefined ? item.selling_price : ''}
+                              onChange={(v) => updateSaleItemSellingPrice(idx, v)}
+                              disabled={!item.product_id}
+                            />
+                          </div>
+                          <div style={{ width: '110px' }}>
+                            <Input 
+                              label="Quantity" 
+                              type="number" 
+                              min="1" 
+                              value={item.quantity} 
+                              onChange={(v) => updateSaleItemQuantity(idx, v)} 
+                              disabled={!item.product_id}
+                            />
+                          </div>
+                          <div style={{ width: '150px' }}>
+                            <Input 
+                              label="Total price (₹)" 
+                              type="number" 
+                              value={item.total_amount || ''} 
+                              readOnly 
+                              disabled 
+                            />
                           </div>
                           {(forms.sale.items || []).length > 1 && (
                             <button 
                               type="button" 
-                              className="soft !min-h-[48px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300"
+                              className="soft !min-h-[48px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer"
                               onClick={() => removeSaleItem(idx)}
+                              title="Remove item"
                             >
                               <X size={16} />
                             </button>
@@ -4460,7 +4547,7 @@ function App() {
                       ))}
                       <button 
                         type="button" 
-                        className="soft !px-4 !py-2 text-xs font-bold mt-2" 
+                        className="soft !px-4 !py-2 text-xs font-bold mt-2 cursor-pointer" 
                         onClick={addSaleItem}
                       >
                         + Add Another Display/Item
@@ -4470,50 +4557,38 @@ function App() {
 
                   <div className="md:col-span-2 space-y-1.5">
                     <Input
-                      label="Total bill amount (Editable)"
+                      label="Total bill amount (₹)"
                       type="number"
-                      value={forms.sale.final_total_amount || forms.sale.total_amount || ''}
-                      onChange={(v) => handleSaleFinalTotalChange(v)}
+                      value={forms.sale.total_amount || '0'}
+                      readOnly
+                      disabled
                     />
-                    {Number(forms.sale.discount_amount) > 0 ? (
-                      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span>🏷️ Discount: <strong>₹{Number(forms.sale.discount_amount).toLocaleString('en-IN')}</strong> ({forms.sale.discount_percentage}%)</span>
-                          <span className="text-slate-400">·</span>
-                          <span className="text-slate-500 line-through">₹{Number(forms.sale.original_total || 0).toLocaleString('en-IN')}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={resetSaleDiscount}
-                          className="text-[11px] font-bold text-slate-500 hover:text-red-600 underline cursor-pointer shrink-0 ml-1"
-                        >
-                          Reset
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="text-[11px] text-slate-400 px-1">
-                        Auto-calculated sum: ₹{Number(forms.sale.original_total || forms.sale.total_amount || 0).toLocaleString('en-IN')}. Edit total or enter discount below.
-                      </div>
-                    )}
+                    <div className="text-[11px] text-slate-400 px-1">
+                      Calculated automatically from item line totals.
+                    </div>
                   </div>
                   <Input 
-                    label="Discount (₹)" 
+                    label="Paid amount (₹)" 
                     type="number" 
                     className="md:col-span-1" 
-                    value={forms.sale.discount_amount || ''} 
-                    placeholder="₹ 0" 
-                    onChange={(v) => handleSaleDiscountAmountChange(v)} 
+                    value={forms.sale.paid_amount || ''} 
+                    placeholder="₹ 0"
+                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} 
+                  />
+                  <Select 
+                    label="Payment mode" 
+                    className="md:col-span-1" 
+                    value={forms.sale.payment_mode} 
+                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} 
+                    options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} 
                   />
                   <Input 
-                    label="Discount (%)" 
-                    type="number" 
-                    className="md:col-span-1" 
-                    value={forms.sale.discount_percentage || ''} 
-                    placeholder="0 %" 
-                    onChange={(v) => handleSaleDiscountPercentageChange(v)} 
+                    label="Due date" 
+                    type="date" 
+                    className="md:col-span-2" 
+                    value={forms.sale.due_date} 
+                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} 
                   />
-                  <Input label="Paid now" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
-                  <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                   <BillSummary sale={forms.sale} />
                 </FormPanel>
                 <div className="catalog-toolbar panel sales-toolbar">
@@ -4594,42 +4669,76 @@ function App() {
                           <Plus size={12} /> Add New Customer
                         </button>
                       </div>
-                      <Select value={forms.sale.customer_id} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })} options={data.customers.map((c) => [c.id, c.name])} />
+                      <SearchableCombobox
+                        value={forms.sale.customer_id}
+                        onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })}
+                        options={data.customers.map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}`])}
+                        placeholder="Search or select customer..."
+                        searchPlaceholder="Search customer by name or phone..."
+                        className="w-full"
+                      />
                     </div>
                     
-                    <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4">
+                    <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4 relative z-30">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
-                      {(forms.sale.items || [{ product_id: '', quantity: 1, total_amount: '' }]).map((item, idx) => (
-                        <div key={idx} className="sale-line-item flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative">
-                          <div className="flex-1">
-                            <Select 
-                              label="Item bought" 
+                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }]).map((item, idx) => (
+                        <div key={idx} className="sale-line-item flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative z-30 focus-within:z-40">
+                          <div className="flex-1 min-w-[260px]">
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
+                            <SearchableCombobox 
                               value={item.product_id} 
                               onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={data.stock.filter((s) => s.quantity > 0 || String(s.product_id) === String(item.product_id)).map((p) => [p.product_id, `${p.short_name || compactModelName(p.name || p.product_name)} · ${p.quantity} pcs left`])}
+                              options={salesProductOptions}
+                              placeholder="Search catalog or select item..."
+                              searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
+                              className="w-full"
                             />
                           </div>
-                          <div style={{ width: '205px' }}>
+                          <div style={{ width: '185px' }}>
                             <Select
-                              label="Selling price"
-                              placeholder={item.product_id ? 'Select price type' : 'Choose item first'}
+                              label="Price tier"
+                              placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
                               value={item.price_type || ''}
                               onChange={(v) => updateSaleItemPriceType(idx, v)}
                               options={sellingPriceOptions(item.product_id)}
                               disabled={!item.product_id}
                             />
                           </div>
-                          <div style={{ width: '120px' }}>
-                            <Input label="Quantity" type="number" value={item.quantity} onChange={(v) => updateSaleItemQuantity(idx, v)} />
-                          </div>
                           <div style={{ width: '160px' }}>
-                            <Input label="Total price" type="number" value={item.total_amount} readOnly onChange={(v) => updateSaleItemPrice(idx, v)} />
+                            <Input
+                              label="Selling price (₹)"
+                              type="number"
+                              placeholder="₹ 0"
+                              value={item.selling_price !== undefined ? item.selling_price : ''}
+                              onChange={(v) => updateSaleItemSellingPrice(idx, v)}
+                              disabled={!item.product_id}
+                            />
+                          </div>
+                          <div style={{ width: '110px' }}>
+                            <Input 
+                              label="Quantity" 
+                              type="number" 
+                              min="1" 
+                              value={item.quantity} 
+                              onChange={(v) => updateSaleItemQuantity(idx, v)} 
+                              disabled={!item.product_id}
+                            />
+                          </div>
+                          <div style={{ width: '150px' }}>
+                            <Input 
+                              label="Total price (₹)" 
+                              type="number" 
+                              value={item.total_amount || ''} 
+                              readOnly 
+                              disabled 
+                            />
                           </div>
                           {(forms.sale.items || []).length > 1 && (
                             <button 
                               type="button" 
-                              className="soft !min-h-[48px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300"
+                              className="soft !min-h-[48px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer"
                               onClick={() => removeSaleItem(idx)}
+                              title="Remove item"
                             >
                               <X size={16} />
                             </button>
@@ -4638,7 +4747,7 @@ function App() {
                       ))}
                       <button 
                         type="button" 
-                        className="soft !px-4 !py-2 text-xs font-bold mt-2" 
+                        className="soft !px-4 !py-2 text-xs font-bold mt-2 cursor-pointer" 
                         onClick={addSaleItem}
                       >
                         + Add Another Display/Item
@@ -4648,51 +4757,38 @@ function App() {
 
                   <div className="md:col-span-2 space-y-1.5">
                     <Input
-                      label="Total bill amount (Editable)"
+                      label="Total bill amount (₹)"
                       type="number"
-                      value={forms.sale.final_total_amount || forms.sale.total_amount || ''}
-                      onChange={(v) => handleSaleFinalTotalChange(v)}
+                      value={forms.sale.total_amount || '0'}
+                      readOnly
+                      disabled
                     />
-                    {Number(forms.sale.discount_amount) > 0 ? (
-                      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span>🏷️ Discount: <strong>₹{Number(forms.sale.discount_amount).toLocaleString('en-IN')}</strong> ({forms.sale.discount_percentage}%)</span>
-                          <span className="text-slate-400">·</span>
-                          <span className="text-slate-500 line-through">₹{Number(forms.sale.original_total || 0).toLocaleString('en-IN')}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={resetSaleDiscount}
-                          className="text-[11px] font-bold text-slate-500 hover:text-red-600 underline cursor-pointer shrink-0 ml-1"
-                        >
-                          Reset
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="text-[11px] text-slate-400 px-1">
-                        Auto-calculated sum: ₹{Number(forms.sale.original_total || forms.sale.total_amount || 0).toLocaleString('en-IN')}. Edit total or enter discount below.
-                      </div>
-                    )}
+                    <div className="text-[11px] text-slate-400 px-1">
+                      Calculated automatically from item line totals.
+                    </div>
                   </div>
                   <Input 
-                    label="Discount (₹)" 
+                    label="Paid amount (₹)" 
                     type="number" 
                     className="md:col-span-1" 
-                    value={forms.sale.discount_amount || ''} 
-                    placeholder="₹ 0" 
-                    onChange={(v) => handleSaleDiscountAmountChange(v)} 
+                    value={forms.sale.paid_amount || ''} 
+                    placeholder="₹ 0"
+                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} 
+                  />
+                  <Select 
+                    label="Payment mode" 
+                    className="md:col-span-1" 
+                    value={forms.sale.payment_mode} 
+                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} 
+                    options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} 
                   />
                   <Input 
-                    label="Discount (%)" 
-                    type="number" 
-                    className="md:col-span-1" 
-                    value={forms.sale.discount_percentage || ''} 
-                    placeholder="0 %" 
-                    onChange={(v) => handleSaleDiscountPercentageChange(v)} 
+                    label="Due date" 
+                    type="date" 
+                    className="md:col-span-2" 
+                    value={forms.sale.due_date} 
+                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} 
                   />
-                  <Input label="Paid amount" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
-                  <Select label="Payment mode" className="md:col-span-1" value={forms.sale.payment_mode} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} />
-                  <Input label="Due date" type="date" className="md:col-span-2" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                   <BillSummary sale={forms.sale} />
                 </FormPanel>
                 <div className="catalog-toolbar panel sales-toolbar">

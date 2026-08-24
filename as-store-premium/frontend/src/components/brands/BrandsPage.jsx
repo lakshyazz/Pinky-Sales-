@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, Layers, Coins, Activity, Clock, SlidersHorizontal, Inbox, ChevronRight, Download } from 'lucide-react';
-import { exportProductBrandsExcel } from '../../utils/excelExport';
+import { exportBrandProductsInventoryExcel } from '../../utils/excelExport';
 
 const formatCurrency = (value) => `₹${Number(value || 0).toLocaleString('en-IN')}`;
 
@@ -360,15 +360,27 @@ export default function BrandsPage({
           <button
             type="button"
             onClick={() => {
-              if (!brandList.length) {
-                if (setGlobalToast) setGlobalToast('No brands found to export', 'error');
+              if (!brandList.length && !allProducts.length) {
+                if (setGlobalToast) setGlobalToast('No brands or products found to export', 'error');
                 return;
               }
-              exportProductBrandsExcel(brandList);
-              if (setGlobalToast) setGlobalToast('Product Brands Excel (.xlsx) downloaded', 'success');
+              const relevantProducts = searchVal
+                ? allProducts.filter((p) => {
+                    const b = String(p.brand || p.company_brand_name || '').toLowerCase();
+                    const n = String(p.name || p.short_name || p.product_name || '').toLowerCase();
+                    const q = searchVal.toLowerCase();
+                    return b.includes(q) || n.includes(q);
+                  })
+                : allProducts;
+
+              exportBrandProductsInventoryExcel({
+                brandSummaries: brandList,
+                products: relevantProducts
+              });
+              if (setGlobalToast) setGlobalToast('Brand products inventory Excel (.xlsx) downloaded', 'success');
             }}
             className="px-4 py-3 rounded-2xl bg-white border border-slate-200 hover:bg-slate-50 hover:border-teal-300 text-slate-700 hover:text-teal-700 font-bold text-xs flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
-            title="Download Product Brands spreadsheet (.xlsx)"
+            title="Download comprehensive Brand Products Inventory spreadsheet (.xlsx)"
           >
             <Download className="w-4 h-4 text-teal-600" /> Export Excel
           </button>

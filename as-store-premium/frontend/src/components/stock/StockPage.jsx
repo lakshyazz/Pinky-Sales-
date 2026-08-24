@@ -120,6 +120,25 @@ export default function StockPage({
     type: 'brand', // 'brand' | 'manufacturing-brand' | 'supplier'
   });
 
+  // Auto-listen to URL query parameters on mount or when location changes (e.g. /stock?filter=low_stock or /stock?status=out_of_stock)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !setStockFilters) return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const filterParam = searchParams.get('filter') || searchParams.get('status');
+    if (filterParam) {
+      const normalized = filterParam.toLowerCase().trim();
+      if (normalized === 'low_stock' || normalized === 'low' || normalized === 'warning') {
+        setStockFilters((prev) => (prev.status === 'low_stock' ? prev : { ...prev, status: 'low_stock' }));
+        setIsFiltersOpen(true);
+      } else if (normalized === 'out_of_stock' || normalized === 'no_stock' || normalized === 'out') {
+        setStockFilters((prev) => (prev.status === 'out_of_stock' ? prev : { ...prev, status: 'out_of_stock' }));
+        setIsFiltersOpen(true);
+      } else if (normalized === 'in_stock') {
+        setStockFilters((prev) => (prev.status === 'in_stock' ? prev : { ...prev, status: 'in_stock' }));
+      }
+    }
+  }, []);
+
   const handleOpenQuickAdd = (type, e) => {
     if (e) {
       e.preventDefault();
