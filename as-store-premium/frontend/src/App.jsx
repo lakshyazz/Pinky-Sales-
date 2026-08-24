@@ -480,7 +480,22 @@ const initialForms = {
   },
   stock: { product_id: '', quantity: '', colour: '', supplier_id: '' },
   customer: { name: '', mobile: '', address: '', notes: '' },
-  sale: { product_id: '', customer_id: '', quantity: 1, total_amount: '', paid_amount: '', payment_mode: 'cash', due_date: '2026-06-15', notes: '', items: [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }] },
+  sale: {
+    product_id: '',
+    customer_id: '',
+    quantity: 1,
+    original_total: '',
+    final_total_amount: '',
+    total_amount: '',
+    discount_amount: '',
+    discount_percentage: '',
+    is_custom_total: false,
+    paid_amount: '',
+    payment_mode: 'cash',
+    due_date: '2026-06-15',
+    notes: '',
+    items: [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }],
+  },
   payment: { sale_id: '', amount: '', note: '' },
   request: { product_id: '', model_name: '', quantity: 1, message: '' },
   transfer: { from_shop_id: '', to_shop_id: '', product_id: '', quantity: '', note: '' },
@@ -648,7 +663,9 @@ function Empty({ title }) {
 
 function BillSummary({ sale }) {
   const items = sale.items || [];
-  const grandTotal = Number(sale.total_amount || 0);
+  const grandTotal = Number(sale.final_total_amount || sale.total_amount || 0);
+  const originalTotal = Number(sale.original_total || grandTotal);
+  const discountAmount = Number(sale.discount_amount || (originalTotal > grandTotal ? originalTotal - grandTotal : 0));
   const paidAmount = Number(sale.paid_amount || 0);
   const pendingAmount = Math.max(grandTotal - paidAmount, 0);
   return (
@@ -661,6 +678,11 @@ function BillSummary({ sale }) {
       <div>
         <small>Grand total</small>
         <strong>{currency(grandTotal)}</strong>
+        {discountAmount > 0 && (
+          <span className="text-[10px] text-emerald-600 font-semibold block leading-tight mt-0.5">
+            -{currency(discountAmount)} ({sale.discount_percentage || ((discountAmount / originalTotal) * 100).toFixed(1)}%)
+          </span>
+        )}
       </div>
       <div>
         <small>Paid amount</small>
@@ -2321,6 +2343,139 @@ function App() {
     ];
   };
 
+  const calculateSaleTotals = (items, currentSale, manualOverride = null) => {
+    const originalTotal = (items || []).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    
+    let finalTotal = originalTotal;
+    let isCustom = currentSale?.is_custom_total || false;
+    let discountAmount = 0;
+    let discountPercentage = 0;
+
+    if (manualOverride !== null) {
+      if (manualOverride.type === 'final_total') {
+        const valStr = manualOverride.value;
+        if (valStr === '') {
+          finalTotal = '';
+          isCustom = true;
+          discountAmount = '';
+          discountPercentage = '';
+        } else {
+          const parsed = Math.max(Number(valStr || 0), 0);
+          finalTotal = parsed;
+          isCustom = parsed !== originalTotal;
+          if (originalTotal > 0 && parsed < originalTotal) {
+            discountAmount = Math.round((originalTotal - parsed) * 100) / 100;
+            discountPercentage = Math.round(((originalTotal - parsed) / originalTotal) * 10000) / 100;
+          } else {
+            discountAmount = 0;
+            discountPercentage = 0;
+          }
+        }
+      } else if (manualOverride.type === 'discount_amount') {
+        const valStr = manualOverride.value;
+        if (valStr === '') {
+          discountAmount = '';
+          discountPercentage = '';
+          finalTotal = originalTotal;
+          isCustom = false;
+        } else {
+          const discAmt = Math.max(Number(valStr || 0), 0);
+          discountAmount = discAmt;
+          finalTotal = Math.max(originalTotal - discAmt, 0);
+          isCustom = discAmt > 0;
+          discountPercentage = originalTotal > 0 ? Math.round((discAmt / originalTotal) * 10000) / 100 : 0;
+        }
+      } else if (manualOverride.type === 'discount_percentage') {
+        const valStr = manualOverride.value;
+        if (valStr === '') {
+          discountPercentage = '';
+          discountAmount = '';
+          finalTotal = originalTotal;
+          isCustom = false;
+        } else {
+          const discPct = Math.max(Math.min(Number(valStr || 0), 100), 0);
+          discountPercentage = discPct;
+          discountAmount = Math.round(((originalTotal * discPct) / 100) * 100) / 100;
+          finalTotal = Math.max(originalTotal - discountAmount, 0);
+          isCustom = discPct > 0;
+        }
+      }
+    } else {
+      if (isCustom && currentSale?.discount_percentage && Number(currentSale.discount_percentage) > 0) {
+        const discPct = Number(currentSale.discount_percentage);
+        discountPercentage = discPct;
+        discountAmount = Math.round(((originalTotal * discPct) / 100) * 100) / 100;
+        finalTotal = Math.max(originalTotal - discountAmount, 0);
+      } else if (isCustom && currentSale?.discount_amount && Number(currentSale.discount_amount) > 0) {
+        const discAmt = Math.min(Number(currentSale.discount_amount), originalTotal);
+        discountAmount = discAmt;
+        finalTotal = Math.max(originalTotal - discAmt, 0);
+        discountPercentage = originalTotal > 0 ? Math.round((discAmt / originalTotal) * 10000) / 100 : 0;
+      } else {
+        finalTotal = originalTotal;
+        isCustom = false;
+        discountAmount = 0;
+        discountPercentage = 0;
+      }
+    }
+
+    return {
+      original_total: String(originalTotal),
+      final_total_amount: finalTotal === '' ? '' : String(finalTotal),
+      total_amount: finalTotal === '' ? '' : String(finalTotal),
+      discount_amount: discountAmount !== '' && Number(discountAmount) > 0 ? String(discountAmount) : (discountAmount === '' ? '' : ''),
+      discount_percentage: discountPercentage !== '' && Number(discountPercentage) > 0 ? String(discountPercentage) : (discountPercentage === '' ? '' : ''),
+      is_custom_total: isCustom,
+    };
+  };
+
+  const handleSaleFinalTotalChange = (value) => {
+    const totals = calculateSaleTotals(forms.sale.items || [], forms.sale, { type: 'final_total', value });
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+      },
+    }));
+  };
+
+  const handleSaleDiscountAmountChange = (value) => {
+    const totals = calculateSaleTotals(forms.sale.items || [], forms.sale, { type: 'discount_amount', value });
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+      },
+    }));
+  };
+
+  const handleSaleDiscountPercentageChange = (value) => {
+    const totals = calculateSaleTotals(forms.sale.items || [], forms.sale, { type: 'discount_percentage', value });
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+      },
+    }));
+  };
+
+  const resetSaleDiscount = () => {
+    const items = forms.sale.items || [];
+    const orig = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const totals = calculateSaleTotals(items, { ...forms.sale, is_custom_total: false, discount_amount: '', discount_percentage: '' }, { type: 'final_total', value: String(orig) });
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+        is_custom_total: false,
+      },
+    }));
+  };
+
   const updateSaleItemProduct = (index, productId) => {
     const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
     const qty = Math.max(Number(currentItems[index]?.quantity || 1), 1);
@@ -2332,18 +2487,18 @@ function App() {
       total_amount: '',
     };
 
-    const totalSum = currentItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const totals = calculateSaleTotals(currentItems, forms.sale);
 
-    setForms({
-      ...forms,
+    setForms((prev) => ({
+      ...prev,
       sale: {
-        ...forms.sale,
+        ...prev.sale,
         product_id: currentItems[0]?.product_id || '',
         quantity: currentItems[0]?.quantity || 1,
-        total_amount: String(totalSum),
+        ...totals,
         items: currentItems,
       },
-    });
+    }));
   };
 
   const updateSaleItemPriceType = (index, priceType) => {
@@ -2353,8 +2508,8 @@ function App() {
     const quantity = Math.max(Number(item?.quantity || 1), 1);
     if (priceType && unitPrice <= 0) {
       currentItems[index] = { ...item, price_type: '', total_amount: '' };
-      const totalSum = currentItems.reduce((sum, current) => sum + Number(current.total_amount || 0), 0);
-      setForms({ ...forms, sale: { ...forms.sale, total_amount: String(totalSum), items: currentItems } });
+      const totals = calculateSaleTotals(currentItems, forms.sale);
+      setForms((prev) => ({ ...prev, sale: { ...prev.sale, ...totals, items: currentItems } }));
       return showToast(`${priceType === 'wholesale' ? 'Wholesale' : 'Retail'} price is not set for this item. Add it from Prices first.`);
     }
     currentItems[index] = {
@@ -2362,8 +2517,8 @@ function App() {
       price_type: priceType,
       total_amount: unitPrice ? String(unitPrice * quantity) : '',
     };
-    const totalSum = currentItems.reduce((sum, current) => sum + Number(current.total_amount || 0), 0);
-    setForms({ ...forms, sale: { ...forms.sale, total_amount: String(totalSum), items: currentItems } });
+    const totals = calculateSaleTotals(currentItems, forms.sale);
+    setForms((prev) => ({ ...prev, sale: { ...prev.sale, ...totals, items: currentItems } }));
   };
 
   const updateSaleItemQuantity = (index, quantity) => {
@@ -2377,17 +2532,17 @@ function App() {
       total_amount: price && numericQuantity ? String(price * numericQuantity) : (currentItems[index]?.total_amount || ''),
     };
 
-    const totalSum = currentItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const totals = calculateSaleTotals(currentItems, forms.sale);
 
-    setForms({
-      ...forms,
+    setForms((prev) => ({
+      ...prev,
       sale: {
-        ...forms.sale,
+        ...prev.sale,
         quantity: currentItems[0]?.quantity || 1,
-        total_amount: String(totalSum),
+        ...totals,
         items: currentItems,
       },
-    });
+    }));
   };
 
   const updateSaleItemPrice = (index, priceVal) => {
@@ -2396,44 +2551,44 @@ function App() {
       ...currentItems[index],
       total_amount: priceVal,
     };
-    const totalSum = currentItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    setForms({
-      ...forms,
+    const totals = calculateSaleTotals(currentItems, forms.sale);
+    setForms((prev) => ({
+      ...prev,
       sale: {
-        ...forms.sale,
-        total_amount: String(totalSum),
+        ...prev.sale,
+        ...totals,
         items: currentItems,
       },
-    });
+    }));
   };
 
   const addSaleItem = () => {
     const currentItems = [...(forms.sale.items || [{ product_id: '', price_type: '', quantity: 1, total_amount: '' }])];
     currentItems.push({ product_id: '', price_type: '', quantity: 1, total_amount: '' });
-    setForms({
-      ...forms,
+    setForms((prev) => ({
+      ...prev,
       sale: {
-        ...forms.sale,
+        ...prev.sale,
         items: currentItems,
       },
-    });
+    }));
   };
 
   const removeSaleItem = (index) => {
     const currentItems = [...(forms.sale.items || [{ product_id: '', quantity: 1, total_amount: '' }])];
     if (currentItems.length <= 1) return;
     currentItems.splice(index, 1);
-    const totalSum = currentItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    setForms({
-      ...forms,
+    const totals = calculateSaleTotals(currentItems, forms.sale);
+    setForms((prev) => ({
+      ...prev,
       sale: {
-        ...forms.sale,
+        ...prev.sale,
         product_id: currentItems[0]?.product_id || '',
         quantity: currentItems[0]?.quantity || 1,
-        total_amount: String(totalSum),
+        ...totals,
         items: currentItems,
       },
-    });
+    }));
   };
 
   const deleteSale = (sale) => {
@@ -2469,6 +2624,14 @@ function App() {
       return showToast('Choose customer, items, Retail or Wholesale price, quantities, and totals');
     }
 
+    const calculatedOriginal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const originalTotal = Number(forms.sale.original_total || calculatedOriginal);
+    const finalTotalAmount = forms.sale.final_total_amount !== undefined && forms.sale.final_total_amount !== ''
+      ? Number(forms.sale.final_total_amount)
+      : (forms.sale.total_amount !== undefined && forms.sale.total_amount !== '' ? Number(forms.sale.total_amount) : originalTotal);
+    const discountAmount = Number(forms.sale.discount_amount || (originalTotal > finalTotalAmount ? originalTotal - finalTotalAmount : 0));
+    const discountPercentage = Number(forms.sale.discount_percentage || (originalTotal > 0 && discountAmount > 0 ? ((discountAmount / originalTotal) * 100).toFixed(2) : 0));
+
     try {
       setSaving(true);
       await authedFetch('/sales', {
@@ -2480,6 +2643,10 @@ function App() {
           due_date: dueDate,
           notes,
           payment_mode: forms.sale.payment_mode,
+          original_total: originalTotal,
+          final_total_amount: finalTotalAmount,
+          discount_amount: discountAmount,
+          discount_percentage: discountPercentage,
           items: items.map((item) => ({
             product_id: item.product_id,
             quantity: Number(item.quantity),
@@ -4315,7 +4482,50 @@ function App() {
                     </div>
                   </div>
 
-                  <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} readOnly onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
+                  <div className="md:col-span-2 space-y-1.5">
+                    <Input
+                      label="Total bill amount (Editable)"
+                      type="number"
+                      value={forms.sale.final_total_amount || forms.sale.total_amount || ''}
+                      onChange={(v) => handleSaleFinalTotalChange(v)}
+                    />
+                    {Number(forms.sale.discount_amount) > 0 ? (
+                      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>🏷️ Discount: <strong>₹{Number(forms.sale.discount_amount).toLocaleString('en-IN')}</strong> ({forms.sale.discount_percentage}%)</span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-500 line-through">₹{Number(forms.sale.original_total || 0).toLocaleString('en-IN')}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={resetSaleDiscount}
+                          className="text-[11px] font-bold text-slate-500 hover:text-red-600 underline cursor-pointer shrink-0 ml-1"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 px-1">
+                        Auto-calculated sum: ₹{Number(forms.sale.original_total || forms.sale.total_amount || 0).toLocaleString('en-IN')}. Edit total or enter discount below.
+                      </div>
+                    )}
+                  </div>
+                  <Input 
+                    label="Discount (₹)" 
+                    type="number" 
+                    className="md:col-span-1" 
+                    value={forms.sale.discount_amount || ''} 
+                    placeholder="₹ 0" 
+                    onChange={(v) => handleSaleDiscountAmountChange(v)} 
+                  />
+                  <Input 
+                    label="Discount (%)" 
+                    type="number" 
+                    className="md:col-span-1" 
+                    value={forms.sale.discount_percentage || ''} 
+                    placeholder="0 %" 
+                    onChange={(v) => handleSaleDiscountPercentageChange(v)} 
+                  />
                   <Input label="Paid now" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                   <BillSummary sale={forms.sale} />
@@ -4450,10 +4660,53 @@ function App() {
                     </div>
                   </div>
 
-                  <Input label="Total bill amount (Auto-calculated)" type="number" className="md:col-span-2" value={forms.sale.total_amount} readOnly onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, total_amount: v } })} />
+                  <div className="md:col-span-2 space-y-1.5">
+                    <Input
+                      label="Total bill amount (Editable)"
+                      type="number"
+                      value={forms.sale.final_total_amount || forms.sale.total_amount || ''}
+                      onChange={(v) => handleSaleFinalTotalChange(v)}
+                    />
+                    {Number(forms.sale.discount_amount) > 0 ? (
+                      <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-semibold text-emerald-800">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>🏷️ Discount: <strong>₹{Number(forms.sale.discount_amount).toLocaleString('en-IN')}</strong> ({forms.sale.discount_percentage}%)</span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-500 line-through">₹{Number(forms.sale.original_total || 0).toLocaleString('en-IN')}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={resetSaleDiscount}
+                          className="text-[11px] font-bold text-slate-500 hover:text-red-600 underline cursor-pointer shrink-0 ml-1"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-400 px-1">
+                        Auto-calculated sum: ₹{Number(forms.sale.original_total || forms.sale.total_amount || 0).toLocaleString('en-IN')}. Edit total or enter discount below.
+                      </div>
+                    )}
+                  </div>
+                  <Input 
+                    label="Discount (₹)" 
+                    type="number" 
+                    className="md:col-span-1" 
+                    value={forms.sale.discount_amount || ''} 
+                    placeholder="₹ 0" 
+                    onChange={(v) => handleSaleDiscountAmountChange(v)} 
+                  />
+                  <Input 
+                    label="Discount (%)" 
+                    type="number" 
+                    className="md:col-span-1" 
+                    value={forms.sale.discount_percentage || ''} 
+                    placeholder="0 %" 
+                    onChange={(v) => handleSaleDiscountPercentageChange(v)} 
+                  />
                   <Input label="Paid amount" type="number" className="md:col-span-1" value={forms.sale.paid_amount} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} />
                   <Select label="Payment mode" className="md:col-span-1" value={forms.sale.payment_mode} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} />
-                  <Input label="Due date" type="date" className="md:col-span-1" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
+                  <Input label="Due date" type="date" className="md:col-span-2" value={forms.sale.due_date} onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} />
                   <BillSummary sale={forms.sale} />
                 </FormPanel>
                 <div className="catalog-toolbar panel sales-toolbar">

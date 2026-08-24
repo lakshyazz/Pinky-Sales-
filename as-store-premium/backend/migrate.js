@@ -26,7 +26,7 @@ const pool = new Pool({
   connectionString,
   ssl: { rejectUnauthorized: false },
   max: 1,
-  connectionTimeoutMillis: 10_000,
+  connectionTimeoutMillis: 30_000,
   query_timeout: 30_000,
 });
 

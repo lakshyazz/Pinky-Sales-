@@ -29,10 +29,15 @@ const pool = new Pool({
   connectionString,
   ssl: { rejectUnauthorized: false },
   max: Number(process.env.PG_POOL_MAX || (process.env.VERCEL === '1' ? 3 : 10)),
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 15_000,
-  query_timeout: 25_000,
+  idleTimeoutMillis: 10_000,          // Prune idle connections after 10s to avoid stale socket drops
+  connectionTimeoutMillis: 30_000,    // Allow up to 30s for cross-region handshake & cold starts
+  query_timeout: 30_000,              // Query execution limit of 30s
   keepAlive: true,
+  keepAliveInitialDelayMillis: 10_000,
+});
+
+pool.on('error', (err) => {
+  console.warn('[Database Pool Warning] Idle client connection issue caught:', err?.message || err);
 });
 
 // Convert SQLite parameter placeholders (?) to PostgreSQL ($1, $2, ...)
@@ -48,23 +53,47 @@ function convertSql(sql) {
   return converted;
 }
 
+const isTransientDbError = (error) => {
+  const message = `${error?.message || ''} ${error?.cause?.message || ''}`;
+  return /connection terminated|connection timeout|timeout|ECONNRESET|ETIMEDOUT|closed unexpectedly/i.test(message)
+    || ['08003', '08006', '57P01', '53300'].includes(String(error?.code || ''));
+};
+
+const executeWithRetry = async (fn, retries = 1) => {
+  try {
+    return await fn();
+  } catch (error) {
+    if (retries > 0 && isTransientDbError(error)) {
+      console.warn(`[Database] Retrying query after transient connection issue: ${error.message}`);
+      return await fn();
+    }
+    throw error;
+  }
+};
+
 export const runQuery = async (sql, params = []) => {
   const pgSql = convertSql(sql);
-  const res = await pool.query(pgSql, params);
-  const id = res.rows && res.rows[0] ? res.rows[0].id : null;
-  return { id, changes: res.rowCount };
+  return executeWithRetry(async () => {
+    const res = await pool.query(pgSql, params);
+    const id = res.rows && res.rows[0] ? res.rows[0].id : null;
+    return { id, changes: res.rowCount };
+  });
 };
 
 export const getRecord = async (sql, params = []) => {
   const pgSql = convertSql(sql);
-  const res = await pool.query(pgSql, params);
-  return res.rows[0] || null;
+  return executeWithRetry(async () => {
+    const res = await pool.query(pgSql, params);
+    return res.rows[0] || null;
+  });
 };
 
 export const allRecords = async (sql, params = []) => {
   const pgSql = convertSql(sql);
-  const res = await pool.query(pgSql, params);
-  return res.rows;
+  return executeWithRetry(async () => {
+    const res = await pool.query(pgSql, params);
+    return res.rows;
+  });
 };
 
 export const runTransaction = async (callback) => {

@@ -3180,27 +3180,71 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           reservedBatches.push({ ...batch, quantity_remaining: reserved });
           toReserve -= reserved;
         }
-        preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches });
+        preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches, unitPrice, product });
       }
 
-      const totalAmount = preparedItems.reduce((sum, item) => sum + item.saleTotal, 0);
-      if (money(paid_amount) > totalAmount) {
-        const error = new Error('Paid amount cannot exceed the sale total.');
+      const originalTotal = preparedItems.reduce((sum, item) => sum + item.saleTotal, 0);
+      const requestedFinalTotal = req.body.final_total_amount !== undefined && req.body.final_total_amount !== null && req.body.final_total_amount !== '' && !isNaN(Number(req.body.final_total_amount))
+        ? money(req.body.final_total_amount)
+        : (req.body.total_amount !== undefined && !isNaN(Number(req.body.total_amount)) ? money(req.body.total_amount) : originalTotal);
+
+      const finalTotalAmount = requestedFinalTotal >= 0 ? requestedFinalTotal : originalTotal;
+      const discountAmount = Math.max(money(originalTotal - finalTotalAmount), 0);
+      const discountPercentage = originalTotal > 0 ? Number(((discountAmount / originalTotal) * 100).toFixed(2)) : 0;
+
+      if (money(paid_amount) > finalTotalAmount) {
+        const error = new Error('Paid amount cannot exceed the final bill total.');
         error.status = 400;
         throw error;
+      }
+
+      // Proportionally distribute finalTotalAmount across prepared items
+      let allocatedTotal = 0;
+      for (let i = 0; i < preparedItems.length; i++) {
+        const item = preparedItems[i];
+        let itemFinal;
+        if (i === preparedItems.length - 1) {
+          itemFinal = Math.max(money(finalTotalAmount - allocatedTotal), 0);
+        } else {
+          itemFinal = originalTotal > 0 ? money((item.saleTotal / originalTotal) * finalTotalAmount) : 0;
+          allocatedTotal += itemFinal;
+        }
+        item.finalItemTotal = itemFinal;
+        item.itemOriginalTotal = item.saleTotal;
+        item.itemDiscountAmount = Math.max(item.saleTotal - itemFinal, 0);
       }
 
       let remainingPaid = money(paid_amount);
       const saleIds = [];
       let totalPending = 0;
       for (const item of preparedItems) {
-        const itemPaid = Math.min(remainingPaid, item.saleTotal);
+        const itemTotal = item.finalItemTotal;
+        const itemPaid = Math.min(remainingPaid, itemTotal);
         remainingPaid -= itemPaid;
-        const pending = Math.max(item.saleTotal - itemPaid, 0);
+        const pending = Math.max(itemTotal - itemPaid, 0);
         totalPending += pending;
         const insertResult = await tx.runQuery(
-          'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type, manufacturing_brand_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-          [shopId, item.product_id, customer_id, item.saleQuantity, item.saleTotal, itemPaid, pending, due_date || '', today(), notes || '', pending > 0 ? 'open' : 'paid', req.user.id, payment_mode, item.price_type, product.manufacturing_brand_id]
+          'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount, discount_amount, discount_percentage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          [
+            shopId, 
+            item.product_id, 
+            customer_id, 
+            item.saleQuantity, 
+            itemTotal, 
+            itemPaid, 
+            pending, 
+            due_date || '', 
+            today(), 
+            notes || '', 
+            pending > 0 ? 'open' : 'paid', 
+            req.user.id, 
+            payment_mode, 
+            item.price_type, 
+            item.product.manufacturing_brand_id,
+            item.itemOriginalTotal,
+            item.itemDiscountAmount,
+            discountPercentage
+          ]
         );
         saleIds.push(insertResult.id);
         let remaining = item.saleQuantity;
@@ -3219,11 +3263,11 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           await tx.runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [insertResult.id, itemPaid, today(), 'Initial sale payment']);
         }
       }
-      return { ids: saleIds, pending_amount: totalPending };
+      return { ids: saleIds, pending_amount: totalPending, total_amount: finalTotalAmount, original_total: originalTotal, discount_amount: discountAmount, discount_percentage: discountPercentage };
     });
 
-    await audit(req, 'Created sale', 'sale', result.ids[0], `${result.ids.length} item(s), pending ${result.pending_amount}`);
-    res.status(201).json({ ids: result.ids, pending_amount: result.pending_amount });
+    await audit(req, 'Created sale', 'sale', result.ids[0], `${result.ids.length} item(s), total ${result.total_amount}, pending ${result.pending_amount}`);
+    res.status(201).json({ ids: result.ids, pending_amount: result.pending_amount, total_amount: result.total_amount, discount_amount: result.discount_amount, discount_percentage: result.discount_percentage });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create sale.' });
   }
