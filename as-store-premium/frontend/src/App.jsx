@@ -2632,8 +2632,16 @@ function App() {
           setSaving(true);
           await authedFetch(`/sales/${sale.id}`, { method: 'DELETE' });
           showToast('Sale deleted and stock restored');
-          await loadTab('sales', shopId);
-          await loadTab('dashboard', shopId);
+          await Promise.all([
+            loadTab('sales', shopId),
+            loadTab('payments', shopId),
+            loadTab('dashboard', shopId),
+            loadTab('stock', shopId),
+            loadTab('prices', shopId),
+            loadTab('models', shopId),
+            loadTab('customers', shopId),
+            loadCore(),
+          ]);
         } catch (error) {
           showToast(error.message || 'Unable to delete this sale');
         } finally {
@@ -4977,7 +4985,20 @@ function App() {
                                 </b>
                                 <small>{sale.quantity || 1} pcs · Purchased {sale.sale_date || 'date not set'} · Due {sale.due_date || 'not set'}</small>
                               </span>
-                              <strong>{currency(sale.pending_amount)}</strong>
+                              <div className="flex items-center gap-2">
+                                <strong>{currency(sale.pending_amount)}</strong>
+                                <button
+                                  type="button"
+                                  className="soft !text-rose-600 hover:!bg-rose-50 p-1.5 rounded-lg transition-all"
+                                  title="Delete this sale and restore stock"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    deleteSale(sale);
+                                  }}
+                                >
+                                  <Trash2 size={15} />
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>

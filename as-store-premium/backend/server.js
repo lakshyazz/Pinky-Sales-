@@ -3356,7 +3356,7 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
       const sale = await tx.getRecord(
         `SELECT sa.*, p.short_name, p.name AS product_name
          FROM sales sa
-         JOIN products p ON p.id = sa.product_id
+         LEFT JOIN products p ON p.id = sa.product_id
          WHERE sa.id = ?`,
         [saleId]
       );
@@ -3371,26 +3371,78 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
         throw error;
       }
 
+      // 1. Restore batch allocations
       const allocations = await tx.allRecords(
         'SELECT batch_id, quantity FROM sale_batch_allocations WHERE sale_id = ?',
         [saleId]
-      );
-      for (const allocation of allocations) {
-        await tx.runQuery(
-          'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
-          [allocation.quantity, allocation.batch_id]
-        );
+      ).catch(() => []);
+
+      let restoredQty = 0;
+      if (allocations.length > 0) {
+        for (const allocation of allocations) {
+          const allocQty = Number(allocation.quantity || 0);
+          if (allocQty > 0) {
+            await tx.runQuery(
+              'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+              [allocQty, allocation.batch_id]
+            );
+            restoredQty += allocQty;
+          }
+        }
       }
-      await tx.runQuery('DELETE FROM payments WHERE sale_id = ?', [saleId]);
-      await tx.runQuery('DELETE FROM sale_batch_allocations WHERE sale_id = ?', [saleId]);
+
+      // Fallback: If no allocations were found (or partial), restore to the product's batch
+      const saleQty = Number(sale.quantity || 0);
+      const unallocatedQty = saleQty - restoredQty;
+      if (unallocatedQty > 0 && sale.product_id) {
+        const batch = await tx.getRecord(
+          'SELECT id FROM inventory_batches WHERE product_id = ? AND shop_id = ? ORDER BY id DESC LIMIT 1',
+          [sale.product_id, sale.shop_id]
+        ) || await tx.getRecord(
+          'SELECT id FROM inventory_batches WHERE product_id = ? ORDER BY id DESC LIMIT 1',
+          [sale.product_id]
+        );
+        if (batch) {
+          await tx.runQuery(
+            'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+            [unallocatedQty, batch.id]
+          );
+        } else {
+          // If no batch exists, restore directly to stock table
+          await tx.runQuery(
+            'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND shop_id = ?',
+            [unallocatedQty, sale.product_id, sale.shop_id]
+          );
+        }
+      }
+
+      // 2. Delete payment records and batch allocations
+      try {
+        await tx.runQuery('DELETE FROM payments WHERE sale_id = ?', [saleId]);
+      } catch (e) {
+        // Table might not exist or error, continue
+      }
+      try {
+        await tx.runQuery('DELETE FROM sale_batch_allocations WHERE sale_id = ?', [saleId]);
+      } catch (e) {
+        // Table might not exist or error, continue
+      }
+
+      // 3. Delete sale record
       await tx.runQuery('DELETE FROM sales WHERE id = ?', [saleId]);
-      await syncStockFromBatches(tx, sale.shop_id, sale.product_id);
+
+      // 4. Synchronize stock table from batch counts
+      if (sale.shop_id && sale.product_id) {
+        await syncStockFromBatches(tx, sale.shop_id, sale.product_id);
+      }
+
       return sale;
     });
 
-    await audit(req, 'Deleted sale and restored stock', 'sale', saleId, `${result.short_name || result.product_name}, quantity ${result.quantity}`);
-    res.json({ success: true });
+    await audit(req, 'Deleted sale and restored stock', 'sale', saleId, `${result.short_name || result.product_name || 'Product'}, quantity ${result.quantity}`);
+    res.json({ success: true, message: 'Sale deleted and stock restored.' });
   } catch (error) {
+    console.error('[DELETE SALE ERROR]', error.message, error.stack);
     res.status(error.status || 500).json({ error: error.message || 'Unable to delete this sale.' });
   }
 });
