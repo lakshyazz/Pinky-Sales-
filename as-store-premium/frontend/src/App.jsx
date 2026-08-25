@@ -3620,7 +3620,11 @@ function App() {
     const invoiceNo = isConsolidated
       ? `C-${String(sale.shop_id || 0).padStart(3, '0')}-${String(sale.customer_id || 0).padStart(5, '0')}`
       : `D-${String(sale.id).padStart(5, '0')}`;
-    const shopName = safe(sale.shop_name || 'Pinky Sales');
+    let rawShopName = sale.shop_name || 'PINKYSALES';
+    if (!rawShopName || rawShopName.toLowerCase().includes('warehouse') || rawShopName.toLowerCase() === 'pinky sales') {
+      rawShopName = 'PINKYSALES';
+    }
+    const shopName = safe(rawShopName);
     const shopLines = [sale.shop_address, sale.shop_area, sale.shop_phone ? `Phone: ${sale.shop_phone}` : '', 'India']
       .filter(Boolean)
       .map((line) => `<div>${safe(line)}</div>`)
@@ -3637,7 +3641,7 @@ function App() {
       const itemQuantity = Number(item.quantity || 1);
       const itemTotal = Number(item.total_amount || 0);
       const unitPrice = itemQuantity ? itemTotal / itemQuantity : itemTotal;
-      const productDetails = [item.price_type === 'wholesale' ? 'Wholesale price' : 'Retail price', item.brand, item.description].filter(Boolean).map(safe).join(' - ');
+      const productDetails = [item.brand, item.description].filter(Boolean).map(safe).join(' - ');
       return `
         <tr>
           <td class="number">${index + 1}</td>
