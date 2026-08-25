@@ -1014,12 +1014,12 @@ function App() {
   const deferredReportsFilters = useDeferredValue(reportsFilters);
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
-  const [productPager, setProductPager] = useState(() => createPager(50));
-  const [stockPager, setStockPager] = useState(() => createPager(50));
-  const [customerPager, setCustomerPager] = useState(() => createPager(50));
-  const [salesPager, setSalesPager] = useState(() => createPager(50));
-  const [pendingPager, setPendingPager] = useState(() => createPager(50));
-  const [reportsPager, setReportsPager] = useState(() => createPager(50));
+  const [productPager, setProductPager] = useState(() => createPager(5000));
+  const [stockPager, setStockPager] = useState(() => createPager(5000));
+  const [customerPager, setCustomerPager] = useState(() => createPager(5000));
+  const [salesPager, setSalesPager] = useState(() => createPager(5000));
+  const [pendingPager, setPendingPager] = useState(() => createPager(5000));
+  const [reportsPager, setReportsPager] = useState(() => createPager(5000));
   const [productPageLoading, setProductPageLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState({
     brands: false,
@@ -1690,10 +1690,21 @@ function App() {
       if (tab === 'shopkeepers') set('shopkeepers', await authedFetch('/shopkeepers'));
       if (tab === 'models') {
         if (role === 'customer') set('catalog', await api('/catalog'));
-        else await loadProductPage({ tab, page: productPager.page });
+        else await loadProductPage({ tab, page: 1, currentShop });
       }
       if (tab === 'prices') {
-        await loadProductPage({ tab, page: productPager.page });
+        const stockParams = scopedParams(currentShop);
+        stockParams.set('page', '1');
+        stockParams.set('limit', '5000');
+        stockParams.set('includeSummary', 'true');
+        const [stockRes] = await Promise.all([
+          authedFetch(`/stock?${stockParams.toString()}`),
+          loadProductPage({ tab, page: 1, currentShop }),
+        ]);
+        const stockRows = getPaginatedRows(stockRes);
+        if (stockRows.length) {
+          setData((prev) => ({ ...prev, stock: stockRows }));
+        }
       }
       if (tab === 'stock') {
         await loadStockPage({
@@ -1710,9 +1721,13 @@ function App() {
         stockParams.set('page', '1');
         stockParams.set('limit', '5000');
         stockParams.set('includeSummary', 'true');
+
+        const prodParams = new URLSearchParams({ limit: '5000' });
+        if (currentShop) prodParams.set('shop_id', String(currentShop));
+
         const [stockResponse, productsResponse] = await Promise.all([
           authedFetch(`/stock?${stockParams.toString()}`),
-          authedFetch(`/products?limit=5000`),
+          authedFetch(`/products?${prodParams.toString()}`),
         ]);
         const stockRows = getPaginatedRows(stockResponse);
         const prodRows = Array.isArray(productsResponse) ? productsResponse : (productsResponse?.data || []);
@@ -1720,6 +1735,7 @@ function App() {
           ...prev,
           stock: stockRows.length ? stockRows : prev.stock,
           products: prodRows.length ? prodRows : prev.products,
+          productResults: prodRows.length ? prodRows : prev.productResults,
         }));
       }
       if (tab === 'customers') {
@@ -1870,8 +1886,8 @@ function App() {
 
   useEffect(() => {
     if (!session || !authReady || role === 'customer' || !['models', 'prices'].includes(active)) return;
-    loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch });
-  }, [active, activeProductSearch, productPager.page, productPager.limit, session?.token, authReady]);
+    loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch, currentShop: shopId });
+  }, [active, activeProductSearch, selectedShop, productPager.page, productPager.limit, session?.token, authReady]);
 
   // Synchronize stock status filter from URL query params (e.g. /stock?filter=low_stock or ?status=out_of_stock)
   useEffect(() => {
@@ -4350,6 +4366,7 @@ function App() {
                 shopId={shopId}
                 shops={data.shops || []}
                 suppliers={data.reference?.suppliers || []}
+                stock={data.stock || []}
                 updateStock={updateStock}
                 showToast={showToast}
                 saving={saving}
@@ -5385,7 +5402,7 @@ function App() {
                                   <small>{[item.brand, item.shop_name].filter(Boolean).join(' - ')}</small>
                                 </span>
                                 <span className="font-semibold text-slate-600">{priceLabel(item.sale_price)}</span>
-                                <strong className={`status-badge ${item.quantity <= 3 ? 'low-stock' : 'stock-ok'}`}>{item.quantity} pcs</strong>
+                                <strong className={`status-badge ${Number(item.quantity || 0) === 0 ? 'no-stock' : Number(item.quantity || 0) <= 4 ? 'low-stock' : 'stock-ok'}`}>{item.quantity} pcs</strong>
                               </div>
                             ))}
                             {!detailedShopData.stock.length && <Empty title="No stock items found" />}

@@ -18,14 +18,47 @@ import {
 } from 'lucide-react';
 import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
-import ProductPagination from '../shared/ProductPagination';
 import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
+
+export function getProductStockCount(product) {
+  if (!product) return 0;
+  
+  // 1. Direct computed numbers or string numbers
+  const direct = product.warehouse_stock ?? product.available_stock ?? product.quantity ?? product.stock_quantity ?? product.total_stock ?? product.stock;
+  if (direct !== undefined && direct !== null && direct !== '') {
+    const num = Number(direct);
+    if (!isNaN(num) && num > 0) return num;
+  }
+
+  // 2. Aggregate from batch breakdown if available
+  if (Array.isArray(product.batches) && product.batches.length > 0) {
+    const sum = product.batches.reduce((acc, b) => acc + (Number(b.stock_qty ?? b.stock ?? b.quantity ?? b.quantity_remaining) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  if (Array.isArray(product.supplier_batches) && product.supplier_batches.length > 0) {
+    const sum = product.supplier_batches.reduce((acc, b) => acc + (Number(b.stock_qty ?? b.stock ?? b.quantity ?? b.quantity_remaining) || 0), 0);
+    if (sum > 0) return sum;
+  }
+
+  // 3. Aggregate from colour_stock if available
+  if (Array.isArray(product.colour_stock) && product.colour_stock.length > 0) {
+    const sum = product.colour_stock.reduce((acc, c) => acc + (Number(c.qty ?? c.stock ?? c.quantity) || 0), 0);
+    if (sum > 0) return sum;
+  }
+  if (product.colour_stock && typeof product.colour_stock === 'object' && Object.keys(product.colour_stock).length > 0) {
+    const sum = Object.values(product.colour_stock).reduce((acc, val) => acc + (Number(val) || 0), 0);
+    if (sum > 0) return sum;
+  }
+
+  return Math.max(0, Number(direct || 0));
+}
 
 export default function PricesPage({
   role,
   shopId,
   shops = [],
   suppliers = [],
+  stock = [],
   updateStock,
   showToast,
   saving = false,
@@ -47,10 +80,38 @@ export default function PricesPage({
 }) {
   const [activeMenuId, setActiveMenuId] = useState(null);
 
-  // Consolidate identical products from different suppliers into unified entries
+  // Consolidate identical products from different suppliers into unified entries and blend live stock
   const consolidatedItems = useMemo(() => {
-    return consolidateProductList(items);
-  }, [items]);
+    const stockMap = new Map();
+    if (Array.isArray(stock) && stock.length > 0) {
+      stock.forEach((s) => {
+        const pId = String(s.product_id || s.id || '');
+        if (pId) {
+          const qty = Number(s.quantity ?? s.available_stock ?? s.stock ?? s.warehouse_stock ?? 0);
+          stockMap.set(pId, Math.max(stockMap.get(pId) || 0, qty));
+        }
+      });
+    }
+
+    const enhancedItems = items.map((item) => {
+      const pId = String(item.product_id || item.id || '');
+      const liveStockQty = stockMap.get(pId);
+      if (liveStockQty !== undefined && liveStockQty > 0) {
+        return {
+          ...item,
+          available_stock: liveStockQty,
+          warehouse_stock: liveStockQty,
+          quantity: liveStockQty,
+          stock_quantity: liveStockQty,
+          total_stock: liveStockQty,
+          stock: liveStockQty,
+        };
+      }
+      return item;
+    });
+
+    return consolidateProductList(enhancedItems);
+  }, [items, stock]);
 
   // Quick Stock Modal State
   const [stockProduct, setStockProduct] = useState(null);
@@ -67,12 +128,18 @@ export default function PricesPage({
   const isSuperAdmin = role === 'superadmin';
   const hasPurchase = isSuperAdmin;
 
+  const selectedShopRecord = useMemo(() => {
+    return shops.find((s) => String(s.id) === String(shopId));
+  }, [shops, shopId]);
+
+  const currentShopLabel = selectedShopRecord ? selectedShopRecord.name : (shopId ? 'Branch' : 'Warehouse');
+
   const getEffectiveStock = (product) => {
     if (!product) return 0;
     if (stockOverrides[product.id] !== undefined) {
       return stockOverrides[product.id];
     }
-    return Number(product.quantity ?? product.available_stock ?? product.stock_quantity ?? product.warehouse_stock ?? product.stock ?? 0);
+    return getProductStockCount(product);
   };
 
   const openStockModal = (product) => {
@@ -211,7 +278,7 @@ export default function PricesPage({
             {consolidatedItems.map((product) => {
               const stockQtyVal = getEffectiveStock(product);
               const isOutOfStock = stockQtyVal <= 0;
-              const isLowStock = stockQtyVal > 0 && stockQtyVal <= 5;
+              const isLowStock = stockQtyVal > 0 && stockQtyVal <= 4;
               const displayCostPrice = product.avg_cost_price ?? product.purchase_price;
               const associatedSups = product.associated_suppliers || [];
 
@@ -301,14 +368,16 @@ export default function PricesPage({
                   <div className={`w-full lg:col-span-5 grid ${hasPurchase ? 'grid-cols-4' : 'grid-cols-3'} gap-2 text-right pr-0 lg:pr-4 border-b lg:border-b-0 pb-3 lg:pb-0 lg:border-r border-slate-200/60 h-full py-1 items-center`}>
                     {/* Available Stock with Interactive Quick Click Trigger */}
                     <div className="flex flex-col justify-center items-end">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Combined Stock</span>
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block" title={`Stock in ${currentShopLabel}`}>
+                        {currentShopLabel} Stock
+                      </span>
                       <button 
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           openStockModal(product);
                         }}
-                        title={isOutOfStock ? '0 pcs in warehouse — Click to quick add stock' : `${stockQtyVal} pcs in stock — Click to quick add stock`}
+                        title={isOutOfStock ? `0 pcs in ${currentShopLabel} — Click to quick add stock` : `${stockQtyVal} pcs in ${currentShopLabel} — Click to quick add stock`}
                         className={`text-[10px] font-black px-2 py-0.5 rounded-lg border mt-1 inline-flex items-center gap-1 shadow-xs cursor-pointer hover:ring-2 hover:ring-emerald-400/50 transition-all ${
                           isOutOfStock
                             ? 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
@@ -444,16 +513,6 @@ export default function PricesPage({
           </div>
         )}
       </div>
-
-      {/* Pagination component */}
-      <ProductPagination 
-        meta={pager} 
-        loading={loading} 
-        onPageChange={onPageChange} 
-        onPageSizeChange={onPageSizeChange}
-        totalLabel="models"
-        pageSizeOptions={[25, 50, 100, 200]}
-      />
 
       {/* ========================================================================= */}
       {/* QUICK INLINE STOCK INTAKE / ADJUSTMENT MODAL DIALOG                       */}

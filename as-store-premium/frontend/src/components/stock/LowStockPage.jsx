@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   AlertTriangle, 
@@ -21,6 +21,15 @@ import {
   Building2
 } from 'lucide-react';
 import { exportLowStockExcel } from '../../utils/excelExport';
+import { 
+  LOW_STOCK_THRESHOLD, 
+  isOutOfStock, 
+  isLowStock, 
+  isAlertStock, 
+  computeProductStock, 
+  getStockStatusDetails 
+} from '../../utils/stockThresholds';
+import { consolidateProductList } from '../../utils/productConsolidation';
 
 export default function LowStockPage({
   role,
@@ -47,6 +56,8 @@ export default function LowStockPage({
   const [selectedBrand, setSelectedBrand] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [remoteProducts, setRemoteProducts] = useState([]);
+  const [loadingAlerts, setLoadingAlerts] = useState(false);
 
   // Quick Restock Modal state
   const [restockProduct, setRestockProduct] = useState(null);
@@ -60,51 +71,84 @@ export default function LowStockPage({
   const shops = data.shops || [];
   const suppliers = data.reference?.suppliers || [];
   const defaultShop = shops.find(s => s.location_type === 'warehouse') || shops[0];
-  const lowStockThreshold = 5;
 
-  // Accurate Stock Aggregation matching /models and /stock overview
-  const computeProductStock = (item) => {
-    if (!item) return 0;
-    
-    // 1. If batches array exists and has entries, sum their stock quantities
-    if (Array.isArray(item.batches) && item.batches.length > 0) {
-      return item.batches.reduce((sum, b) => sum + (Number(b.stock_qty ?? b.quantity_remaining ?? b.quantity) || 0), 0);
+  // Self-contained fetch ensuring all products are retrieved without dropping 0-stock items
+  const fetchAlertProducts = async () => {
+    try {
+      setLoadingAlerts(true);
+      const token = session?.token || localStorage.getItem('token');
+      let loaded = [];
+      if (api) {
+        try {
+          const res = await api('/low-stock');
+          loaded = Array.isArray(res) ? res : (res?.data || []);
+        } catch {
+          const res2 = await api('/products?limit=5000');
+          loaded = Array.isArray(res2) ? res2 : (res2?.data || []);
+        }
+      } else {
+        const res = await fetch('/api/low-stock', {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (res.ok) {
+          const json = await res.json();
+          loaded = Array.isArray(json) ? json : (json?.data || []);
+        } else {
+          const res2 = await fetch('/api/products?limit=5000', {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
+          if (res2.ok) {
+            const json2 = await res2.json();
+            loaded = Array.isArray(json2) ? json2 : (json2?.data || []);
+          }
+        }
+      }
+      if (Array.isArray(loaded) && loaded.length > 0) {
+        setRemoteProducts(loaded);
+      }
+    } catch (err) {
+      console.warn('Failed to load alert products:', err);
+    } finally {
+      setLoadingAlerts(false);
     }
-    if (Array.isArray(item.supplier_batches) && item.supplier_batches.length > 0) {
-      return item.supplier_batches.reduce((sum, b) => sum + (Number(b.stock_qty ?? b.quantity_remaining ?? b.quantity) || 0), 0);
-    }
-    
-    // 2. If colour_stock breakdown exists, sum its values
-    if (item.colour_stock && typeof item.colour_stock === 'object' && Object.keys(item.colour_stock).length > 0) {
-      return Object.values(item.colour_stock).reduce((sum, val) => sum + (Number(val) || 0), 0);
-    }
-    
-    // 3. Fallback to direct stock / quantity properties
-    const directQty = item.quantity ?? item.available_quantity ?? item.total_available ?? item.total_stock ?? item.available_stock ?? item.stock_quantity ?? item.stock;
-    if (directQty !== undefined && directQty !== null && directQty !== '') {
-      const parsed = Number(directQty);
-      return !isNaN(parsed) ? parsed : 0;
-    }
-    
-    return 0;
   };
 
-  // Aggregate all products and their accurate current stock
+  useEffect(() => {
+    fetchAlertProducts();
+  }, [session?.token]);
+
+  // Aggregate all products across all available dataset sources and consolidate them
   const lowStockItems = useMemo(() => {
+    const rawList = [
+      ...remoteProducts,
+      ...(Array.isArray(data.products) ? data.products : (data.products?.data || [])),
+      ...(Array.isArray(data.productResults) ? data.productResults : (data.productResults?.data || [])),
+      ...(Array.isArray(data.catalog) ? data.catalog : (data.catalog?.data || []))
+    ];
+
+    // Group identical items matching /models catalog grouping logic
+    const consolidated = consolidateProductList(rawList);
+
     const productMap = new Map();
 
-    // 1. Index all catalog products
-    const allProducts = [...(data.products || []), ...(data.catalog || [])];
-    allProducts.forEach((p) => {
+    consolidated.forEach((p) => {
       const key = String(p.product_id || p.id);
       if (!key) return;
+      const initialQty = computeProductStock(p);
       if (!productMap.has(key)) {
-        productMap.set(key, { ...p, id: key, _stockQty: 0, _hasLiveStockRecord: false });
+        productMap.set(key, { ...p, id: key, _stockQty: initialQty });
+      } else {
+        const existing = productMap.get(key);
+        existing._stockQty = Math.max(Number(existing._stockQty || 0), initialQty);
+        if (!existing.brand && p.brand) existing.brand = p.brand;
+        if (!existing.manufacturing_brand_name && p.manufacturing_brand_name) existing.manufacturing_brand_name = p.manufacturing_brand_name;
+        if (!existing.supplier_name && p.supplier_name) existing.supplier_name = p.supplier_name;
+        if (!existing.supplier_id && p.supplier_id) existing.supplier_id = p.supplier_id;
       }
     });
 
-    // 2. Aggregate live stock records from data.stock (which holds active batch sums per location)
-    const stockList = Array.isArray(data.stock) ? data.stock : [];
+    // Aggregate batch data from data.stock
+    const stockList = Array.isArray(data.stock) ? data.stock : (data.stock?.data || []);
     stockList.forEach((s) => {
       const key = String(s.product_id || s.id);
       if (!key) return;
@@ -112,21 +156,13 @@ export default function LowStockPage({
       const stockQty = computeProductStock(s);
 
       if (!productMap.has(key)) {
-        productMap.set(key, { ...s, id: key, _stockQty: stockQty, _hasLiveStockRecord: true });
+        productMap.set(key, { ...s, id: key, _stockQty: stockQty });
       } else {
         const prod = productMap.get(key);
         prod._stockQty = Math.max(Number(prod._stockQty || 0), stockQty);
-        prod._hasLiveStockRecord = true;
         if (s.colour_stock) prod.colour_stock = s.colour_stock;
         if (s.supplier_name && !prod.supplier_name) prod.supplier_name = s.supplier_name;
         if (s.supplier_id && !prod.supplier_id) prod.supplier_id = s.supplier_id;
-      }
-    });
-
-    // 3. For any catalog products without a record in data.stock, compute directly from their own batches/fields
-    productMap.forEach((prod) => {
-      if (!prod._hasLiveStockRecord) {
-        prod._stockQty = computeProductStock(prod);
       }
     });
 
@@ -137,14 +173,14 @@ export default function LowStockPage({
     productMap.forEach((prod) => {
       const qty = Number(prod._stockQty ?? 0);
 
-      // Determine if item is Low Stock (1 - 5 pcs) or Out of Stock (0 pcs)
-      if (qty <= lowStockThreshold) {
+      // Unified Alert Rule: Only include products where totalStock <= 4 (0 pcs or 1-4 pcs). Exclude >= 5 pcs!
+      if (isAlertStock(qty, LOW_STOCK_THRESHOLD)) {
         const sup = prod.supplier_id ? supplierMap.get(String(prod.supplier_id)) : null;
         result.push({
           ...prod,
           effectiveQuantity: qty,
-          isOutOfStock: qty === 0,
-          isLowStock: qty > 0 && qty <= lowStockThreshold,
+          isOutOfStock: isOutOfStock(qty),
+          isLowStock: isLowStock(qty, LOW_STOCK_THRESHOLD),
           resolvedSupplier: sup || {
             name: prod.supplier_name || (prod.supplier_id ? `Supplier #${prod.supplier_id}` : 'Direct Stock'),
             phone: prod.supplier_phone || '',
@@ -154,14 +190,16 @@ export default function LowStockPage({
       }
     });
 
-    // Sort: Out of stock first (0 pcs), then lowest stock (1 -> 5), then brand name
+    // Sort: Out of stock first (0 pcs), then lowest stock (1 -> 4), then brand & name
     return result.sort((a, b) => {
       if (a.effectiveQuantity !== b.effectiveQuantity) {
         return a.effectiveQuantity - b.effectiveQuantity;
       }
-      return String(a.brand || '').localeCompare(String(b.brand || ''));
+      const brandCompare = String(a.brand || a.company_brand_name || '').localeCompare(String(b.brand || b.company_brand_name || ''));
+      if (brandCompare !== 0) return brandCompare;
+      return String(a.short_name || a.name || '').localeCompare(String(b.short_name || b.name || ''));
     });
-  }, [data.products, data.catalog, data.stock, suppliers, lowStockThreshold]);
+  }, [remoteProducts, data.products, data.productResults, data.catalog, data.stock, suppliers]);
 
   // Extract unique brands and categories for filtering
   const availableBrands = useMemo(() => {
@@ -172,35 +210,63 @@ export default function LowStockPage({
     return Array.from(new Set(lowStockItems.map(i => i.part_category || i.category).filter(Boolean))).sort();
   }, [lowStockItems]);
 
-  // Filtered dataset based on search and active status tab
+  // Filtered dataset based on search, active status tab, brand and category
   const filteredItems = useMemo(() => {
     return lowStockItems.filter((item) => {
-      // Tab filter
-      if (statusTab === 'out_of_stock' && item.effectiveQuantity > 0) return false;
-      if (statusTab === 'low_stock' && item.effectiveQuantity === 0) return false;
+      const qty = Number(item.effectiveQuantity || 0);
 
-      // Brand & Category
+      // Tab filter rules:
+      // - All Alerts: stock <= 4 (already filtered in lowStockItems)
+      // - Out of Stock: strictly stock === 0
+      // - Low Stock: strictly stock >= 1 && stock <= 4
+      if (statusTab === 'out_of_stock' && !isOutOfStock(qty)) return false;
+      if (statusTab === 'low_stock' && !isLowStock(qty, LOW_STOCK_THRESHOLD)) return false;
+
+      // Brand & Category filters
       if (selectedBrand && (item.brand || item.company_brand_name) !== selectedBrand) return false;
       if (selectedCategory && (item.part_category || item.category) !== selectedCategory) return false;
 
-      // Search keyword filter
+      // Comprehensive Search Bar Logic:
+      // Checks across: modelName, brand, manufacturerBrand (Mfg), category, qualityGrade, compatibleModels (array or string), supplierName
       if (search.trim()) {
         const q = search.toLowerCase().trim();
         const brand = String(item.brand || item.company_brand_name || '').toLowerCase();
-        const name = String(item.short_name || item.name || item.product_name || '').toLowerCase();
-        const models = String(item.full_model_list || item.compatible_models || item.model || '').toLowerCase();
-        const mfg = String(item.manufacturing_brand_name || item.manufacturing_brand || '').toLowerCase();
-        const sup = String(item.resolvedSupplier?.name || '').toLowerCase();
-        return brand.includes(q) || name.includes(q) || models.includes(q) || mfg.includes(q) || sup.includes(q);
+        const modelName = String(item.short_name || item.name || item.product_name || item.model || item.display_model || '').toLowerCase();
+        const mfg = String(item.manufacturing_brand_name || item.manufacturing_brand || item.mfg || '').toLowerCase();
+        const category = String(item.part_category || item.category || item.part_category_name || '').toLowerCase();
+        const qualityGrade = String(item.quality_variant || item.quality || item.product_variant_name || item.quality_grade || '').toLowerCase();
+        
+        let compatibleModels = '';
+        if (Array.isArray(item.compatible_models)) {
+          compatibleModels = item.compatible_models.join(' ');
+        } else if (Array.isArray(item.compatibleModels)) {
+          compatibleModels = item.compatibleModels.join(' ');
+        } else {
+          compatibleModels = String(item.full_model_list || item.compatible_models || item.compatibleModels || item.model || '');
+        }
+        compatibleModels = compatibleModels.toLowerCase();
+
+        const supplier = String(item.resolvedSupplier?.name || item.supplier_name || '').toLowerCase();
+
+        const matches = 
+          brand.includes(q) || 
+          modelName.includes(q) || 
+          mfg.includes(q) || 
+          category.includes(q) || 
+          qualityGrade.includes(q) || 
+          compatibleModels.includes(q) || 
+          supplier.includes(q);
+
+        if (!matches) return false;
       }
 
       return true;
     });
   }, [lowStockItems, statusTab, selectedBrand, selectedCategory, search]);
 
-  // Overall statistics
-  const outOfStockCount = useMemo(() => lowStockItems.filter(i => i.effectiveQuantity === 0).length, [lowStockItems]);
-  const lowStockCount = useMemo(() => lowStockItems.filter(i => i.effectiveQuantity > 0).length, [lowStockItems]);
+  // Overall statistics matching exact threshold definitions
+  const outOfStockCount = useMemo(() => lowStockItems.filter(i => isOutOfStock(i.effectiveQuantity)).length, [lowStockItems]);
+  const lowStockCount = useMemo(() => lowStockItems.filter(i => isLowStock(i.effectiveQuantity, LOW_STOCK_THRESHOLD)).length, [lowStockItems]);
   const totalDeficitUnits = useMemo(() => {
     return lowStockItems.reduce((acc, item) => acc + Math.max(0, 10 - item.effectiveQuantity), 0);
   }, [lowStockItems]);
@@ -262,7 +328,8 @@ export default function LowStockPage({
       }
       setRestockProduct(null);
 
-      // Trigger core data refresh
+      // Trigger data refreshes
+      fetchAlertProducts();
       if (typeof loadCore === 'function') {
         loadCore();
       }
@@ -276,6 +343,7 @@ export default function LowStockPage({
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
+      await fetchAlertProducts();
       if (typeof loadCore === 'function') {
         await loadCore();
       }
@@ -298,13 +366,15 @@ export default function LowStockPage({
               <span
                 key={col}
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border ${
-                  qty === 0 
-                    ? 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:border-rose-900/60' 
-                    : 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800 dark:text-slate-300'
+                  qty === 0
+                    ? 'bg-rose-50 text-rose-700 border-rose-200'
+                    : qty <= LOW_STOCK_THRESHOLD
+                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 }`}
               >
                 <span>{col}:</span>
-                <span className={qty === 0 ? 'text-rose-600 font-extrabold' : 'font-bold'}>{qty}</span>
+                <strong>{qty}</strong>
               </span>
             );
           })}
@@ -312,31 +382,24 @@ export default function LowStockPage({
       );
     }
 
-    if (Array.isArray(item.colours) && item.colours.length > 0) {
-      return (
-        <div className="flex flex-wrap gap-1">
-          {item.colours.map((col) => (
-            <span key={col} className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-              {col}
-            </span>
-          ))}
-        </div>
-      );
-    }
-
-    return <span className="text-xs text-slate-400 font-medium">Standard</span>;
+    const qty = Number(item.effectiveQuantity || 0);
+    return (
+      <span className="text-[11px] text-slate-400 font-semibold">
+        {item.colour ? `${item.colour} (${qty} pcs)` : `Standard (${qty} pcs)`}
+      </span>
+    );
   };
 
   return (
-    <div className="space-y-6 animate-fadeIn pb-16 max-w-7xl mx-auto">
-      {/* Top Header & Metrics Banner */}
-      <div className="bg-gradient-to-r from-rose-900 via-slate-900 to-amber-950 rounded-3xl p-6 sm:p-8 text-white shadow-xl shadow-rose-950/20 relative overflow-hidden">
-        <div className="absolute right-0 top-0 w-96 h-96 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute left-1/3 bottom-0 w-64 h-64 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+    <div className="space-y-6 animate-in fade-in duration-300">
+      {/* Top Banner & Action Controls */}
+      <div className="rounded-3xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 p-6 sm:p-8 text-white shadow-xl relative overflow-hidden">
+        <div className="absolute top-0 right-0 -mt-8 -mr-8 w-64 h-64 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-0 left-1/3 -mb-12 w-48 h-48 bg-amber-500/10 rounded-full blur-2xl pointer-events-none" />
 
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="relative z-10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-black uppercase tracking-wider">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 text-xs font-black uppercase tracking-wider border border-rose-500/30 backdrop-blur-md">
               <AlertTriangle className="w-3.5 h-3.5" /> Urgent Inventory Center
             </div>
             <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white">
@@ -351,11 +414,11 @@ export default function LowStockPage({
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={refreshing}
+              disabled={refreshing || loadingAlerts}
               className="p-3 rounded-2xl bg-white/10 hover:bg-white/20 border border-white/10 text-white font-bold text-xs flex items-center gap-2 backdrop-blur-md transition-all active:scale-95 cursor-pointer"
               title="Refresh inventory counts"
             >
-              <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${(refreshing || loadingAlerts) ? 'animate-spin' : ''}`} />
             </button>
 
             <button
@@ -386,14 +449,14 @@ export default function LowStockPage({
           </div>
 
           <div className="p-3.5 rounded-2xl bg-rose-500/20 border border-rose-500/30 backdrop-blur-sm">
-            <span className="text-[11px] font-bold text-rose-200 block uppercase tracking-wider">Out of Stock (0 pcs)</span>
+            <span className="text-[11px] font-bold text-rose-200 block uppercase tracking-wider">Out of Stock (0 PCS)</span>
             <strong className="text-xl sm:text-2xl font-black text-rose-400 block mt-0.5">
               {outOfStockCount}
             </strong>
           </div>
 
           <div className="p-3.5 rounded-2xl bg-amber-500/20 border border-amber-500/30 backdrop-blur-sm">
-            <span className="text-[11px] font-bold text-amber-200 block uppercase tracking-wider">Low Stock (&le; 5 pcs)</span>
+            <span className="text-[11px] font-bold text-amber-200 block uppercase tracking-wider">Low Stock (&le; 4 PCS)</span>
             <strong className="text-xl sm:text-2xl font-black text-amber-400 block mt-0.5">
               {lowStockCount}
             </strong>
@@ -410,12 +473,12 @@ export default function LowStockPage({
 
       {/* Filter and Search Controls */}
       <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-white border border-slate-200 rounded-3xl p-4 shadow-sm">
-        {/* Search Input with guaranteed non-overlapping structure */}
+        {/* Search Input */}
         <div className="relative w-full sm:w-80">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none z-10" />
           <input
             type="text"
-            placeholder="Search model, brand, supplier..."
+            placeholder="Search model, brand, mfg, grade, supplier..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             style={{ paddingLeft: '42px', paddingRight: search ? '36px' : '16px' }}
@@ -499,7 +562,7 @@ export default function LowStockPage({
         </div>
       </div>
 
-      {/* Clean Scannable Inventory Table (Strictly NO checkboxes) */}
+      {/* Scannable Inventory Table */}
       <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-sm">
         {filteredItems.length === 0 ? (
           <Empty 
@@ -522,11 +585,13 @@ export default function LowStockPage({
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs font-medium text-slate-700">
                 {filteredItems.map((item) => {
-                  const isZero = item.effectiveQuantity === 0;
+                  const qty = Number(item.effectiveQuantity || 0);
+                  const isZero = isOutOfStock(qty);
                   const sup = item.resolvedSupplier;
                   const partCat = item.part_category || item.category || 'Display';
                   const qualVariant = item.quality_variant || item.product_variant_name || item.quality;
                   const mfg = item.manufacturing_brand_name || item.manufacturing_brand;
+                  const statusDetails = getStockStatusDetails(qty, LOW_STOCK_THRESHOLD);
 
                   return (
                     <tr 
@@ -551,10 +616,10 @@ export default function LowStockPage({
                             )}
                           </div>
 
-                          {(item.full_model_list || item.compatible_models || item.model) && (
+                          {(item.full_model_list || item.compatible_models || item.compatibleModels || item.model) && (
                             <p className="text-[11px] text-slate-500 line-clamp-2 pt-0.5">
                               <span className="font-semibold text-slate-400">Compat: </span>
-                              {item.full_model_list || item.compatible_models || item.model}
+                              {item.full_model_list || (Array.isArray(item.compatible_models) ? item.compatible_models.join(', ') : item.compatible_models) || item.model}
                             </p>
                           )}
                         </div>
@@ -576,17 +641,10 @@ export default function LowStockPage({
 
                       {/* Current Stock Tag */}
                       <td className="py-4 px-4">
-                        {isZero ? (
-                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-rose-100 text-rose-800 border border-rose-300 font-black text-xs shadow-2xs">
-                            <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse" />
-                            0 pcs (Out of Stock)
-                          </div>
-                        ) : (
-                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-100 text-amber-800 border border-amber-300 font-extrabold text-xs shadow-2xs">
-                            <span className="w-2 h-2 rounded-full bg-amber-500" />
-                            {item.effectiveQuantity} pcs (Low Stock)
-                          </div>
-                        )}
+                        <div className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-xl font-black text-xs border shadow-2xs ${statusDetails.badgeClass}`}>
+                          <span className={`w-2 h-2 rounded-full ${statusDetails.dotClass}`} />
+                          {statusDetails.label}
+                        </div>
                       </td>
 
                       {/* Color-wise Breakdown */}

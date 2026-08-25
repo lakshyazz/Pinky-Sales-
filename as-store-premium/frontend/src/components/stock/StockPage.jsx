@@ -1158,7 +1158,7 @@ export default function StockPage({
                             <CheckCircle2 size={14} className="text-emerald-600" /> In Stock
                           </span>
                           <span className={`px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1.5 ${
-                            Number(forms.product.opening_stock || 0) > 0 && Number(forms.product.opening_stock || 0) <= 5
+                            Number(forms.product.opening_stock || 0) > 0 && Number(forms.product.opening_stock || 0) <= 4
                               ? 'bg-amber-50 text-amber-700 border-amber-300' 
                               : 'bg-slate-50 text-slate-400 border-slate-200'
                           }`}>
@@ -1655,7 +1655,7 @@ export default function StockPage({
       {stockWithOwnership.length ? (
         <div className="table panel inventory-stock-table shadow-sm border border-slate-200/80 bg-white" style={{ borderRadius: '20px', overflow: 'hidden' }}>
           {stockWithOwnership.map((item) => {
-            const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 5);
+            const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
             const isOutOfStock = Number(item.quantity) === 0;
             const isWarehouseRow = item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id);
 
@@ -1856,15 +1856,6 @@ export default function StockPage({
       ) : (
         <Empty title="No stock matching your criteria found" />
       )}
-
-      {/* Pagination component */}
-      <ProductPagination 
-        meta={stockPager} 
-        loading={pageLoading.stock} 
-        onPageChange={(page) => setStockPager((prev) => ({ ...prev, page }))} 
-        onPageSizeChange={onStockPageSizeChange}
-        totalLabel="stock rows"
-      />
 
       {/* Model Catalog Picker Modal for Stock Addition */}
       {isModelPickerOpen && (

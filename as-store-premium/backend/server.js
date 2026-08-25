@@ -110,7 +110,7 @@ const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
 });
 const money = (value) => Number(value || 0);
 const productDisplayName = (row) => row.short_name || row.name;
-const DEFAULT_PAGE_LIMIT = 50;
+const DEFAULT_PAGE_LIMIT = 5000;
 const MAX_PAGE_LIMIT = 5000;
 const clampInteger = (value, fallback, min, max) => {
   const number = Number(value);
@@ -770,7 +770,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       FROM stock st
       JOIN shops sh ON sh.id = st.shop_id
       JOIN products p ON p.id = st.product_id
-      WHERE ${visibleStockSql} > 0 AND ${visibleStockSql} <= sh.low_stock_threshold ${shopId ? 'AND st.shop_id = ?' : ''}
+      WHERE ${visibleStockSql} > 0 AND ${visibleStockSql} <= COALESCE(sh.low_stock_threshold, 4) ${shopId ? 'AND st.shop_id = ?' : ''}
       ORDER BY quantity ASC, p.name ASC
       LIMIT 12
     `, shopId ? [shopId] : []),
@@ -861,7 +861,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     LEFT JOIN shops sh ON sh.id = st.shop_id
     WHERE mb.is_active = TRUE 
       AND st.quantity > 0 
-      AND st.quantity <= sh.low_stock_threshold
+      AND st.quantity <= COALESCE(sh.low_stock_threshold, 4)
     GROUP BY mb.id, mb.name
     ORDER BY low_stock_count DESC
   `, shopId ? [shopId] : []);
@@ -1307,9 +1307,9 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
   // Filter by stock status
   const stockQuantitySql = 'COALESCE(SUM(ib.quantity_remaining), 0)';
   const having = [];
-  if (status === 'in_stock') having.push(`${stockQuantitySql} > sh.low_stock_threshold`);
+  if (status === 'in_stock') having.push(`${stockQuantitySql} > COALESCE(sh.low_stock_threshold, 4)`);
   if (status === 'out_of_stock') having.push(`${stockQuantitySql} = 0`);
-  if (status === 'low_stock') having.push(`${stockQuantitySql} > 0 AND ${stockQuantitySql} <= sh.low_stock_threshold`);
+  if (status === 'low_stock') having.push(`${stockQuantitySql} > 0 AND ${stockQuantitySql} <= COALESCE(sh.low_stock_threshold, 4)`);
 
   const rows = await allRecords(`
     SELECT p.short_name AS product_name, p.full_model_list AS model_name, p.brand, p.category, p.model,
@@ -1317,7 +1317,7 @@ app.get('/api/export-data', authenticateToken, requireShopStaff, async (req, res
       sh.name AS shop_name, u.name AS shopkeeper_name, MAX(ib.received_date) AS date_added,
       CASE
         WHEN SUM(ib.quantity_remaining) = 0 THEN 'Out of Stock'
-        WHEN SUM(ib.quantity_remaining) <= sh.low_stock_threshold THEN 'Low Stock'
+        WHEN SUM(ib.quantity_remaining) <= COALESCE(sh.low_stock_threshold, 4) THEN 'Low Stock'
         ELSE 'In Stock'
       END AS stock_status
     FROM inventory_batches ib
@@ -1341,7 +1341,7 @@ app.get('/api/brands', authenticateToken, requireShopStaff, async (req, res) => 
       COUNT(DISTINCT p.id) AS product_count,
       COALESCE(SUM(ib.quantity_remaining), 0) AS quantity,
       COALESCE(SUM(ib.quantity_remaining * COALESCE(p.sale_price, p.retail_price, p.official_price, 0)), 0) AS stock_value,
-      COUNT(DISTINCT p.id) FILTER (WHERE ib.quantity_remaining > 0 AND ib.quantity_remaining <= sh.low_stock_threshold) AS low_stock_products,
+      COUNT(DISTINCT p.id) FILTER (WHERE ib.quantity_remaining > 0 AND ib.quantity_remaining <= COALESCE(sh.low_stock_threshold, 4)) AS low_stock_products,
       MAX(ib.received_date) AS last_stocked_at
     FROM brands b
     LEFT JOIN products p ON LOWER(TRIM(p.brand)) = LOWER(TRIM(b.name)) AND p.is_active = 1
@@ -1362,7 +1362,7 @@ app.get('/api/manufacturing-brands', authenticateToken, requireShopStaff, async 
       COUNT(DISTINCT p.id) AS product_count,
       COALESCE(SUM(ib.quantity_remaining), 0) AS quantity,
       COALESCE(SUM(ib.quantity_remaining * COALESCE(p.sale_price, p.retail_price, p.official_price, 0)), 0) AS stock_value,
-      COUNT(DISTINCT p.id) FILTER (WHERE ib.quantity_remaining > 0 AND ib.quantity_remaining <= sh.low_stock_threshold) AS low_stock_products,
+      COUNT(DISTINCT p.id) FILTER (WHERE ib.quantity_remaining > 0 AND ib.quantity_remaining <= COALESCE(sh.low_stock_threshold, 4)) AS low_stock_products,
       MAX(ib.received_date) AS last_stocked_at
     FROM manufacturing_brands mb
     LEFT JOIN products p ON p.manufacturing_brand_id = mb.id AND p.is_active = 1
@@ -2028,9 +2028,33 @@ app.get(['/api/images/*', '/images/*'], async (req, res) => {
   }
 });
 
+app.get('/api/low-stock', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const productsData = await getProductsForRole(req.user.role, { ...req.query, limit: 5000 }, req.user);
+    const rows = Array.isArray(productsData) ? productsData : (productsData?.data || []);
+    const lowStockRows = rows.filter((p) => {
+      const qty = Number(p.warehouse_stock ?? p.available_stock ?? p.quantity ?? p.stock_quantity ?? p.total_stock ?? p.stock ?? 0);
+      return qty <= 4;
+    });
+    res.json({
+      data: lowStockRows,
+      total: lowStockRows.length,
+      totalAlerts: lowStockRows.length,
+      outOfStock: lowStockRows.filter(p => Number(p.warehouse_stock ?? p.available_stock ?? p.quantity ?? p.stock_quantity ?? p.total_stock ?? p.stock ?? 0) === 0).length,
+      lowStock: lowStockRows.filter(p => {
+        const q = Number(p.warehouse_stock ?? p.available_stock ?? p.quantity ?? p.stock_quantity ?? p.total_stock ?? p.stock ?? 0);
+        return q >= 1 && q <= 4;
+      }).length
+    });
+  } catch (error) {
+    console.error('[API LOW STOCK ERROR]', error.message, error.stack);
+    res.status(500).json({ error: error.message || 'Failed to fetch low stock alerts' });
+  }
+});
+
 app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const productsData = await getProductsForRole(req.user.role, req.query);
+    const productsData = await getProductsForRole(req.user.role, req.query, req.user);
     res.json(productsData);
   } catch (error) {
     console.error('[API PRODUCTS ERROR]', error.message, error.stack);
@@ -2304,21 +2328,14 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
 
 app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, res) => {
   try {
-    const isSuperAdmin = req.user.role === 'superadmin';
     const isSupplier = req.user.role === 'supplier';
     const isShopkeeper = isShopStaffRole(req.user.role);
     const ownShopId = isShopkeeper ? Number(req.user.shop_id) : null;
 
-    let supplierCol = 'NULL::integer AS supplier_id, NULL::text AS supplier_name';
-    if (isSuperAdmin) {
-      supplierCol = 'p.supplier_id, s.name AS supplier_name';
-    } else if (ownShopId) {
-      supplierCol = `CASE WHEN s.shop_id = ${ownShopId} THEN p.supplier_id ELSE NULL END AS supplier_id, CASE WHEN s.shop_id = ${ownShopId} THEN s.name ELSE NULL END AS supplier_name`;
-    }
+    const columns = await productColumnsForRole(req.user.role, req.query, req.user);
 
     const product = await getRecord(`
-      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, ${supplierCol},
-        pc.name AS part_category_name, pv.name AS product_variant_name
+      SELECT ${columns}
       FROM products p
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
@@ -2331,11 +2348,6 @@ app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
 
     if (isShopkeeper && product.shop_id && Number(product.shop_id) !== ownShopId) {
       return res.status(404).json({ error: 'Product not found.' });
-    }
-
-    if (isSupplier || isShopkeeper) {
-      delete product.purchase_price;
-      delete product.official_price;
     }
 
     res.json(product);
@@ -2552,9 +2564,9 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     
     const stockQuantitySql = 'COALESCE(SUM(ib.quantity_remaining), 0)';
     const having = [];
-    if (req.query.status === 'in_stock') having.push(`${stockQuantitySql} > sh.low_stock_threshold`);
+    if (req.query.status === 'in_stock') having.push(`${stockQuantitySql} > COALESCE(sh.low_stock_threshold, 4)`);
     if (req.query.status === 'out_of_stock') having.push(`${stockQuantitySql} = 0`);
-    if (req.query.status === 'low_stock') having.push(`${stockQuantitySql} > 0 AND ${stockQuantitySql} <= sh.low_stock_threshold`);
+    if (req.query.status === 'low_stock') having.push(`${stockQuantitySql} > 0 AND ${stockQuantitySql} <= COALESCE(sh.low_stock_threshold, 4)`);
     
     const baseSql = `
       FROM inventory_batches ib

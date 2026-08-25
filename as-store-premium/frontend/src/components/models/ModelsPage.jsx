@@ -127,7 +127,7 @@ export default function ModelsPage({
     let initialStatus = 'in_stock';
     if (availableQty <= 0) {
       initialStatus = 'no_stock';
-    } else if (availableQty <= 5) {
+    } else if (availableQty <= 4) {
       initialStatus = 'low_stock';
     }
 
@@ -1606,38 +1606,6 @@ export default function ModelsPage({
             </div>
           )}
         </AnimatePresence>
-
-      {/* Pagination */}
-      {role !== 'customer' && pager.loaded && (
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-6 pt-4 border-t border-slate-200 text-xs text-slate-500 font-medium">
-          <div>
-            Showing {Math.min((pager.page - 1) * pager.limit + 1, pager.total)}–{Math.min(pager.page * pager.limit, pager.total)} of {pager.total.toLocaleString('en-IN')} models
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              disabled={loading || pager.page <= 1}
-              onClick={() => onPageChange(pager.page - 1)}
-              className={`px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 font-semibold transition-all ${
-                pager.page <= 1 ? 'opacity-50 cursor-not-allowed' : 'bg-white hover:bg-slate-50'
-              }`}
-            >
-              ‹ Previous
-            </button>
-            <span className="font-bold text-slate-900 px-2.5 py-1 rounded bg-slate-50 border border-slate-200">{pager.page}</span>
-            <button
-              type="button"
-              disabled={loading || pager.page >= pager.totalPages}
-              onClick={() => onPageChange(pager.page + 1)}
-              className={`px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 font-semibold transition-all ${
-                pager.page >= pager.totalPages ? 'opacity-50 cursor-not-allowed' : 'bg-white hover:bg-slate-50'
-              }`}
-            >
-              Next ›
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

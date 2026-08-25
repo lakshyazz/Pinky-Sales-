@@ -181,10 +181,11 @@ export default function ProductDetailModal({
   }, [allCompatibleModels, compatSearch]);
 
   const stockCount = Number(
-    activeProduct?.warehouse_stock ??
     activeProduct?.available_stock ??
     activeProduct?.quantity ??
+    activeProduct?.stock_quantity ??
     activeProduct?.stock ??
+    activeProduct?.warehouse_stock ??
     0
   );
 
@@ -206,7 +207,7 @@ export default function ProductDetailModal({
     stockProgressBarColor = 'bg-rose-500';
     StockIcon = AlertCircle;
     estimatedRunoutDays = 0;
-  } else if (stockCount <= 5) {
+  } else if (stockCount <= 4) {
     stockStatus = 'low_stock';
     stockHealthLabel = 'Low Stock Warning';
     stockLabel = `Low Stock (${stockCount} Units)`;

@@ -180,7 +180,7 @@ export default function BrandsPage({
 
       if (qty === 0) {
         outOfStock++;
-      } else if (qty <= 5) {
+      } else if (qty <= 4) {
         lowStock++;
       } else {
         inStock++;
@@ -224,9 +224,9 @@ export default function BrandsPage({
       const qty = Number(p.quantity ?? p.total_stock ?? p.available_quantity ?? 0);
       let matchesStock = true;
       if (modalStockStatus === 'in_stock') {
-        matchesStock = qty > 5;
+        matchesStock = qty > 4;
       } else if (modalStockStatus === 'low_stock') {
-        matchesStock = qty > 0 && qty <= 5;
+        matchesStock = qty > 0 && qty <= 4;
       } else if (modalStockStatus === 'out_of_stock') {
         matchesStock = qty === 0;
       }
@@ -886,7 +886,7 @@ export default function BrandsPage({
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200/60">
                                       <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" /> Out of Stock ({qty})
                                     </span>
-                                  ) : qty <= 5 ? (
+                                  ) : qty <= 4 ? (
                                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-700 border border-amber-200/60">
                                       <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Low Stock ({qty})
                                     </span>
@@ -948,7 +948,7 @@ export default function BrandsPage({
                                   <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-700 border border-rose-200/60">
                                     <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse" /> Out ({qty})
                                   </span>
-                                ) : qty <= 5 ? (
+                                ) : qty <= 4 ? (
                                   <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-700 border border-amber-200/60">
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" /> Low ({qty})
                                   </span>

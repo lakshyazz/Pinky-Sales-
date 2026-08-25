@@ -49,9 +49,33 @@ export default function ProductDetailPage({
   priceLabel = (val) => `₹${Number(val || 0).toLocaleString('en-IN')}`,
 }) {
   const rawProduct = product || selectedModel || model;
-  
+  const [liveProduct, setLiveProduct] = useState(null);
+
+  useEffect(() => {
+    const targetId = rawProduct?.product_id || rawProduct?.id;
+    if (!targetId) return;
+    const token = localStorage.getItem('token');
+    const urlParams = new URLSearchParams(window.location.search);
+    const shopQuery = urlParams.get('shop_id') || urlParams.get('shopId') ? `?shop_id=${urlParams.get('shop_id') || urlParams.get('shopId')}` : '';
+    fetch(`/api/products/${targetId}${shopQuery}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data && !data.error && data.id) {
+          setLiveProduct(data);
+        }
+      })
+      .catch(() => {});
+  }, [rawProduct?.id, rawProduct?.product_id]);
+
+  const effectiveProduct = useMemo(() => {
+    if (!liveProduct) return rawProduct;
+    return { ...rawProduct, ...liveProduct };
+  }, [rawProduct, liveProduct]);
+
   // Calculate consolidated multi-supplier product metrics
-  const activeProduct = useMemo(() => calculateConsolidatedProduct(rawProduct), [rawProduct]);
+  const activeProduct = useMemo(() => calculateConsolidatedProduct(effectiveProduct), [effectiveProduct]);
 
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [imageErrorMap, setImageErrorMap] = useState({});
@@ -183,10 +207,11 @@ export default function ProductDetailPage({
   }, [allCompatibleModels, compatSearch]);
 
   const stockCount = Number(
-    activeProduct?.warehouse_stock ??
     activeProduct?.available_stock ??
     activeProduct?.quantity ??
+    activeProduct?.stock_quantity ??
     activeProduct?.stock ??
+    activeProduct?.warehouse_stock ??
     0
   );
 
@@ -208,7 +233,7 @@ export default function ProductDetailPage({
     stockProgressBarColor = 'bg-rose-500';
     StockIcon = AlertCircle;
     estimatedRunoutDays = 0;
-  } else if (stockCount <= 5) {
+  } else if (stockCount <= 4) {
     stockStatus = 'low_stock';
     stockHealthLabel = 'Low Stock Warning';
     stockLabel = `Low Stock (${stockCount} Units)`;
@@ -776,7 +801,7 @@ export default function ProductDetailPage({
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40">
                 <span className="text-[10px] uppercase font-extrabold text-slate-400 block">Reorder Status</span>
                 <span className="text-lg font-black text-slate-900 dark:text-white mt-0.5 block">
-                  {stockCount <= 5 ? 'Reorder Now' : 'Sufficient'}
+                  {stockCount <= 4 ? 'Reorder Now' : 'Sufficient'}
                 </span>
               </div>
             </div>

@@ -759,14 +759,14 @@ export function exportLowStockExcel(items = [], filename = null) {
       header: 'Current Stock (pcs)',
       key: 'quantity',
       minWidth: 20,
-      formatter: (_val, row) => Number(row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0) || 0
+      formatter: (_val, row) => Number(row.effectiveQuantity ?? row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0) || 0
     },
     {
       header: 'Stock Status',
       key: 'stock_status',
       minWidth: 18,
       formatter: (_val, row) => {
-        const qty = Number(row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0);
+        const qty = Number(row.effectiveQuantity ?? row.available_stock ?? row.total_stock ?? row.quantity ?? row.stock_quantity ?? row.stock ?? 0);
         return qty === 0 ? 'Out of Stock (0 pcs)' : `Low Stock (${qty} pcs)`;
       }
     },

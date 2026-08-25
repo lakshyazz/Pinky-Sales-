@@ -29,16 +29,26 @@ export function calculateConsolidatedProduct(products) {
 
   const primary = group[0];
 
-  // Consolidate supplier batches from all products in the group
+  // Consolidate supplier batches from all unique products in the group
   let allBatches = [];
   let totalStock = 0;
   let warehouseStock = 0;
   let colourStock = {};
 
-  group.forEach((prod) => {
-    const prodStock = Number(prod.warehouse_stock ?? prod.available_stock ?? prod.stock_quantity ?? prod.quantity ?? prod.stock ?? 0);
+  const uniqueProds = [];
+  const seenIds = new Set();
+  group.forEach((p) => {
+    const idKey = String(p.product_id || p.id || '');
+    if (!idKey || !seenIds.has(idKey)) {
+      if (idKey) seenIds.add(idKey);
+      uniqueProds.push(p);
+    }
+  });
+
+  uniqueProds.forEach((prod) => {
+    const prodStock = Number(prod.available_stock ?? prod.quantity ?? prod.stock_quantity ?? prod.stock ?? prod.total_stock ?? prod.warehouse_stock ?? 0);
     totalStock += prodStock;
-    warehouseStock += Number(prod.warehouse_stock || prodStock);
+    warehouseStock += Number(prod.warehouse_stock ?? prodStock);
 
     // Merge colour stock
     if (prod.colour_stock && typeof prod.colour_stock === 'object') {
