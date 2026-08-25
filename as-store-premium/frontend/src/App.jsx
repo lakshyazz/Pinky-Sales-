@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   BarChart3,
+  Boxes,
   Building2,
   ChevronLeft,
   ChevronRight,
@@ -14,6 +15,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  History,
   ListFilter,
   IndianRupee,
   KeyRound,
@@ -29,10 +31,13 @@ import {
   Send,
   ShieldCheck,
   ShoppingBag,
+  ShoppingCart,
   Store,
   Sun,
+  Tag,
   Tags,
   Trash2,
+  Truck,
   UserCog,
   Users,
   UploadCloud,
@@ -44,6 +49,8 @@ import ProductDetailPage from './components/models/ProductDetailPage';
 import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import LowStockPage from './components/stock/LowStockPage';
+import BranchOrderStockPage from './components/stock/BranchOrderStockPage';
+import SuperAdminStockRequestsPage from './components/stock/SuperAdminStockRequestsPage';
 import BrandsPage from './components/brands/BrandsPage';
 import ManufacturingBrandsPage from './components/manufacturing-brands/ManufacturingBrandsPage';
 import SuppliersPage from './components/suppliers/SuppliersPage';
@@ -306,12 +313,14 @@ const navByRole = {
     ['import', 'Supplier Import', UploadCloud],
     ['customers', 'Customers', Users],
     ['sales', 'Sales', ReceiptText],
-    ['requests', 'Requests', Send],
+    ['requests', 'Stock Requisitions', Boxes],
     ['payments', 'Pending', CreditCard],
     ['reports', 'Reports', FileText],
   ],
   shopkeeper: [
     ['dashboard', 'Dashboard', BarChart3],
+    ['order-stock', 'Order Stock', ShoppingCart],
+    ['requests', 'My Requisitions', History],
     ['stock', 'Stock', Package],
     ['low-stock', 'Low Stock', AlertTriangle],
     ['brands', 'Brands', Tags],
@@ -321,7 +330,6 @@ const navByRole = {
     ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
     ['customers', 'Customers', Users],
-    ['requests', 'Requests', Send],
     ['sales', 'Create Sale', ReceiptText],
     ['payments', 'Pending', CreditCard],
     ['reports', 'Reports', FileText],
@@ -348,8 +356,9 @@ const sidebarSectionsByRole = {
   ],
   shopkeeper: [
     { title: 'Dashboard', ids: ['dashboard'] },
+    { title: 'Stock Replenishment', ids: ['order-stock', 'requests'] },
     { title: 'Inventory', ids: ['stock', 'low-stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
-    { title: 'Operations', ids: ['customers', 'requests', 'sales', 'payments'] },
+    { title: 'Operations', ids: ['customers', 'sales', 'payments'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   supplier: [
@@ -367,6 +376,11 @@ const pageMetaById = {
     group: 'Overview',
     title: 'Dashboard',
     description: 'Track sales, stock health, pending payments, and branch activity from one clean command center.',
+  },
+  'order-stock': {
+    group: 'Stock Replenishment',
+    title: 'Order Stock from Warehouse',
+    description: 'Browse Central Warehouse live stock, choose color variants, and submit replenishment orders.',
   },
   shops: {
     group: 'Operations',
@@ -429,9 +443,9 @@ const pageMetaById = {
     description: 'Create sales, choose price type, and keep FIFO stock allocation intact.',
   },
   requests: {
-    group: 'Stock Management',
-    title: 'Requests',
-    description: 'Review branch stock requests and update their current status.',
+    group: 'Stock Replenishment',
+    title: 'Stock Requisitions',
+    description: 'Review, approve, and dispatch branch stock requisitions with automatic inventory transfer.',
   },
   payments: {
     group: 'Operations',
@@ -455,7 +469,7 @@ const pageMetaById = {
   },
 };
 
-const validPageIds = new Set([...Object.values(navByRole).flatMap((items) => items.map(([id]) => id)), 'low-stock']);
+const validPageIds = new Set([...Object.values(navByRole).flatMap((items) => items.map(([id]) => id)), 'low-stock', 'order-stock', 'stock-requests']);
 const defaultPageForRole = (role) => (role === 'customer' || role === 'user' ? 'catalog' : 'dashboard');
 const pageFromPath = () => {
   if (typeof window === 'undefined') return '';
@@ -2495,8 +2509,73 @@ function App() {
     };
   };
 
+  const getProductAvailableColors = (product) => {
+    if (!product) return [];
+    const colorSet = new Set();
+
+    // 1. From product.colours (array, JSON, or comma-separated string)
+    if (Array.isArray(product.colours)) {
+      product.colours.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
+    } else if (typeof product.colours === 'string' && product.colours.trim()) {
+      try {
+        const parsed = JSON.parse(product.colours);
+        if (Array.isArray(parsed)) parsed.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
+        else product.colours.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
+      } catch {
+        product.colours.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
+      }
+    }
+
+    if (Array.isArray(product.available_colors)) {
+      product.available_colors.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
+    } else if (typeof product.available_colors === 'string' && product.available_colors.trim()) {
+      product.available_colors.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
+    }
+
+    // 2. From colour_stock keys
+    if (product.colour_stock && typeof product.colour_stock === 'object') {
+      Object.keys(product.colour_stock).forEach((col) => {
+        if (col && col !== 'Standard' && col !== 'undefined' && col !== 'null') {
+          colorSet.add(col.trim());
+        }
+      });
+    }
+
+    // 3. From batches / supplier_batches
+    const allBatches = [...(product.batches || []), ...(product.supplier_batches || [])];
+    allBatches.forEach((b) => {
+      if (b.colour && b.colour !== 'Standard' && b.colour !== 'undefined' && b.colour !== 'null') {
+        colorSet.add(b.colour.trim());
+      }
+    });
+
+    // 4. Also check matching products across data sources (by ID or model name)
+    const currentId = String(product.id || product.product_id || '');
+    const currentModel = String(product.short_name || product.name || '').trim().toLowerCase();
+    const allProducts = [...(data.products || []), ...(data.productResults || []), ...(data.catalog || []), ...(data.stock || [])];
+    
+    allProducts.forEach((p) => {
+      const pId = String(p.id || p.product_id || '');
+      const pModel = String(p.short_name || p.name || '').trim().toLowerCase();
+      if ((currentId && pId === currentId) || (currentModel && pModel === currentModel)) {
+        if (Array.isArray(p.colours)) {
+          p.colours.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
+        } else if (typeof p.colours === 'string' && p.colours.trim()) {
+          p.colours.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
+        }
+        if (p.colour_stock && typeof p.colour_stock === 'object') {
+          Object.keys(p.colour_stock).forEach((col) => {
+            if (col && col !== 'Standard' && col !== 'undefined' && col !== 'null') colorSet.add(col.trim());
+          });
+        }
+      }
+    });
+
+    return Array.from(colorSet).filter(Boolean);
+  };
+
   const updateSaleItemProduct = (index, productId) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
     const defaultPrice = getProductDefaultPrice(productId);
     const qty = Math.max(Number(currentItems[index]?.quantity || 1), 1);
     const total = defaultPrice !== '' ? String(Number(defaultPrice) * qty) : '';
@@ -2507,6 +2586,7 @@ function App() {
       price_type: 'retail',
       quantity: qty,
       total_amount: total,
+      color_breakdown: [],
     };
 
     const totals = calculateSaleTotals(currentItems);
@@ -2593,9 +2673,85 @@ function App() {
     }));
   };
 
+  const updateSaleItemColorQuantity = (itemIndex, colorName, colorQtyVal) => {
+    const currentItems = [...(forms.sale.items || [])];
+    const item = { ...currentItems[itemIndex] };
+    const breakdown = Array.isArray(item.color_breakdown) ? [...item.color_breakdown] : [];
+    
+    const existingIndex = breakdown.findIndex((b) => b.color === colorName);
+    const parsedQty = colorQtyVal === '' ? '' : Math.max(0, parseInt(colorQtyVal, 10) || 0);
+
+    if (existingIndex >= 0) {
+      if (parsedQty === 0 && colorQtyVal !== '') {
+        breakdown.splice(existingIndex, 1);
+      } else {
+        breakdown[existingIndex] = { ...breakdown[existingIndex], qty: parsedQty };
+      }
+    } else if (parsedQty > 0 || colorQtyVal === '') {
+      breakdown.push({ color: colorName, qty: parsedQty });
+    }
+
+    item.color_breakdown = breakdown;
+
+    const totalColorQty = breakdown.reduce((sum, b) => sum + (Number(b.qty) || 0), 0);
+    const newQty = breakdown.length > 0 ? (totalColorQty || 1) : item.quantity;
+    item.quantity = newQty;
+
+    const unitPrice = Number(item.selling_price || 0);
+    item.total_amount = unitPrice > 0 ? String(unitPrice * newQty) : item.total_amount;
+
+    currentItems[itemIndex] = item;
+    const totals = calculateSaleTotals(currentItems);
+
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        quantity: currentItems[0]?.quantity || 1,
+        ...totals,
+        items: currentItems,
+      },
+    }));
+  };
+
+  const toggleSaleItemColor = (itemIndex, colorName) => {
+    const currentItems = [...(forms.sale.items || [])];
+    const item = { ...currentItems[itemIndex] };
+    const breakdown = Array.isArray(item.color_breakdown) ? [...item.color_breakdown] : [];
+    const existingIndex = breakdown.findIndex((b) => b.color === colorName);
+
+    if (existingIndex >= 0) {
+      breakdown.splice(existingIndex, 1);
+    } else {
+      breakdown.push({ color: colorName, qty: 1 });
+    }
+
+    item.color_breakdown = breakdown;
+    const totalColorQty = breakdown.reduce((sum, b) => sum + (Number(b.qty) || 0), 0);
+    if (breakdown.length > 0) {
+      item.quantity = Math.max(totalColorQty, 1);
+    }
+
+    const unitPrice = Number(item.selling_price || 0);
+    item.total_amount = unitPrice > 0 ? String(unitPrice * item.quantity) : item.total_amount;
+
+    currentItems[itemIndex] = item;
+    const totals = calculateSaleTotals(currentItems);
+
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        quantity: currentItems[0]?.quantity || 1,
+        ...totals,
+        items: currentItems,
+      },
+    }));
+  };
+
   const addSaleItem = () => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
-    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' });
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
+    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] });
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -2606,7 +2762,7 @@ function App() {
   };
 
   const removeSaleItem = (index) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
     if (currentItems.length <= 1) return;
     currentItems.splice(index, 1);
     const totals = calculateSaleTotals(currentItems);
@@ -2688,6 +2844,9 @@ function App() {
               selling_price: unitPrice,
               unit_price: unitPrice,
               price_type: item.price_type || 'retail',
+              color_breakdown: Array.isArray(item.color_breakdown) 
+                ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
+                : [],
             };
           }),
         }),
@@ -4510,70 +4669,187 @@ function App() {
                     
                     <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4 relative z-30">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
-                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }]).map((item, idx) => (
-                        <div key={idx} className="sale-line-item flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative z-30 focus-within:z-40">
-                          <div className="flex-1 min-w-[260px]">
-                            <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
-                            <SearchableCombobox 
-                              value={item.product_id} 
-                              onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={salesProductOptions}
-                              placeholder="Search catalog or select item..."
-                              searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
-                              className="w-full"
-                            />
+                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }]).map((item, idx) => {
+                        const selectedProd = data.products.find((p) => String(p.id) === String(item.product_id)) 
+                          || data.productResults?.find((p) => String(p.id) === String(item.product_id))
+                          || data.catalog?.find((p) => String(p.id) === String(item.product_id));
+                        const availableColors = getProductAvailableColors(selectedProd);
+                        const colorStockMap = selectedProd?.colour_stock || {};
+                        const activeBreakdown = item.color_breakdown || [];
+
+                        return (
+                          <div key={idx} className="sale-line-item bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs relative z-30 focus-within:z-40 space-y-3">
+                            <div className="flex flex-wrap items-end gap-3">
+                              <div className="flex-1 min-w-[260px]">
+                                <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
+                                <SearchableCombobox 
+                                  value={item.product_id} 
+                                  onChange={(v) => updateSaleItemProduct(idx, v)} 
+                                  options={salesProductOptions}
+                                  placeholder="Search catalog or select item..."
+                                  searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
+                                  className="w-full"
+                                />
+                              </div>
+                              <div style={{ width: '175px' }}>
+                                <Select
+                                  label="Price tier"
+                                  placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
+                                  value={item.price_type || ''}
+                                  onChange={(v) => updateSaleItemPriceType(idx, v)}
+                                  options={sellingPriceOptions(item.product_id)}
+                                  disabled={!item.product_id}
+                                />
+                              </div>
+                              <div style={{ width: '150px' }}>
+                                <Input
+                                  label="Selling price (₹)"
+                                  type="number"
+                                  placeholder="₹ 0"
+                                  value={item.selling_price !== undefined ? item.selling_price : ''}
+                                  onChange={(v) => updateSaleItemSellingPrice(idx, v)}
+                                  disabled={!item.product_id}
+                                />
+                              </div>
+                              <div style={{ width: '110px' }}>
+                                <Input 
+                                  label="Quantity" 
+                                  type="number" 
+                                  min="1" 
+                                  value={item.quantity} 
+                                  onChange={(v) => updateSaleItemQuantity(idx, v)} 
+                                  disabled={!item.product_id || activeBreakdown.length > 0}
+                                  title={activeBreakdown.length > 0 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
+                                />
+                              </div>
+                              <div style={{ width: '140px' }}>
+                                <Input 
+                                  label="Total price (₹)" 
+                                  type="number" 
+                                  value={item.total_amount || ''} 
+                                  readOnly 
+                                  disabled 
+                                />
+                              </div>
+                              {(forms.sale.items || []).length > 1 && (
+                                <button 
+                                  type="button" 
+                                  className="soft !min-h-[44px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer rounded-xl"
+                                  onClick={() => removeSaleItem(idx)}
+                                  title="Remove item"
+                                >
+                                  <X size={16} />
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Dynamic Color Variant Breakdown Container */}
+                            {Boolean(item.product_id) && (
+                              <div className="pt-3 border-t border-slate-100 mt-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                                    <Tag className="w-3.5 h-3.5 text-teal-600" />
+                                    Color Variant Breakdown
+                                  </span>
+                                  <span className="text-[11px] text-slate-400 font-medium">
+                                    Click color chip to allocate units
+                                  </span>
+                                </div>
+
+                                {/* Color Selection Chips */}
+                                <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                                  {(availableColors.length > 0 
+                                    ? availableColors 
+                                    : (data.reference?.colours?.map(c => c.name) || ['Black', 'Gold', 'Rose Gold', 'Silver', 'Green', 'Purple'])
+                                  ).map((color) => {
+                                    const isSelected = activeBreakdown.some((b) => b.color === color);
+                                    const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
+                                    return (
+                                      <button
+                                        key={color}
+                                        type="button"
+                                        onClick={() => toggleSaleItemColor(idx, color)}
+                                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                                          isSelected
+                                            ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
+                                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                                        }`}
+                                      >
+                                        <span>{color}</span>
+                                        {colorStockQty !== null && (
+                                          <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-200/80 text-slate-600'}`}>
+                                            {colorStockQty} in stock
+                                          </span>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+
+                                  {/* Any Other Reference Color Dropdown */}
+                                  <select
+                                    value=""
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        toggleSaleItemColor(idx, e.target.value);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 rounded-xl text-xs font-bold bg-white hover:bg-slate-50 text-teal-700 border border-teal-300 cursor-pointer shadow-2xs focus:outline-hidden"
+                                  >
+                                    <option value="" disabled>+ Add Any Color...</option>
+                                    {(data.reference?.colours || []).map((c) => (
+                                      <option key={c.id || c.name} value={c.name}>
+                                        {c.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                {/* Active Color Quantity Inputs Sub-Grid */}
+                                {activeBreakdown.length > 0 && (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/70">
+                                    {activeBreakdown.map((b) => (
+                                      <div key={b.color} className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-2xs">
+                                        <span className="text-xs font-black text-slate-800 truncate">{b.color}</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
+                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
+                                          >
+                                            -
+                                          </button>
+                                          <input
+                                            type="number"
+                                            min="1"
+                                            value={b.qty}
+                                            onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
+                                            className="w-12 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-hidden"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
+                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
+                                          >
+                                            +
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleSaleItemColor(idx, b.color)}
+                                            className="text-slate-400 hover:text-rose-600 ml-1 cursor-pointer p-0.5"
+                                            title="Remove this color"
+                                          >
+                                            <X size={13} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <div style={{ width: '185px' }}>
-                            <Select
-                              label="Price tier"
-                              placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
-                              value={item.price_type || ''}
-                              onChange={(v) => updateSaleItemPriceType(idx, v)}
-                              options={sellingPriceOptions(item.product_id)}
-                              disabled={!item.product_id}
-                            />
-                          </div>
-                          <div style={{ width: '160px' }}>
-                            <Input
-                              label="Selling price (₹)"
-                              type="number"
-                              placeholder="₹ 0"
-                              value={item.selling_price !== undefined ? item.selling_price : ''}
-                              onChange={(v) => updateSaleItemSellingPrice(idx, v)}
-                              disabled={!item.product_id}
-                            />
-                          </div>
-                          <div style={{ width: '110px' }}>
-                            <Input 
-                              label="Quantity" 
-                              type="number" 
-                              min="1" 
-                              value={item.quantity} 
-                              onChange={(v) => updateSaleItemQuantity(idx, v)} 
-                              disabled={!item.product_id}
-                            />
-                          </div>
-                          <div style={{ width: '150px' }}>
-                            <Input 
-                              label="Total price (₹)" 
-                              type="number" 
-                              value={item.total_amount || ''} 
-                              readOnly 
-                              disabled 
-                            />
-                          </div>
-                          {(forms.sale.items || []).length > 1 && (
-                            <button 
-                              type="button" 
-                              className="soft !min-h-[48px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer"
-                              onClick={() => removeSaleItem(idx)}
-                              title="Remove item"
-                            >
-                              <X size={16} />
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                       <button 
                         type="button" 
                         className="soft !px-4 !py-2 text-xs font-bold mt-2 cursor-pointer" 
@@ -4710,70 +4986,187 @@ function App() {
                     
                     <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4 relative z-30">
                       <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
-                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }]).map((item, idx) => (
-                        <div key={idx} className="sale-line-item flex flex-wrap items-end gap-3 bg-white border border-slate-150 p-4 rounded-xl shadow-sm relative z-30 focus-within:z-40">
-                          <div className="flex-1 min-w-[260px]">
-                            <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
-                            <SearchableCombobox 
-                              value={item.product_id} 
-                              onChange={(v) => updateSaleItemProduct(idx, v)} 
-                              options={salesProductOptions}
-                              placeholder="Search catalog or select item..."
-                              searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
-                              className="w-full"
-                            />
+                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }]).map((item, idx) => {
+                        const selectedProd = data.products.find((p) => String(p.id) === String(item.product_id)) 
+                          || data.productResults?.find((p) => String(p.id) === String(item.product_id))
+                          || data.catalog?.find((p) => String(p.id) === String(item.product_id));
+                        const availableColors = getProductAvailableColors(selectedProd);
+                        const colorStockMap = selectedProd?.colour_stock || {};
+                        const activeBreakdown = item.color_breakdown || [];
+
+                        return (
+                          <div key={idx} className="sale-line-item bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs relative z-30 focus-within:z-40 space-y-3">
+                            <div className="flex flex-wrap items-end gap-3">
+                              <div className="flex-1 min-w-[260px]">
+                                <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
+                                <SearchableCombobox 
+                                  value={item.product_id} 
+                                  onChange={(v) => updateSaleItemProduct(idx, v)} 
+                                  options={salesProductOptions}
+                                  placeholder="Search catalog or select item..."
+                                  searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
+                                  className="w-full"
+                                />
+                              </div>
+                              <div style={{ width: '175px' }}>
+                                <Select
+                                  label="Price tier"
+                                  placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
+                                  value={item.price_type || ''}
+                                  onChange={(v) => updateSaleItemPriceType(idx, v)}
+                                  options={sellingPriceOptions(item.product_id)}
+                                  disabled={!item.product_id}
+                                />
+                              </div>
+                              <div style={{ width: '150px' }}>
+                                <Input
+                                  label="Selling price (₹)"
+                                  type="number"
+                                  placeholder="₹ 0"
+                                  value={item.selling_price !== undefined ? item.selling_price : ''}
+                                  onChange={(v) => updateSaleItemSellingPrice(idx, v)}
+                                  disabled={!item.product_id}
+                                />
+                              </div>
+                              <div style={{ width: '110px' }}>
+                                <Input 
+                                  label="Quantity" 
+                                  type="number" 
+                                  min="1" 
+                                  value={item.quantity} 
+                                  onChange={(v) => updateSaleItemQuantity(idx, v)} 
+                                  disabled={!item.product_id || activeBreakdown.length > 0}
+                                  title={activeBreakdown.length > 0 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
+                                />
+                              </div>
+                              <div style={{ width: '140px' }}>
+                                <Input 
+                                  label="Total price (₹)" 
+                                  type="number" 
+                                  value={item.total_amount || ''} 
+                                  readOnly 
+                                  disabled 
+                                />
+                              </div>
+                              {(forms.sale.items || []).length > 1 && (
+                                <button 
+                                  type="button" 
+                                  className="soft !min-h-[44px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer rounded-xl"
+                                  onClick={() => removeSaleItem(idx)}
+                                  title="Remove item"
+                                >
+                                  <X size={16} />
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Dynamic Color Variant Breakdown Container */}
+                            {Boolean(item.product_id) && (
+                              <div className="pt-3 border-t border-slate-100 mt-2">
+                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                                    <Tag className="w-3.5 h-3.5 text-teal-600" />
+                                    Color Variant Breakdown
+                                  </span>
+                                  <span className="text-[11px] text-slate-400 font-medium">
+                                    Click color chip to allocate units
+                                  </span>
+                                </div>
+
+                                {/* Color Selection Chips */}
+                                <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                                  {(availableColors.length > 0 
+                                    ? availableColors 
+                                    : (data.reference?.colours?.map(c => c.name) || ['Black', 'Gold', 'Rose Gold', 'Silver', 'Green', 'Purple'])
+                                  ).map((color) => {
+                                    const isSelected = activeBreakdown.some((b) => b.color === color);
+                                    const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
+                                    return (
+                                      <button
+                                        key={color}
+                                        type="button"
+                                        onClick={() => toggleSaleItemColor(idx, color)}
+                                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                                          isSelected
+                                            ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
+                                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                                        }`}
+                                      >
+                                        <span>{color}</span>
+                                        {colorStockQty !== null && (
+                                          <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-200/80 text-slate-600'}`}>
+                                            {colorStockQty} in stock
+                                          </span>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+
+                                  {/* Any Other Reference Color Dropdown */}
+                                  <select
+                                    value=""
+                                    onChange={(e) => {
+                                      if (e.target.value) {
+                                        toggleSaleItemColor(idx, e.target.value);
+                                      }
+                                    }}
+                                    className="px-2.5 py-1 rounded-xl text-xs font-bold bg-white hover:bg-slate-50 text-teal-700 border border-teal-300 cursor-pointer shadow-2xs focus:outline-hidden"
+                                  >
+                                    <option value="" disabled>+ Add Any Color...</option>
+                                    {(data.reference?.colours || []).map((c) => (
+                                      <option key={c.id || c.name} value={c.name}>
+                                        {c.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+
+                                {/* Active Color Quantity Inputs Sub-Grid */}
+                                {activeBreakdown.length > 0 && (
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/70">
+                                    {activeBreakdown.map((b) => (
+                                      <div key={b.color} className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-2xs">
+                                        <span className="text-xs font-black text-slate-800 truncate">{b.color}</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
+                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
+                                          >
+                                            -
+                                          </button>
+                                          <input
+                                            type="number"
+                                            min="1"
+                                            value={b.qty}
+                                            onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
+                                            className="w-12 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-hidden"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
+                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
+                                          >
+                                            +
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => toggleSaleItemColor(idx, b.color)}
+                                            className="text-slate-400 hover:text-rose-600 ml-1 cursor-pointer p-0.5"
+                                            title="Remove this color"
+                                          >
+                                            <X size={13} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <div style={{ width: '185px' }}>
-                            <Select
-                              label="Price tier"
-                              placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
-                              value={item.price_type || ''}
-                              onChange={(v) => updateSaleItemPriceType(idx, v)}
-                              options={sellingPriceOptions(item.product_id)}
-                              disabled={!item.product_id}
-                            />
-                          </div>
-                          <div style={{ width: '160px' }}>
-                            <Input
-                              label="Selling price (₹)"
-                              type="number"
-                              placeholder="₹ 0"
-                              value={item.selling_price !== undefined ? item.selling_price : ''}
-                              onChange={(v) => updateSaleItemSellingPrice(idx, v)}
-                              disabled={!item.product_id}
-                            />
-                          </div>
-                          <div style={{ width: '110px' }}>
-                            <Input 
-                              label="Quantity" 
-                              type="number" 
-                              min="1" 
-                              value={item.quantity} 
-                              onChange={(v) => updateSaleItemQuantity(idx, v)} 
-                              disabled={!item.product_id}
-                            />
-                          </div>
-                          <div style={{ width: '150px' }}>
-                            <Input 
-                              label="Total price (₹)" 
-                              type="number" 
-                              value={item.total_amount || ''} 
-                              readOnly 
-                              disabled 
-                            />
-                          </div>
-                          {(forms.sale.items || []).length > 1 && (
-                            <button 
-                              type="button" 
-                              className="soft !min-h-[48px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer"
-                              onClick={() => removeSaleItem(idx)}
-                              title="Remove item"
-                            >
-                              <X size={16} />
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                       <button 
                         type="button" 
                         className="soft !px-4 !py-2 text-xs font-bold mt-2 cursor-pointer" 
@@ -4865,59 +5258,36 @@ function App() {
             </PageWrapper>
           )}
 
+          {active === 'order-stock' && (
+            <PageWrapper activeKey="order-stock" key="order-stock">
+              <BranchOrderStockPage
+                authedFetch={authedFetch}
+                showToast={showToast}
+                currentShop={shopId}
+                shops={data.shops}
+                reference={data.reference}
+              />
+            </PageWrapper>
+          )}
+
           {active === 'requests' && (
             <PageWrapper activeKey="requests" key="requests">
-              <section className="space">
-                {role === 'shopkeeper' && (
-                  <FormPanel title="Request stock from owner" action={saving ? 'Sending...' : 'Send request'} onSubmit={submitRequest} disabled={saving}>
-                    <Select label="Known product" className="md:col-span-2" value={forms.request.product_id} onChange={(v) => setForms({ ...forms, request: { ...forms.request, product_id: v } })} options={data.products.map((p) => [p.id, `${productName(p)} · ${priceLabel(p.sale_price)}`])} />
-                    <Input label="New model name" className="md:col-span-2" value={forms.request.model_name} onChange={(v) => setForms({ ...forms, request: { ...forms.request, model_name: v } })} />
-                    <Input label="Quantity needed" type="number" className="md:col-span-1" value={forms.request.quantity} onChange={(v) => setForms({ ...forms, request: { ...forms.request, quantity: v } })} />
-                    <Input label="Message" className="md:col-span-3" value={forms.request.message} onChange={(v) => setForms({ ...forms, request: { ...forms.request, message: v } })} />
-                  </FormPanel>
-                )}
-                <motion.div 
-                  variants={listVariants}
-                  initial="hidden"
-                  whileInView="visible"
-                  viewport={{ once: true, margin: "-10px" }}
-                  className="request-list"
-                >
-                  {data.requests.map((request) => (
-                    <motion.article 
-                      variants={itemVariants}
-                      className="panel request-card" 
-                      key={request.id}
-                    >
-                      <div className="request-main">
-                        <div className="card-icon-wrapper cyan">
-                          <Send size={18} />
-                        </div>
-                        <div>
-                          <h3 title={request.product_name || request.model_name}>{productName(request)}</h3>
-                          <p>{request.shop_name} · {request.shop_area}</p>
-                          {request.message && <small>{request.message}</small>}
-                        </div>
-                      </div>
-                      <div className="request-metrics">
-                        <span><b>{request.quantity}</b><small>Needed</small></span>
-                        <span><b>{request.shop_quantity}</b><small>In shop</small></span>
-                        <span><b>{request.total_available}</b><small>All shops</small></span>
-                      </div>
-                      <div className="request-actions">
-                        <span className={`status-badge ${request.status === 'open' ? 'pending' : request.status === 'sent' ? 'due' : 'paid'}`}>{request.status}</span>
-                        {role === 'superadmin' && (
-                          <div className="actions">
-                            <button className="soft" type="button" onClick={() => updateRequestStatus(request.id, 'sent')}>Mark sent</button>
-                            <button className="primary" type="button" onClick={() => updateRequestStatus(request.id, 'closed')}>Close</button>
-                          </div>
-                        )}
-                      </div>
-                    </motion.article>
-                  ))}
-                  {!data.requests.length && <Empty title="No stock requests yet" />}
-                </motion.div>
-              </section>
+              {role === 'superadmin' ? (
+                <SuperAdminStockRequestsPage
+                  authedFetch={authedFetch}
+                  showToast={showToast}
+                  shops={data.shops}
+                  data={data}
+                />
+              ) : (
+                <BranchOrderStockPage
+                  authedFetch={authedFetch}
+                  showToast={showToast}
+                  currentShop={shopId}
+                  shops={data.shops}
+                  reference={data.reference}
+                />
+              )}
             </PageWrapper>
           )}
 

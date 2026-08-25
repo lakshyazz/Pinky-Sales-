@@ -3229,7 +3229,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           throw error;
         }
         const batches = await tx.allRecords(
-          `SELECT id, purchase_price, quantity_remaining FROM inventory_batches ib
+          `SELECT id, purchase_price, quantity_remaining, colour FROM inventory_batches ib
            WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0
              ${item.batch_id ? 'AND id = ?' : ''}${batchAccessSql(req.user)}
            ORDER BY received_date ASC, id ASC`,
@@ -3245,16 +3245,43 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           error.status = 400;
           throw error;
         }
+
+        const colorBreakdown = Array.isArray(item.color_breakdown) 
+          ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
+          : [];
+
         let toReserve = saleQuantity;
         const reservedBatches = [];
+
+        // If color breakdown is provided, prioritize batches matching the specific colors
+        if (colorBreakdown.length > 0) {
+          for (const cb of colorBreakdown) {
+            let colorNeed = Number(cb.qty);
+            for (const batch of availableBatches) {
+              if (colorNeed <= 0) break;
+              if (batch.quantity_remaining > 0 && String(batch.colour || '').trim().toLowerCase() === String(cb.color).trim().toLowerCase()) {
+                const take = Math.min(colorNeed, batch.quantity_remaining);
+                reservedByBatch.set(batch.id, Number(reservedByBatch.get(batch.id) || 0) + take);
+                reservedBatches.push({ ...batch, quantity_remaining: take });
+                batch.quantity_remaining -= take;
+                colorNeed -= take;
+                toReserve -= take;
+              }
+            }
+          }
+        }
+
+        // Fill remaining quantity from FIFO order
         for (const batch of availableBatches) {
           if (toReserve <= 0) break;
+          if (batch.quantity_remaining <= 0) continue;
           const reserved = Math.min(toReserve, batch.quantity_remaining);
           reservedByBatch.set(batch.id, Number(reservedByBatch.get(batch.id) || 0) + reserved);
           reservedBatches.push({ ...batch, quantity_remaining: reserved });
+          batch.quantity_remaining -= reserved;
           toReserve -= reserved;
         }
-        preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches, unitPrice, product });
+        preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches, unitPrice, product, colorBreakdown });
       }
 
       const originalTotal = preparedItems.reduce((sum, item) => sum + item.saleTotal, 0);
@@ -3297,6 +3324,13 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         remainingPaid -= itemPaid;
         const pending = Math.max(itemTotal - itemPaid, 0);
         totalPending += pending;
+
+        let itemNotes = notes || '';
+        if (item.colorBreakdown && item.colorBreakdown.length > 0) {
+          const colorText = item.colorBreakdown.map(c => `${c.color}: ${c.qty}`).join(', ');
+          itemNotes = itemNotes ? `${itemNotes} | Colors: ${colorText}` : `Colors: ${colorText}`;
+        }
+
         const insertResult = await tx.runQuery(
           'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount, discount_amount, discount_percentage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
@@ -3309,7 +3343,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
             pending, 
             due_date || '', 
             today(), 
-            notes || '', 
+            itemNotes, 
             pending > 0 ? 'open' : 'paid', 
             req.user.id, 
             payment_mode, 
@@ -3447,56 +3481,360 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
   }
 });
 
-app.get('/api/stock-requests', authenticateToken, requireShopStaff, async (req, res) => {
+app.get('/api/branch/warehouse-stock', authenticateToken, async (req, res) => {
   try {
-    const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
-    const visibleBatchAccess = batchAccessSql(req.user);
-    const totalAvailableShopScope = isShopStaffRole(req.user.role) ? 'AND ib.shop_id = sr.shop_id' : '';
-    const visibility = await getPriceVisibility();
-    const officialPriceColumn = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
+    const warehouse = await getWarehouse();
+    if (!warehouse) return res.status(404).json({ error: 'Warehouse not configured.' });
+
     const rows = await allRecords(`
-      SELECT sr.*, sh.name AS shop_name, sh.area AS shop_area, p.name AS product_name, p.short_name AS product_short_name, p.brand${officialPriceColumn},
-        u.name AS created_by_name,
-        COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = sr.shop_id AND ib.product_id = sr.product_id ${visibleBatchAccess}), 0) AS shop_quantity,
-        COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = sr.product_id ${totalAvailableShopScope} ${visibleBatchAccess}), 0) AS total_available
-      FROM stock_requests sr
-      JOIN shops sh ON sh.id = sr.shop_id
-      LEFT JOIN products p ON p.id = sr.product_id
-      LEFT JOIN users u ON u.id = sr.created_by
-      ${shopId ? 'WHERE sr.shop_id = ?' : ''}
-      ORDER BY CASE sr.status WHEN 'open' THEN 0 WHEN 'sent' THEN 1 ELSE 2 END, sr.id DESC
-    `, shopId ? [shopId] : []);
+      SELECT 
+        p.id, p.name, p.short_name, p.brand, p.category, p.part_category, p.quality_variant,
+        mb.name AS manufacturing_brand_name, p.full_model_list, p.model, p.colours,
+        p.sale_price, p.wholesale_price, p.purchase_price, p.image_url,
+        COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = ?), 0) AS warehouse_stock
+      FROM products p
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      WHERE p.is_active = 1
+        AND (
+          COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = p.id AND ib.shop_id = ?), 0) > 0
+          OR EXISTS (SELECT 1 FROM stock s WHERE s.product_id = p.id AND s.shop_id = ? AND s.quantity > 0)
+        )
+      ORDER BY p.name ASC
+    `, [warehouse.id, warehouse.id, warehouse.id]);
+
+    // Aggregate colour breakdown per product from active warehouse batches
+    const batchRows = await allRecords(`
+      SELECT product_id, COALESCE(NULLIF(TRIM(colour), ''), 'Standard') as colour, SUM(quantity_remaining) as qty
+      FROM inventory_batches
+      WHERE shop_id = ? AND quantity_remaining > 0
+      GROUP BY product_id, COALESCE(NULLIF(TRIM(colour), ''), 'Standard')
+    `, [warehouse.id]);
+
+    const colourStockByProd = new Map();
+    batchRows.forEach(b => {
+      if (!colourStockByProd.has(b.product_id)) colourStockByProd.set(b.product_id, {});
+      colourStockByProd.get(b.product_id)[b.colour] = Number(b.qty);
+    });
+
+    rows.forEach(r => {
+      r.colour_stock = colourStockByProd.get(r.id) || {};
+    });
+
     res.json(rows);
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message || 'Unable to load stock requests.' });
+    res.status(500).json({ error: error.message || 'Unable to fetch warehouse stock.' });
   }
 });
 
-app.post('/api/stock-requests', authenticateToken, requireShopStaff, async (req, res) => {
+app.get('/api/stock-requests', authenticateToken, async (req, res) => {
   try {
-    const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { product_id, model_name, quantity = 1, message } = req.body;
-    const requestQuantity = Number(quantity);
-    if ((!product_id && !String(model_name || '').trim()) || !Number.isInteger(requestQuantity) || requestQuantity <= 0) {
-      return res.status(400).json({ error: 'Choose a product or enter a model name, plus a valid quantity.' });
+    const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : (req.query.shopId || scopeShopId(req));
+    const warehouse = await getWarehouse();
+    const warehouseId = warehouse?.id || null;
+
+    const queryParams = [];
+    let whereClause = '';
+    if (shopId) {
+      whereClause = 'WHERE sr.shop_id = ?';
+      queryParams.push(shopId);
     }
-    const result = await runQuery(
-      'INSERT INTO stock_requests (shop_id, product_id, model_name, quantity, message, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [shopId, product_id || null, String(model_name || '').trim(), requestQuantity, message || '', req.user.id]
-    );
-    await audit(req, 'Created stock request', 'stock_request', result.id, `${requestQuantity} units requested`);
-    res.status(201).json({ id: result.id });
+
+    const requests = await allRecords(`
+      SELECT 
+        sr.id, sr.request_number, sr.shop_id, sr.product_id, sr.model_name, sr.quantity,
+        sr.total_items, sr.total_quantity, sr.message, sr.notes, sr.rejection_reason,
+        sr.created_by, sr.status, sr.approved_by, sr.approved_at, sr.created_at, sr.updated_at,
+        sr.resolved_at,
+        sh.name AS shop_name, sh.area AS shop_area,
+        u.name AS created_by_name,
+        approver.name AS approved_by_name
+      FROM stock_requests sr
+      JOIN shops sh ON sh.id = sr.shop_id
+      LEFT JOIN users u ON u.id = sr.created_by
+      LEFT JOIN users approver ON approver.id = sr.approved_by
+      ${whereClause}
+      ORDER BY 
+        CASE sr.status WHEN 'pending' THEN 0 WHEN 'open' THEN 1 WHEN 'approved' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
+        sr.id DESC
+    `, queryParams);
+
+    if (requests.length > 0) {
+      const requestIds = requests.map(r => r.id);
+      const items = await allRecords(`
+        SELECT 
+          sri.*,
+          p.short_name AS product_short_name,
+          p.image_url,
+          p.sale_price,
+          p.wholesale_price,
+          COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.product_id = sri.product_id AND ib.shop_id = ?), 0) AS warehouse_stock
+        FROM stock_request_items sri
+        LEFT JOIN products p ON p.id = sri.product_id
+        WHERE sri.request_id IN (${requestIds.map(() => '?').join(', ')})
+        ORDER BY sri.id ASC
+      `, [warehouseId, ...requestIds]);
+
+      const itemsByReq = new Map();
+      items.forEach(item => {
+        if (!itemsByReq.has(item.request_id)) itemsByReq.set(item.request_id, []);
+        itemsByReq.get(item.request_id).push(item);
+      });
+
+      requests.forEach(r => {
+        r.items = itemsByReq.get(r.id) || [];
+      });
+    }
+
+    res.json(requests);
   } catch (error) {
-    res.status(error.status || 500).json({ error: error.message || 'Unable to create stock request.' });
+    res.status(500).json({ error: error.message || 'Unable to load stock requisitions.' });
+  }
+});
+
+app.post('/api/stock-requests', authenticateToken, async (req, res) => {
+  try {
+    const shopId = req.user.role === 'superadmin' ? (req.body.shop_id || req.user.shop_id) : (req.user.shop_id || req.body.shop_id);
+    if (!shopId) return res.status(400).json({ error: 'Valid shop/branch ID is required.' });
+
+    const { items = [], notes = '', message = '' } = req.body;
+    
+    // Handle single-item legacy fallback if body has product_id directly
+    const normalizedItems = Array.isArray(items) && items.length > 0
+      ? items
+      : (req.body.product_id ? [{ product_id: req.body.product_id, requested_qty: req.body.quantity || 1, color_breakdown: req.body.color_breakdown || [] }] : []);
+
+    if (!normalizedItems.length) {
+      return res.status(400).json({ error: 'Please add at least one product to the stock requisition.' });
+    }
+
+    const year = new Date().getFullYear();
+    const countRow = await getRecord(`SELECT COUNT(*) AS count FROM stock_requests WHERE created_at >= date_trunc('year', CURRENT_DATE)`);
+    const nextSeq = (Number(countRow?.count || 0) + 1).toString().padStart(4, '0');
+    const requestNumber = `REQ-${year}-${nextSeq}`;
+
+    const totalQuantity = normalizedItems.reduce((sum, item) => sum + (Number(item.requested_qty || item.quantity) || 1), 0);
+    const totalItems = normalizedItems.length;
+
+    const result = await executeTransaction(async (tx) => {
+      const header = await tx.runQuery(`
+        INSERT INTO stock_requests (
+          request_number, shop_id, product_id, model_name, quantity, total_items, total_quantity,
+          message, notes, created_by, status, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `, [
+        requestNumber,
+        shopId,
+        normalizedItems[0]?.product_id || null,
+        normalizedItems[0]?.product_name || '',
+        totalQuantity,
+        totalItems,
+        totalQuantity,
+        message || notes || '',
+        notes || message || '',
+        req.user.id
+      ]);
+
+      const requestId = header.id;
+
+      for (const item of normalizedItems) {
+        const prodId = item.product_id;
+        let prodInfo = null;
+        if (prodId) {
+          prodInfo = await tx.getRecord(`SELECT name, short_name, brand, part_category, quality_variant, cost_price, wholesale_price FROM products WHERE id = ?`, [prodId]);
+        }
+        const prodName = prodInfo?.name || item.product_name || 'Product';
+        const brand = prodInfo?.brand || item.brand || '';
+        const quality = prodInfo?.quality_variant || item.quality_grade || '';
+        const reqQty = Math.max(1, Number(item.requested_qty || item.quantity || 1));
+        const colorBreakdown = Array.isArray(item.color_breakdown) ? JSON.stringify(item.color_breakdown) : '[]';
+        const unitCost = Number(prodInfo?.cost_price || prodInfo?.wholesale_price || item.unit_cost || 0);
+
+        await tx.runQuery(`
+          INSERT INTO stock_request_items (
+            request_id, product_id, product_name, brand, quality_grade,
+            requested_qty, approved_qty, color_breakdown, unit_cost
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+          requestId, prodId || null, prodName, brand, quality, reqQty, reqQty, colorBreakdown, unitCost
+        ]);
+      }
+
+      return { id: requestId, request_number: requestNumber };
+    });
+
+    await audit(req, 'Created stock requisition', 'stock_request', result.id, `${requestNumber} with ${totalQuantity} units`);
+    res.status(201).json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Unable to submit stock requisition.' });
+  }
+});
+
+app.put('/api/admin/stock-requests/:id/approve', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const requestId = Number(req.params.id);
+    const warehouse = await getWarehouse();
+    if (!warehouse) return res.status(400).json({ error: 'Warehouse configuration not found.' });
+
+    const result = await executeTransaction(async (tx) => {
+      const request = await tx.getRecord(`SELECT * FROM stock_requests WHERE id = ? FOR UPDATE`, [requestId]);
+      if (!request) throw new Error('Stock requisition not found.');
+      if (['approved', 'completed', 'dispatched'].includes(request.status)) {
+        throw new Error('This stock requisition has already been approved and fulfilled.');
+      }
+
+      const items = await tx.allRecords(`SELECT * FROM stock_request_items WHERE request_id = ?`, [requestId]);
+      if (!items.length) {
+        throw new Error('No items found on this requisition.');
+      }
+
+      const targetShopId = request.shop_id;
+
+      for (const item of items) {
+        const prodId = item.product_id;
+        const requestedQty = Number(item.requested_qty || 1);
+        let breakdown = [];
+        try {
+          breakdown = typeof item.color_breakdown === 'string' ? JSON.parse(item.color_breakdown) : (item.color_breakdown || []);
+        } catch {
+          breakdown = [];
+        }
+
+        // Available batches in warehouse (FIFO)
+        const whBatches = await tx.allRecords(`
+          SELECT * FROM inventory_batches 
+          WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0 
+          ORDER BY received_date ASC, id ASC
+        `, [warehouse.id, prodId]);
+
+        const totalWhAvailable = whBatches.reduce((sum, b) => sum + Number(b.quantity_remaining || 0), 0);
+        if (totalWhAvailable < requestedQty) {
+          throw new Error(`Insufficient warehouse stock for "${item.product_name}". Requested: ${requestedQty}, Available: ${totalWhAvailable}`);
+        }
+
+        // Deduct batches
+        let unitsToFulfill = requestedQty;
+        
+        // If color breakdown exists, deduct color-matching batches first
+        if (Array.isArray(breakdown) && breakdown.length > 0) {
+          for (const cb of breakdown) {
+            let colorNeeded = Number(cb.qty || 0);
+            if (colorNeeded <= 0) continue;
+
+            const matchingBatches = whBatches.filter(b => 
+              b.quantity_remaining > 0 && 
+              String(b.colour || '').trim().toLowerCase() === String(cb.color || '').trim().toLowerCase()
+            );
+
+            for (const batch of matchingBatches) {
+              if (colorNeeded <= 0 || unitsToFulfill <= 0) break;
+              const moved = Math.min(colorNeeded, Number(batch.quantity_remaining), unitsToFulfill);
+              
+              batch.quantity_remaining = Number(batch.quantity_remaining) - moved;
+              await tx.runQuery(`UPDATE inventory_batches SET quantity_remaining = ? WHERE id = ?`, [batch.quantity_remaining, batch.id]);
+
+              await tx.runQuery(`
+                INSERT INTO inventory_batches (
+                  shop_id, product_id, purchase_price, wholesale_price, official_price, retail_price,
+                  colour, quantity_received, quantity_remaining, received_date, notes, created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `, [
+                targetShopId, prodId, batch.purchase_price, batch.wholesale_price, batch.official_price, batch.retail_price,
+                batch.colour || cb.color, moved, moved, today(), `Requisition ${request.request_number || requestId} fulfillment`, req.user.id
+              ]);
+
+              colorNeeded -= moved;
+              unitsToFulfill -= moved;
+            }
+          }
+        }
+
+        // Generic FIFO deduction for remaining units
+        if (unitsToFulfill > 0) {
+          for (const batch of whBatches) {
+            if (unitsToFulfill <= 0) break;
+            if (Number(batch.quantity_remaining) <= 0) continue;
+
+            const moved = Math.min(unitsToFulfill, Number(batch.quantity_remaining));
+            batch.quantity_remaining = Number(batch.quantity_remaining) - moved;
+            await tx.runQuery(`UPDATE inventory_batches SET quantity_remaining = ? WHERE id = ?`, [batch.quantity_remaining, batch.id]);
+
+            await tx.runQuery(`
+              INSERT INTO inventory_batches (
+                shop_id, product_id, purchase_price, wholesale_price, official_price, retail_price,
+                colour, quantity_received, quantity_remaining, received_date, notes, created_by
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+              targetShopId, prodId, batch.purchase_price, batch.wholesale_price, batch.official_price, batch.retail_price,
+              batch.colour, moved, moved, today(), `Requisition ${request.request_number || requestId} fulfillment`, req.user.id
+            ]);
+
+            unitsToFulfill -= moved;
+          }
+        }
+
+        // Update approved quantity on the item
+        await tx.runQuery(`UPDATE stock_request_items SET approved_qty = ? WHERE id = ?`, [requestedQty, item.id]);
+
+        // Sync stock tables
+        await syncStockFromBatches(tx, warehouse.id, prodId);
+        await syncStockFromBatches(tx, targetShopId, prodId);
+
+        // Record stock transfer audit
+        await tx.runQuery(`
+          INSERT INTO stock_transfers (from_shop_id, to_shop_id, product_id, quantity, transfer_date, note)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `, [
+          warehouse.id, targetShopId, prodId, requestedQty, today(), `Approved requisition ${request.request_number || requestId}`
+        ]);
+      }
+
+      // Mark request as completed
+      await tx.runQuery(`
+        UPDATE stock_requests 
+        SET status = 'completed', approved_by = ?, approved_at = CURRENT_TIMESTAMP, resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [req.user.id, requestId]);
+
+      return { success: true, request_number: request.request_number };
+    });
+
+    await audit(req, 'Approved and fulfilled stock requisition', 'stock_request', requestId, `Dispatched to shop ${result.request_number}`);
+    res.json({ success: true, message: `Requisition ${result.request_number || requestId} successfully approved and stock transferred.` });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to approve stock requisition.' });
+  }
+});
+
+app.put('/api/admin/stock-requests/:id/reject', authenticateToken, requireSuperAdmin, async (req, res) => {
+  try {
+    const requestId = Number(req.params.id);
+    const { rejection_reason = '' } = req.body;
+
+    const request = await getRecord(`SELECT * FROM stock_requests WHERE id = ?`, [requestId]);
+    if (!request) return res.status(404).json({ error: 'Requisition not found.' });
+    if (['approved', 'completed', 'dispatched'].includes(request.status)) {
+      return res.status(400).json({ error: 'Cannot reject an already fulfilled requisition.' });
+    }
+
+    await runQuery(`
+      UPDATE stock_requests 
+      SET status = 'rejected', rejection_reason = ?, resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `, [rejection_reason || 'Rejected by Warehouse Admin', requestId]);
+
+    await audit(req, 'Rejected stock requisition', 'stock_request', requestId, rejection_reason);
+    res.json({ success: true, message: 'Stock requisition marked as rejected.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Unable to reject stock requisition.' });
   }
 });
 
 app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
-  const allowed = new Set(['open', 'sent', 'closed', 'cancelled']);
+  const allowed = new Set(['pending', 'open', 'sent', 'approved', 'completed', 'closed', 'cancelled', 'rejected']);
   const status = String(req.body.status || '').toLowerCase();
   if (!allowed.has(status)) return res.status(400).json({ error: 'Choose a valid request status.' });
   await runQuery(
-    'UPDATE stock_requests SET status = ?, resolved_at = CASE WHEN ? IN ("closed", "cancelled") THEN CURRENT_TIMESTAMP ELSE resolved_at END WHERE id = ?',
+    'UPDATE stock_requests SET status = ?, resolved_at = CASE WHEN ? IN ("completed", "closed", "cancelled", "rejected") THEN CURRENT_TIMESTAMP ELSE resolved_at END WHERE id = ?',
     [status, status, req.params.id]
   );
   await audit(req, 'Updated stock request', 'stock_request', req.params.id, status);
