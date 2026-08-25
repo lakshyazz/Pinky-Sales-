@@ -39,7 +39,9 @@ import {
   ReceiptText,
   Send,
   Check,
-  ChevronDown
+  ChevronDown,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 // Animated Number Counter Helper
@@ -350,6 +352,8 @@ function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
   const mostSold = mfgStats.mostSold || [];
   const lowStock = mfgStats.lowStock || [];
 
+  const [showValuation, setShowValuation] = useState(false);
+
   const totalMfgValuation = stockValuation.reduce((sum, item) => sum + Number(item.inventory_value || 0), 0);
   const totalMfgUnits = stockValuation.reduce((sum, item) => sum + Number(item.stock_qty || 0), 0);
 
@@ -374,6 +378,15 @@ function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setShowValuation(!showValuation)}
+            className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title={showValuation ? 'Hide valuation amounts' : 'Show valuation amounts'}
+          >
+            {showValuation ? <EyeOff className="w-3.5 h-3.5 text-slate-500" /> : <Eye className="w-3.5 h-3.5 text-teal-600" />}
+            <span>{showValuation ? 'Hide Valuation' : 'Show Valuation'}</span>
+          </button>
           <span className="px-3 py-1.5 rounded-xl bg-teal-50 dark:bg-teal-950/50 text-teal-700 dark:text-teal-300 border border-teal-200/60 dark:border-teal-800/60 text-xs font-bold flex items-center gap-1.5">
             <Flame className="w-3.5 h-3.5 text-teal-600" />
             Top Brand: {mostSold[0]?.name || 'AS CARE'}
@@ -383,10 +396,23 @@ function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
 
       {/* Top 4 KPI Highlight Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-teal-50/30 dark:from-slate-800/40 dark:to-teal-950/20 border border-slate-200/60 dark:border-slate-700/60">
-          <span className="text-[10px] font-black uppercase tracking-wider text-slate-400 block mb-1">Total Stock Valuation</span>
-          <strong className="text-lg font-black text-slate-900 dark:text-white block">{currency(totalMfgValuation)}</strong>
-          <small className="text-[11px] text-teal-600 dark:text-teal-400 font-bold block mt-1">FIFO Cost Basis</small>
+        <div 
+          className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-teal-50/30 dark:from-slate-800/40 dark:to-teal-950/20 border border-slate-200/60 dark:border-slate-700/60 cursor-pointer hover:border-teal-300 dark:hover:border-teal-700 transition-all select-none group"
+          onClick={() => setShowValuation(!showValuation)}
+          title="Click to toggle valuation visibility"
+        >
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Total Stock Valuation</span>
+            <span className="text-slate-400 group-hover:text-teal-600 transition-colors">
+              {showValuation ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </span>
+          </div>
+          <strong className="text-lg font-black text-slate-900 dark:text-white block tracking-tight">
+            {showValuation ? currency(totalMfgValuation) : '••••••••'}
+          </strong>
+          <small className="text-[11px] text-teal-600 dark:text-teal-400 font-bold block mt-1">
+            {showValuation ? 'FIFO Cost Basis' : 'Click to reveal'}
+          </small>
         </div>
 
         <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/30 dark:from-slate-800/40 dark:to-indigo-950/20 border border-slate-200/60 dark:border-slate-700/60">
@@ -427,7 +453,9 @@ function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
                       <span className="w-2 h-2 rounded-full" style={{ backgroundColor: barColor }}></span>
                       {item.name}
                     </span>
-                    <span className="text-slate-900 dark:text-white font-black">{currency(item.inventory_value)} ({pct}%)</span>
+                    <span className="text-slate-900 dark:text-white font-black">
+                      {showValuation ? currency(item.inventory_value) : '••••••••'} ({pct}%)
+                    </span>
                   </div>
                   <div className="w-full h-2.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                     <motion.div
