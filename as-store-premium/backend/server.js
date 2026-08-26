@@ -4300,7 +4300,6 @@ app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaf
 
 app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
-  const pagination = parsePagination(req.query);
   const pendingByShop = await allRecords(`
     SELECT sh.name AS shop_name, COALESCE(SUM(sa.pending_amount), 0) AS pending
     FROM shops sh
@@ -4309,50 +4308,10 @@ app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) =>
     GROUP BY sh.id
     ORDER BY pending DESC
   `, shopId ? [shopId] : []);
-  const availabilityParams = [];
-  const availabilityWhere = ['st.quantity > 0'];
-  if (shopId) {
-    availabilityWhere.push('st.shop_id = ?');
-    availabilityParams.push(shopId);
-  }
-  appendSearchFilter(availabilityWhere, availabilityParams, req.query.search, [
-    'p.name',
-    "COALESCE(p.short_name, '')",
-    "COALESCE(p.full_model_list, '')",
-    "COALESCE(p.brand, '')",
-    "COALESCE(p.category, '')",
-    "COALESCE(p.model, '')",
-    "COALESCE(p.description, '')",
-    "COALESCE(sh.name, '')",
-  ]);
-  appendExactFilter(availabilityWhere, availabilityParams, req.query.brand, 'p.brand = ?');
-  appendExactFilter(availabilityWhere, availabilityParams, req.query.category, 'LOWER(TRIM(p.category)) = LOWER(TRIM(?))');
-
-  const availabilityBaseSql = `
-    FROM stock st
-    JOIN products p ON p.id = st.product_id
-    JOIN shops sh ON sh.id = st.shop_id
-    LEFT JOIN brands b ON b.id = p.company_brand_id
-    LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
-    WHERE ${availabilityWhere.join(' AND ')}
-  `;
-  const availability = await runPaginatedList({
-    dataSql: `
-    SELECT p.name, p.short_name, p.full_model_list, p.brand, sh.name AS shop_name, st.quantity,
-      p.company_brand_id, b.name AS company_brand_name,
-      p.manufacturing_brand_id, mb.name AS manufacturing_brand_name
-    ${availabilityBaseSql}
-    ORDER BY p.name, sh.name
-  `,
-    countSql: `SELECT COUNT(*) AS total ${availabilityBaseSql}`,
-    params: availabilityParams,
-    pagination,
-    totalKey: 'totalAvailability',
-  });
   const auditRows = isShopStaffRole(req.user.role)
     ? await allRecords("SELECT * FROM audit_logs WHERE actor_id = ? AND action = 'Created sale' ORDER BY id DESC LIMIT 25", [req.user.id])
     : await allRecords('SELECT * FROM audit_logs ORDER BY id DESC LIMIT 25');
-  res.json({ pendingByShop, availability, auditRows });
+  res.json({ pendingByShop, auditRows });
 });
 
 app.delete('/api/reports/audit', authenticateToken, requireSuperAdmin, async (req, res) => {

@@ -455,7 +455,7 @@ const pageMetaById = {
   reports: {
     group: 'Reports',
     title: 'Reports',
-    description: 'Export inventory, availability, pending, and audit reports.',
+    description: 'Shop pending balances and audit logs.',
   },
   'low-stock': {
     group: 'Inventory',
@@ -1007,7 +1007,6 @@ function App() {
     }
   };
   const [pendingFilters, setPendingFilters] = useState({ search: '', date: '' });
-  const [reportsFilters, setReportsFilters] = useState({ search: '', brand: '', category: '' });
   const [globalSearch, setGlobalSearch] = useState('');
   const [globalSearchFocused, setGlobalSearchFocused] = useState(false);
   const [searchHydrated, setSearchHydrated] = useState(false);
@@ -1025,7 +1024,6 @@ function App() {
   const deferredCustomerFilters = useDeferredValue(customerFilters);
   const deferredSalesFilters = useDeferredValue(salesFilters);
   const deferredPendingFilters = useDeferredValue(pendingFilters);
-  const deferredReportsFilters = useDeferredValue(reportsFilters);
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
   const [productPager, setProductPager] = useState(() => createPager(5000));
@@ -1033,7 +1031,6 @@ function App() {
   const [customerPager, setCustomerPager] = useState(() => createPager(5000));
   const [salesPager, setSalesPager] = useState(() => createPager(5000));
   const [pendingPager, setPendingPager] = useState(() => createPager(5000));
-  const [reportsPager, setReportsPager] = useState(() => createPager(5000));
   const [productPageLoading, setProductPageLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState({
     brands: false,
@@ -1243,7 +1240,6 @@ function App() {
       if (prev === 'customers') setCustomerFilters((f) => ({ ...f, search: '' }));
       if (prev === 'sales') setSalesFilters((f) => ({ ...f, search: '' }));
       if (prev === 'payments') setPendingFilters((f) => ({ ...f, search: '' }));
-      if (prev === 'reports') setReportsFilters((f) => ({ ...f, search: '' }));
     }
     prevActiveRef.current = active;
   }, [active]);
@@ -1567,27 +1563,20 @@ function App() {
     }
   };
 
-  const loadReportsPage = async ({ page = reportsPager.page, currentShop = shopId, filters = reportsFilters } = {}) => {
+  const loadReportsPage = async ({ currentShop = shopId } = {}) => {
     if (!token || role === 'customer') return;
     setPageLoading((prev) => ({ ...prev, reports: true }));
     try {
       const params = scopedParams(currentShop);
-      params.set('page', String(page));
-      params.set('limit', String(reportsPager.limit));
-      if (filters.search.trim()) params.set('search', filters.search.trim());
-      if (filters.brand) params.set('brand', filters.brand);
-      if (filters.category) params.set('category', filters.category);
       const response = await authedFetch(`/reports?${params.toString()}`);
-      const availabilityResponse = response?.availability || {};
-      const availabilityRows = getPaginatedRows(availabilityResponse);
       setData((prev) => ({
         ...prev,
         reports: {
           ...response,
-          availability: availabilityRows,
+          pendingByShop: response?.pendingByShop || [],
+          auditRows: response?.auditRows || [],
         },
       }));
-      updatePagerFromResponse(setReportsPager, availabilityResponse, page, availabilityRows, ['totalAvailability']);
     } catch (error) {
       handleLoadError(error, 'Unable to load reports right now.');
     } finally {
@@ -1772,7 +1761,7 @@ function App() {
       }
       if (tab === 'requests') set('requests', await authedFetch(`/stock-requests${scoped}`));
       if (tab === 'payments') await loadPendingPage({ page: pendingPager.page, currentShop, filters: pendingFilters });
-      if (tab === 'reports') await loadReportsPage({ page: reportsPager.page, currentShop, filters: reportsFilters });
+      if (tab === 'reports') await loadReportsPage({ currentShop });
       if (tab === 'catalog') set('catalog', await api(`/catalog?${new URLSearchParams(catalogFilters).toString()}`));
     } catch (error) {
       handleLoadError(error, 'Unable to refresh this page right now.');
@@ -1941,11 +1930,6 @@ function App() {
   }, [deferredPendingFilters]);
 
   useEffect(() => {
-    if (active !== 'reports') return;
-    setReportsPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
-  }, [deferredReportsFilters]);
-
-  useEffect(() => {
     if (!session || !authReady || role === 'customer' || active !== 'stock') return;
     loadStockPage({
       stockPage: stockPager.page,
@@ -1979,8 +1963,8 @@ function App() {
 
   useEffect(() => {
     if (!session || !authReady || role === 'customer' || active !== 'reports') return;
-    loadReportsPage({ page: reportsPager.page, filters: deferredReportsFilters });
-  }, [active, selectedShop, deferredReportsFilters, reportsPager.page, reportsPager.limit, session?.token, authReady]);
+    loadReportsPage();
+  }, [active, selectedShop, session?.token, authReady]);
 
   // Ctrl+K / Cmd+K Global Search shortcut
   useEffect(() => {
@@ -5390,86 +5374,40 @@ function App() {
           {active === 'reports' && data.reports && (
             <PageWrapper activeKey="reports" key="reports">
               <section className="space">
-                <div className="catalog-toolbar panel reports-toolbar">
-                  <div className="searchbox">
-                    <Search size={18} />
-                    <input
-                      placeholder="Search available model, brand, category, or shop"
-                      value={reportsFilters.search}
-                      onChange={(event) => setReportsFilters({ ...reportsFilters, search: event.target.value })}
-                    />
-                  </div>
-                  <select value={reportsFilters.brand} onChange={(event) => setReportsFilters({ ...reportsFilters, brand: event.target.value })}>
-                    <option value="">All brands</option>
-                    {data.reference.brands.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
-                  </select>
-                  <select value={reportsFilters.category} onChange={(event) => setReportsFilters({ ...reportsFilters, category: event.target.value })}>
-                    <option value="">All categories</option>
-                    {data.reference.categories.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
-                  </select>
-                  {pageLoading.reports && <span className="status-badge due">Loading</span>}
-                  <span className="status-badge stock-ok">{reportsPager.loaded ? reportsPager.total.toLocaleString('en-IN') : data.reports.availability.length} available</span>
-                </div>
-                <section className="panel reports-panel">
-                  <div className="reports-panel-head">
-                    <h2>Availability report</h2>
-                    <span>{reportsPager.loaded ? reportsPager.total.toLocaleString('en-IN') : data.reports.availability.length} records</span>
-                  </div>
-                  <div className="report-table availability-report-table">
-                    {data.reports.availability.length ? (
-                      <div className="report-row report-head">
-                        <span>Product</span>
-                        <span>Stock</span>
-                      </div>
-                    ) : null}
-                    {data.reports.availability.length ? data.reports.availability.map((row, index) => (
-                      <div className="report-row" key={`${row.shop_name}-${row.short_name || row.name}-${index}`}>
-                        <span><b>{productName(row)}</b><small>{row.brand || 'No brand'} / {row.shop_name}</small></span>
-                        <strong>{row.quantity} pcs</strong>
-                      </div>
-                    )) : <Empty title="No availability records found" />}
-                  </div>
-                  <Pagination
-                    meta={reportsPager}
-                    loading={pageLoading.reports}
-                    onPageChange={(page) => setReportsPager((prev) => ({ ...prev, page }))}
-                    onPageSizeChange={(limit) => setReportsPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
-                  />
-                </section>
                 <section className="two-col">
-                <section className="panel reports-panel">
-                  <h2>Pending by shop</h2>
-                  <div className="report-table pending-report-table">
-                    {data.reports.pendingByShop.length ? data.reports.pendingByShop.map((row) => (
-                      <div className="report-row" key={row.shop_name}>
-                        <span>{row.shop_name}</span>
-                        <strong>{currency(row.pending)}</strong>
-                      </div>
-                    )) : <Empty title="No pending payments by shop" />}
-                  </div>
-                </section>
-                <section className="panel audit-history-panel reports-panel">
-                  <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
-                    <h2 className="!border-0 !pb-0 !m-0">Audit history</h2>
-                    {role === 'superadmin' && (
-                      <button 
-                        className="soft text-xs font-bold text-rose-600 hover:text-rose-800 border-rose-200 hover:border-rose-300 !px-3 !py-1.5 !min-h-[30px]" 
-                        type="button" 
-                        onClick={clearAuditLogs}
-                      >
-                        Clear Logs
-                      </button>
-                    )}
-                  </div>
-                  <div className="report-table audit-report-table">
-                    {data.reports.auditRows.length ? data.reports.auditRows.map((row) => (
-                      <div className="report-row audit-row" key={row.id}>
-                        <span><b>{row.action}</b><small>{row.actor_name} · {row.created_at}</small></span>
-                        <span className="audit-details">{row.details}</span>
-                      </div>
-                    )) : <Empty title="No audit logs available" />}
-                  </div>
-                </section>
+                  <section className="panel reports-panel">
+                    <h2>Pending by shop</h2>
+                    <div className="report-table pending-report-table">
+                      {data.reports.pendingByShop?.length ? data.reports.pendingByShop.map((row) => (
+                        <div className="report-row" key={row.shop_name}>
+                          <span>{row.shop_name}</span>
+                          <strong>{currency(row.pending)}</strong>
+                        </div>
+                      )) : <Empty title="No pending payments by shop" />}
+                    </div>
+                  </section>
+                  <section className="panel audit-history-panel reports-panel">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                      <h2 className="!border-0 !pb-0 !m-0">Audit history</h2>
+                      {role === 'superadmin' && (
+                        <button 
+                          className="soft text-xs font-bold text-rose-600 hover:text-rose-800 border-rose-200 hover:border-rose-300 !px-3 !py-1.5 !min-h-[30px]" 
+                          type="button" 
+                          onClick={clearAuditLogs}
+                        >
+                          Clear Logs
+                        </button>
+                      )}
+                    </div>
+                    <div className="report-table audit-report-table">
+                      {data.reports.auditRows?.length ? data.reports.auditRows.map((row) => (
+                        <div className="report-row audit-row" key={row.id}>
+                          <span><b>{row.action}</b><small>{row.actor_name} · {row.created_at}</small></span>
+                          <span className="audit-details">{row.details}</span>
+                        </div>
+                      )) : <Empty title="No audit logs available" />}
+                    </div>
+                  </section>
                 </section>
               </section>
             </PageWrapper>
