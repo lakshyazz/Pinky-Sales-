@@ -264,6 +264,22 @@ export const initDatabase = async () => {
       UPDATE products SET short_name = LEFT(short_name, 57) || '...' WHERE LENGTH(short_name) > 60;
       CREATE INDEX IF NOT EXISTS products_short_name_idx ON products (short_name);
       CREATE INDEX IF NOT EXISTS idx_products_shop_scope ON products (COALESCE(shop_id, 0), is_active);
+
+      -- Ensure Invoice Date, Payment Terms, and Extra Expenses columns exist
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_date DATE DEFAULT CURRENT_DATE;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER DEFAULT 15;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS products_total NUMERIC(12, 2) DEFAULT 0.00;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS extra_expenses_total NUMERIC(12, 2) DEFAULT 0.00;
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS default_payment_terms_days INTEGER DEFAULT 15;
+      CREATE TABLE IF NOT EXISTS sale_expenses (
+        id SERIAL PRIMARY KEY,
+        sale_id INTEGER REFERENCES sales(id) ON DELETE CASCADE,
+        expense_type VARCHAR(50) NOT NULL DEFAULT 'custom',
+        expense_name VARCHAR(255) NOT NULL,
+        amount NUMERIC(12, 2) NOT NULL DEFAULT 0.00,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_sale_expenses_sale_id ON sale_expenses(sale_id);
     `);
   } catch (ddlErr) {
     console.warn('[Database] Non-fatal init DDL notice:', ddlErr.message);

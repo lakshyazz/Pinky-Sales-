@@ -102,11 +102,20 @@ app.use(async (req, _res, next) => {
   }
 });
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
   const date = new Date();
   date.setDate(date.getDate() - (count - index - 1));
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 });
 const money = (value) => Number(value || 0);
 const productDisplayName = (row) => row.short_name || row.name;
@@ -3064,6 +3073,8 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   appendSearchFilter(where, params, req.query.search, [
     "COALESCE(c.name, '')",
     "COALESCE(c.mobile, '')",
+    "sa.id::text",
+    "'INV-' || LPAD(sa.id::text, 6, '0')",
     'p.name',
     "COALESCE(p.short_name, '')",
     "COALESCE(p.full_model_list, '')",
@@ -3075,6 +3086,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     "COALESCE(sa.price_type, '')",
     "COALESCE(sa.payment_mode, '')",
     "COALESCE(sa.notes, '')",
+    "COALESCE(sa.colour, '')",
   ]);
   appendExactFilter(where, params, req.query.priceType, 'sa.price_type = ?');
   appendExactFilter(where, params, req.query.paymentMode, 'sa.payment_mode = ?');
@@ -3084,8 +3096,8 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     params.push(Number(req.query.customerId));
   }
   if (hasQueryValue(req.query.productId)) {
-    where.push('sa.product_id = ?');
-    params.push(Number(req.query.productId));
+    where.push('(sa.product_id = ? OR EXISTS (SELECT 1 FROM sale_items si_chk WHERE si_chk.sale_id = sa.id AND si_chk.product_id = ?))');
+    params.push(Number(req.query.productId), Number(req.query.productId));
   }
   if (hasQueryValue(req.query.date)) {
     where.push('sa.sale_date = ?');
@@ -3099,16 +3111,48 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   }
   const baseSql = `
     FROM sales sa
-    JOIN products p ON p.id = sa.product_id
     JOIN shops sh ON sh.id = sa.shop_id
+    LEFT JOIN products p ON p.id = sa.product_id
     LEFT JOIN customers c ON c.id = sa.customer_id
     LEFT JOIN brands b ON b.id = p.company_brand_id
     LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
+    LEFT JOIN (
+      SELECT si.sale_id, json_agg(json_build_object(
+        'id', si.id,
+        'product_id', si.product_id,
+        'quantity', si.quantity,
+        'unit_price', si.unit_price,
+        'total_price', si.total_price,
+        'price_type', si.price_type,
+        'colour', si.colour,
+        'name', p_item.name,
+        'product_name', p_item.name,
+        'short_name', p_item.short_name,
+        'product_short_name', p_item.short_name,
+        'brand', p_item.brand,
+        'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
+        'quality_variant', p_item.quality_variant,
+        'model', p_item.model,
+        'full_model_list', p_item.full_model_list,
+        'description', p_item.description
+      ) ORDER BY si.id ASC) AS items
+      FROM sale_items si
+      JOIN products p_item ON p_item.id = si.product_id
+      GROUP BY si.sale_id
+    ) si_agg ON si_agg.sale_id = sa.id
+    LEFT JOIN (
+      SELECT sale_id, json_agg(json_build_object('id', id, 'expense_type', expense_type, 'expense_name', expense_name, 'amount', amount)) AS expenses
+      FROM sale_expenses
+      GROUP BY sale_id
+    ) se ON se.sale_id = sa.id
     WHERE ${where.join(' AND ')}
   `;
   const rows = await runPaginatedList({
     dataSql: `
-    SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
+    SELECT sa.*, 
+      COALESCE(si_agg.items, '[]'::json) AS items,
+      COALESCE(se.expenses, '[]'::json) AS expenses,
+      p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
       p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
@@ -3121,6 +3165,140 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     totalKey: 'totalSales',
   });
   res.json(rows);
+});
+
+app.get(['/api/sales/customers', '/sales/customers'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const requestedShopId = scopeShopId(req);
+    const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
+    const pagination = parsePagination(req.query);
+    const params = [];
+    const where = ['1 = 1'];
+    if (shopId) {
+      where.push('sa.shop_id = ?');
+      params.push(shopId);
+    }
+    appendSearchFilter(where, params, req.query.search, [
+      "COALESCE(c.name, '')",
+      "COALESCE(c.mobile, '')",
+      "COALESCE(c.address, '')",
+      "COALESCE(sh.name, '')",
+    ]);
+    if (hasQueryValue(req.query.customerId)) {
+      where.push('sa.customer_id = ?');
+      params.push(Number(req.query.customerId));
+    }
+    if (hasQueryValue(req.query.date)) {
+      where.push('sa.sale_date = ?');
+      params.push(String(req.query.date).slice(0, 10));
+    } else {
+      appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'sa.sale_date');
+    }
+    if (isShopStaffRole(req.user.role)) {
+      where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
+      params.push(req.user.id);
+    }
+    
+    const baseSql = `
+      FROM sales sa
+      LEFT JOIN customers c ON c.id = sa.customer_id
+      JOIN shops sh ON sh.id = sa.shop_id
+      WHERE ${where.join(' AND ')}
+      GROUP BY c.id, c.name, c.mobile, c.address, sh.id, sh.name
+    `;
+
+    const rows = await runPaginatedList({
+      dataSql: `
+        SELECT 
+          c.id AS customer_id,
+          COALESCE(c.name, 'Walk-in Customer') AS customer_name,
+          c.mobile AS customer_mobile,
+          c.address AS customer_address,
+          sh.id AS shop_id,
+          sh.name AS shop_name,
+          COUNT(DISTINCT sa.id) AS total_invoices,
+          SUM(sa.total_amount) AS total_purchase_amount,
+          SUM(sa.paid_amount) AS total_paid,
+          SUM(sa.pending_amount) AS total_pending,
+          MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) AS last_purchase_date
+        ${baseSql}
+        ORDER BY MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) DESC, c.id DESC
+      `,
+      countSql: `SELECT COUNT(*) AS total FROM (SELECT c.id ${baseSql}) counted`,
+      params,
+      pagination,
+      totalKey: 'totalCustomerGroups',
+    });
+    res.json(rows);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to load customer sales groups.' });
+  }
+});
+
+app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const customerId = Number(req.params.customerId);
+    if (!Number.isInteger(customerId) || customerId <= 0) {
+      return res.status(400).json({ error: 'Valid customer ID is required.' });
+    }
+    const requestedShopId = scopeShopId(req);
+    const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
+    const params = [customerId];
+    let whereShop = '';
+    if (shopId) {
+      whereShop = ' AND sa.shop_id = ?';
+      params.push(shopId);
+    }
+
+    const customer = await getRecord('SELECT * FROM customers WHERE id = ?', [customerId]);
+    if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+    const invoices = await allRecords(`
+      SELECT sa.*, 
+        COALESCE(si_agg.items, '[]'::json) AS items,
+        COALESCE(se.expenses, '[]'::json) AS expenses,
+        p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
+        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+      FROM sales sa
+      JOIN shops sh ON sh.id = sa.shop_id
+      LEFT JOIN products p ON p.id = sa.product_id
+      LEFT JOIN (
+        SELECT si.sale_id, json_agg(json_build_object(
+          'id', si.id,
+          'product_id', si.product_id,
+          'quantity', si.quantity,
+          'unit_price', si.unit_price,
+          'total_price', si.total_price,
+          'price_type', si.price_type,
+          'colour', si.colour,
+          'name', p_item.name,
+          'product_name', p_item.name,
+          'short_name', p_item.short_name,
+          'product_short_name', p_item.short_name,
+          'brand', p_item.brand,
+          'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
+          'quality_variant', p_item.quality_variant,
+          'model', p_item.model,
+          'full_model_list', p_item.full_model_list,
+          'description', p_item.description
+        ) ORDER BY si.id ASC) AS items
+        FROM sale_items si
+        JOIN products p_item ON p_item.id = si.product_id
+        GROUP BY si.sale_id
+      ) si_agg ON si_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object('id', id, 'expense_type', expense_type, 'expense_name', expense_name, 'amount', amount)) AS expenses
+        FROM sale_expenses
+        GROUP BY sale_id
+      ) se ON se.sale_id = sa.id
+      WHERE sa.customer_id = ? ${whereShop}
+      ORDER BY sa.id DESC
+    `, params);
+
+    res.json({ customer, invoices });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to load customer invoices.' });
+  }
 });
 
 app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req, res) => {
@@ -3145,7 +3323,10 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
 
     const params = [shopId, customer.mobile];
     let query = `
-      SELECT sa.*, p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
+      SELECT sa.*, 
+        COALESCE(si_agg.items, '[]'::json) AS items,
+        COALESCE(se.expenses, '[]'::json) AS expenses,
+        p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
         c.name AS customer_name, c.mobile, c.address,
         sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
         p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
@@ -3155,6 +3336,35 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
       JOIN shops sh ON sh.id = sa.shop_id
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
+      LEFT JOIN (
+        SELECT si.sale_id, json_agg(json_build_object(
+          'id', si.id,
+          'product_id', si.product_id,
+          'quantity', si.quantity,
+          'unit_price', si.unit_price,
+          'total_price', si.total_price,
+          'price_type', si.price_type,
+          'colour', si.colour,
+          'name', p_item.name,
+          'product_name', p_item.name,
+          'short_name', p_item.short_name,
+          'product_short_name', p_item.short_name,
+          'brand', p_item.brand,
+          'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
+          'quality_variant', p_item.quality_variant,
+          'model', p_item.model,
+          'full_model_list', p_item.full_model_list,
+          'description', p_item.description
+        ) ORDER BY si.id ASC) AS items
+        FROM sale_items si
+        JOIN products p_item ON p_item.id = si.product_id
+        GROUP BY si.sale_id
+      ) si_agg ON si_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object('id', id, 'expense_type', expense_type, 'expense_name', expense_name, 'amount', amount)) AS expenses
+        FROM sale_expenses
+        GROUP BY sale_id
+      ) se ON se.sale_id = sa.id
       WHERE sa.shop_id = ? AND c.mobile = ?
     `;
     if (isShopStaffRole(req.user.role)) {
@@ -3196,13 +3406,53 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
 app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { customer_id, paid_amount, due_date, notes, payment_mode = 'cash' } = req.body;
+    const { customer_id, paid_amount, notes, payment_mode = 'cash' } = req.body;
     const items = Array.isArray(req.body.items) && req.body.items.length
       ? req.body.items
       : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, selling_price: req.body.selling_price || req.body.unit_price, price_type: req.body.price_type || 'retail' }];
-    if (!customer_id || items.some((item) => !item.product_id)) {
-      return res.status(400).json({ error: 'Customer and products are required.' });
+    if (!customer_id) {
+      return res.status(400).json({ error: 'Please select a customer.' });
     }
+    if (items.some((item) => !item.product_id)) {
+      return res.status(400).json({ error: 'Please select a product for all sale items.' });
+    }
+
+    // 1. Resolve and validate Invoice Date, Terms Days, and independently calculate Due Date
+    const invoiceDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.invoice_date || ''))
+      ? String(req.body.invoice_date)
+      : today();
+    const paymentTermsDays = Number.isInteger(Number(req.body.payment_terms_days)) && Number(req.body.payment_terms_days) >= 0
+      ? Number(req.body.payment_terms_days)
+      : 15;
+
+    const invoiceDateObj = new Date(invoiceDateStr + 'T00:00:00');
+    const validInvoiceDate = isNaN(invoiceDateObj.getTime()) ? new Date() : invoiceDateObj;
+    const dueDateObj = new Date(validInvoiceDate);
+    dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
+    const dueY = dueDateObj.getFullYear();
+    const dueM = String(dueDateObj.getMonth() + 1).padStart(2, '0');
+    const dueD = String(dueDateObj.getDate()).padStart(2, '0');
+    const calculatedDueDate = `${dueY}-${dueM}-${dueD}`;
+
+    // 2. Validate Extra Expenses
+    const rawExpenses = Array.isArray(req.body.expenses) ? req.body.expenses : [];
+    const validExpenses = [];
+    for (const exp of rawExpenses) {
+      if (!exp) continue;
+      const amt = Number(exp.amount || 0);
+      if (isNaN(amt) || amt < 0) {
+        return res.status(400).json({ error: 'Expense amount cannot be negative.' });
+      }
+      const expName = String(exp.expense_name || exp.description || '').trim();
+      if (amt > 0 && expName) {
+        validExpenses.push({
+          expense_type: String(exp.expense_type || 'custom').trim().slice(0, 50),
+          expense_name: expName.slice(0, 255),
+          amount: money(amt),
+        });
+      }
+    }
+    const extraExpensesTotal = validExpenses.reduce((sum, exp) => sum + exp.amount, 0);
 
     const result = await runTransaction(async (tx) => {
       const preparedItems = [];
@@ -3214,7 +3464,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           error.status = 400;
           throw error;
         }
-        const product = await tx.getRecord('SELECT short_name, name, sale_price, wholesale_price, manufacturing_brand_id FROM products WHERE id = ?', [item.product_id]);
+        const product = await tx.getRecord('SELECT id, short_name, name, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
         let unitPrice = 0;
         if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
           unitPrice = money(item.selling_price);
@@ -3224,10 +3474,40 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           unitPrice = money(item.price_type === 'wholesale' ? product?.wholesale_price : product?.sale_price);
         }
         if (!product || unitPrice <= 0) {
-          const error = new Error(`Selling price must be greater than 0 for ${product?.short_name || product?.name || 'this product'}.`);
+          const error = new Error(`Selling price must be greater than 0 for "${product?.short_name || product?.name || 'this product'}".`);
           error.status = 400;
           throw error;
         }
+
+        // Validate selected colour(s) strictly against Product Master available colours
+        const rawColours = product?.available_colours || product?.colours;
+        let productColours = [];
+        if (Array.isArray(rawColours)) {
+          productColours = rawColours.map(c => String(c).trim()).filter(Boolean);
+        } else if (typeof rawColours === 'string' && rawColours.trim()) {
+          try {
+            const parsed = JSON.parse(rawColours);
+            if (Array.isArray(parsed)) productColours = parsed.map(c => String(c).trim()).filter(Boolean);
+            else productColours = rawColours.split(',').map(c => c.trim()).filter(Boolean);
+          } catch {
+            productColours = rawColours.split(',').map(c => c.trim()).filter(Boolean);
+          }
+        }
+
+        const colorBreakdown = Array.isArray(item.color_breakdown) 
+          ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
+          : [];
+
+        if (productColours.length > 0 && colorBreakdown.length > 0) {
+          for (const cb of colorBreakdown) {
+            if (!productColours.some(pc => pc.toLowerCase() === String(cb.color).trim().toLowerCase())) {
+              const error = new Error(`Invalid colour "${cb.color}" selected for "${product.short_name || product.name}". Available colours: ${productColours.join(', ')}`);
+              error.status = 400;
+              throw error;
+            }
+          }
+        }
+
         const batches = await tx.allRecords(
           `SELECT id, purchase_price, quantity_remaining, colour FROM inventory_batches ib
            WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0
@@ -3241,14 +3521,11 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         })).filter((batch) => batch.quantity_remaining > 0);
         const available = availableBatches.reduce((sum, batch) => sum + batch.quantity_remaining, 0);
         if (available < saleQuantity) {
-          const error = new Error(`Not enough stock for ${product.short_name || product.name}.`);
+          const prodName = product.short_name || product.name || 'Selected product';
+          const error = new Error(`Not enough stock for "${prodName}" in this workspace. (Available: ${available}, Requested: ${saleQuantity})`);
           error.status = 400;
           throw error;
         }
-
-        const colorBreakdown = Array.isArray(item.color_breakdown) 
-          ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
-          : [];
 
         let toReserve = saleQuantity;
         const reservedBatches = [];
@@ -3281,10 +3558,11 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           batch.quantity_remaining -= reserved;
           toReserve -= reserved;
         }
-        preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches, unitPrice, product, colorBreakdown });
+        preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches, unitPrice, product, colorBreakdown, productColours });
       }
 
-      const originalTotal = preparedItems.reduce((sum, item) => sum + item.saleTotal, 0);
+      const productsTotal = preparedItems.reduce((sum, item) => sum + item.saleTotal, 0);
+      const originalTotal = money(productsTotal + extraExpensesTotal);
       const requestedFinalTotal = req.body.final_total_amount !== undefined && req.body.final_total_amount !== null && req.body.final_total_amount !== '' && !isNaN(Number(req.body.final_total_amount))
         ? money(req.body.final_total_amount)
         : (req.body.total_amount !== undefined && !isNaN(Number(req.body.total_amount)) ? money(req.body.total_amount) : originalTotal);
@@ -3293,68 +3571,93 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       const discountAmount = Math.max(money(originalTotal - finalTotalAmount), 0);
       const discountPercentage = originalTotal > 0 ? Number(((discountAmount / originalTotal) * 100).toFixed(2)) : 0;
 
-      if (money(paid_amount) > finalTotalAmount) {
+      const numPaid = money(paid_amount);
+      if (numPaid < 0) {
+        const error = new Error('Paid amount cannot be negative.');
+        error.status = 400;
+        throw error;
+      }
+      if (numPaid > finalTotalAmount) {
         const error = new Error('Paid amount cannot exceed the final bill total.');
         error.status = 400;
         throw error;
       }
 
-      // Proportionally distribute finalTotalAmount across prepared items
-      let allocatedTotal = 0;
-      for (let i = 0; i < preparedItems.length; i++) {
-        const item = preparedItems[i];
-        let itemFinal;
-        if (i === preparedItems.length - 1) {
-          itemFinal = Math.max(money(finalTotalAmount - allocatedTotal), 0);
-        } else {
-          itemFinal = originalTotal > 0 ? money((item.saleTotal / originalTotal) * finalTotalAmount) : 0;
-          allocatedTotal += itemFinal;
-        }
-        item.finalItemTotal = itemFinal;
-        item.itemOriginalTotal = item.saleTotal;
-        item.itemDiscountAmount = Math.max(item.saleTotal - itemFinal, 0);
-      }
+      // Prepare colours summary
+      const primaryProduct = preparedItems[0];
+      const totalQty = preparedItems.reduce((s, it) => s + Number(it.saleQuantity || 0), 0);
+      const colourSummaries = preparedItems.map((it) => {
+        if (it.colorBreakdown && it.colorBreakdown.length === 1) return it.colorBreakdown[0].color;
+        if (it.colorBreakdown && it.colorBreakdown.length > 1) return it.colorBreakdown.map((c) => `${c.color}: ${c.qty}`).join(', ');
+        if (it.selected_colour || it.colour) return String(it.selected_colour || it.colour).trim();
+        if (it.productColours && it.productColours.length === 1) return it.productColours[0];
+        return null;
+      }).filter(Boolean);
+      const overallColourStr = colourSummaries.length ? colourSummaries.join(', ') : null;
 
-      let remainingPaid = money(paid_amount);
-      const saleIds = [];
-      let totalPending = 0;
+      // 1. Insert SINGLE sales record representing the entire invoice
+      const insertResult = await tx.runQuery(
+        `INSERT INTO sales (
+          shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, 
+          due_date, sale_date, invoice_date, payment_terms_days, products_total, extra_expenses_total,
+          notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount, discount_amount, discount_percentage, colour
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          shopId, 
+          primaryProduct.product_id, 
+          customer_id, 
+          totalQty, 
+          finalTotalAmount, 
+          numPaid, 
+          Math.max(finalTotalAmount - numPaid, 0), 
+          calculatedDueDate, 
+          today(),
+          invoiceDateStr,
+          paymentTermsDays,
+          productsTotal,
+          extraExpensesTotal,
+          notes || '', 
+          (finalTotalAmount - numPaid) > 0 ? 'open' : 'paid', 
+          req.user.id, 
+          payment_mode, 
+          primaryProduct.price_type || 'retail', 
+          primaryProduct.product?.manufacturing_brand_id || null,
+          originalTotal,
+          discountAmount,
+          discountPercentage,
+          overallColourStr
+        ]
+      );
+
+      const saleId = insertResult.id;
+
+      // 2. Insert individual items into sale_items and allocate stock batches
       for (const item of preparedItems) {
-        const itemTotal = item.finalItemTotal;
-        const itemPaid = Math.min(remainingPaid, itemTotal);
-        remainingPaid -= itemPaid;
-        const pending = Math.max(itemTotal - itemPaid, 0);
-        totalPending += pending;
-
-        let itemNotes = notes || '';
-        if (item.colorBreakdown && item.colorBreakdown.length > 0) {
-          const colorText = item.colorBreakdown.map(c => `${c.color}: ${c.qty}`).join(', ');
-          itemNotes = itemNotes ? `${itemNotes} | Colors: ${colorText}` : `Colors: ${colorText}`;
+        let itemColourStr = null;
+        if (item.colorBreakdown && item.colorBreakdown.length === 1) {
+          itemColourStr = item.colorBreakdown[0].color;
+        } else if (item.colorBreakdown && item.colorBreakdown.length > 1) {
+          itemColourStr = item.colorBreakdown.map((c) => `${c.color}: ${c.qty}`).join(', ');
+        } else if (item.selected_colour || item.colour) {
+          itemColourStr = String(item.selected_colour || item.colour).trim();
+        } else if (item.productColours && item.productColours.length === 1) {
+          itemColourStr = item.productColours[0];
         }
 
-        const insertResult = await tx.runQuery(
-          'INSERT INTO sales (shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, due_date, sale_date, notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount, discount_amount, discount_percentage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        await tx.runQuery(
+          `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
-            shopId, 
-            item.product_id, 
-            customer_id, 
-            item.saleQuantity, 
-            itemTotal, 
-            itemPaid, 
-            pending, 
-            due_date || '', 
-            today(), 
-            itemNotes, 
-            pending > 0 ? 'open' : 'paid', 
-            req.user.id, 
-            payment_mode, 
-            item.price_type, 
-            item.product.manufacturing_brand_id,
-            item.itemOriginalTotal,
-            item.itemDiscountAmount,
-            discountPercentage
+            saleId,
+            item.product_id,
+            item.saleQuantity,
+            item.unitPrice,
+            item.saleTotal,
+            item.price_type || 'retail',
+            itemColourStr
           ]
         );
-        saleIds.push(insertResult.id);
+
         let remaining = item.saleQuantity;
         for (const batch of item.batches) {
           if (remaining <= 0) break;
@@ -3362,20 +3665,50 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?', [allocated, batch.id]);
           await tx.runQuery(
             'INSERT INTO sale_batch_allocations (sale_id, batch_id, quantity, purchase_price) VALUES (?, ?, ?, ?)',
-            [insertResult.id, batch.id, allocated, batch.purchase_price]
+            [saleId, batch.id, allocated, batch.purchase_price]
           );
           remaining -= allocated;
         }
         await syncStockFromBatches(tx, shopId, item.product_id);
-        if (itemPaid > 0) {
-          await tx.runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [insertResult.id, itemPaid, today(), 'Initial sale payment']);
+      }
+
+      // 3. Record extra expenses associated with the sale
+      if (validExpenses.length > 0) {
+        for (const exp of validExpenses) {
+          await tx.runQuery(
+            'INSERT INTO sale_expenses (sale_id, expense_type, expense_name, amount) VALUES (?, ?, ?, ?)',
+            [saleId, exp.expense_type, exp.expense_name, exp.amount]
+          );
         }
       }
-      return { ids: saleIds, pending_amount: totalPending, total_amount: finalTotalAmount, original_total: originalTotal, discount_amount: discountAmount, discount_percentage: discountPercentage };
+
+      // 4. Record payment if initial amount was paid
+      if (numPaid > 0) {
+        await tx.runQuery(
+          'INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)',
+          [saleId, numPaid, today(), 'Initial sale payment']
+        );
+      }
+
+      return { 
+        id: saleId,
+        ids: [saleId], 
+        invoice_number: `INV-${String(saleId).padStart(6, '0')}`,
+        pending_amount: Math.max(finalTotalAmount - numPaid, 0), 
+        total_amount: finalTotalAmount, 
+        products_total: productsTotal,
+        extra_expenses_total: extraExpensesTotal,
+        original_total: originalTotal, 
+        discount_amount: discountAmount, 
+        discount_percentage: discountPercentage,
+        invoice_date: invoiceDateStr,
+        payment_terms_days: paymentTermsDays,
+        due_date: calculatedDueDate
+      };
     });
 
-    await audit(req, 'Created sale', 'sale', result.ids[0], `${result.ids.length} item(s), total ${result.total_amount}, pending ${result.pending_amount}`);
-    res.status(201).json({ ids: result.ids, pending_amount: result.pending_amount, total_amount: result.total_amount, discount_amount: result.discount_amount, discount_percentage: result.discount_percentage });
+    await audit(req, 'Created sale', 'sale', result.id, `${result.invoice_number}, products total ${result.products_total}, extra expenses ${result.extra_expenses_total}, total ${result.total_amount}, pending ${result.pending_amount}`);
+    res.status(201).json(result);
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create sale.' });
   }
@@ -3405,6 +3738,14 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
         throw error;
       }
 
+      // Fetch all items in this sale
+      const saleItems = await tx.allRecords('SELECT * FROM sale_items WHERE sale_id = ?', [saleId]).catch(() => []);
+      const productIdsToSync = new Set();
+      if (sale.product_id) productIdsToSync.add(sale.product_id);
+      for (const it of saleItems) {
+        if (it.product_id) productIdsToSync.add(it.product_id);
+      }
+
       // 1. Restore batch allocations
       const allocations = await tx.allRecords(
         'SELECT batch_id, quantity FROM sale_batch_allocations WHERE sale_id = ?',
@@ -3425,55 +3766,69 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
         }
       }
 
-      // Fallback: If no allocations were found (or partial), restore to the product's batch
-      const saleQty = Number(sale.quantity || 0);
-      const unallocatedQty = saleQty - restoredQty;
-      if (unallocatedQty > 0 && sale.product_id) {
-        const batch = await tx.getRecord(
-          'SELECT id FROM inventory_batches WHERE product_id = ? AND shop_id = ? ORDER BY id DESC LIMIT 1',
-          [sale.product_id, sale.shop_id]
-        ) || await tx.getRecord(
-          'SELECT id FROM inventory_batches WHERE product_id = ? ORDER BY id DESC LIMIT 1',
-          [sale.product_id]
-        );
-        if (batch) {
-          await tx.runQuery(
-            'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
-            [unallocatedQty, batch.id]
-          );
+      // Fallback: If no allocations were found (or partial), restore to the product's batch for each item
+      if (allocations.length === 0) {
+        if (saleItems.length > 0) {
+          for (const it of saleItems) {
+            const qty = Number(it.quantity || 1);
+            const batch = await tx.getRecord(
+              'SELECT id FROM inventory_batches WHERE product_id = ? AND shop_id = ? ORDER BY id DESC LIMIT 1',
+              [it.product_id, sale.shop_id]
+            );
+            if (batch) {
+              await tx.runQuery(
+                'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+                [qty, batch.id]
+              );
+            } else {
+              await tx.runQuery(
+                'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND shop_id = ?',
+                [qty, it.product_id, sale.shop_id]
+              );
+            }
+          }
         } else {
-          // If no batch exists, restore directly to stock table
-          await tx.runQuery(
-            'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND shop_id = ?',
-            [unallocatedQty, sale.product_id, sale.shop_id]
-          );
+          const saleQty = Number(sale.quantity || 0);
+          if (saleQty > 0 && sale.product_id) {
+            const batch = await tx.getRecord(
+              'SELECT id FROM inventory_batches WHERE product_id = ? AND shop_id = ? ORDER BY id DESC LIMIT 1',
+              [sale.product_id, sale.shop_id]
+            );
+            if (batch) {
+              await tx.runQuery(
+                'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+                [saleQty, batch.id]
+              );
+            } else {
+              await tx.runQuery(
+                'UPDATE stock SET quantity = quantity + ? WHERE product_id = ? AND shop_id = ?',
+                [saleQty, sale.product_id, sale.shop_id]
+              );
+            }
+          }
         }
       }
 
-      // 2. Delete payment records and batch allocations
-      try {
-        await tx.runQuery('DELETE FROM payments WHERE sale_id = ?', [saleId]);
-      } catch (e) {
-        // Table might not exist or error, continue
-      }
-      try {
-        await tx.runQuery('DELETE FROM sale_batch_allocations WHERE sale_id = ?', [saleId]);
-      } catch (e) {
-        // Table might not exist or error, continue
-      }
+      // 2. Delete payment records, expenses, items, allocations
+      await tx.runQuery('DELETE FROM payments WHERE sale_id = ?', [saleId]).catch(() => {});
+      await tx.runQuery('DELETE FROM sale_expenses WHERE sale_id = ?', [saleId]).catch(() => {});
+      await tx.runQuery('DELETE FROM sale_items WHERE sale_id = ?', [saleId]).catch(() => {});
+      await tx.runQuery('DELETE FROM sale_batch_allocations WHERE sale_id = ?', [saleId]).catch(() => {});
 
       // 3. Delete sale record
       await tx.runQuery('DELETE FROM sales WHERE id = ?', [saleId]);
 
-      // 4. Synchronize stock table from batch counts
-      if (sale.shop_id && sale.product_id) {
-        await syncStockFromBatches(tx, sale.shop_id, sale.product_id);
+      // 4. Synchronize stock table for all affected products
+      for (const pid of productIdsToSync) {
+        if (sale.shop_id && pid) {
+          await syncStockFromBatches(tx, sale.shop_id, pid);
+        }
       }
 
       return sale;
     });
 
-    await audit(req, 'Deleted sale and restored stock', 'sale', saleId, `${result.short_name || result.product_name || 'Product'}, quantity ${result.quantity}`);
+    await audit(req, 'Deleted sale and restored stock', 'sale', saleId, `Invoice INV-${String(saleId).padStart(6, '0')}`);
     res.json({ success: true, message: 'Sale deleted and stock restored.' });
   } catch (error) {
     console.error('[DELETE SALE ERROR]', error.message, error.stack);
@@ -3870,12 +4225,41 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
     params.push(req.user.id);
   }
-  const groupOrderSql = "NULLIF(sa.due_date, '') ASC NULLS LAST, sa.id ASC";
+  const groupOrderSql = "sa.due_date ASC NULLS LAST, sa.id ASC";
   const baseSql = `
     FROM sales sa
     JOIN products p ON p.id = sa.product_id
     JOIN customers c ON c.id = sa.customer_id
     JOIN shops sh ON sh.id = sa.shop_id
+    LEFT JOIN (
+      SELECT si.sale_id, json_agg(json_build_object(
+        'id', si.id,
+        'product_id', si.product_id,
+        'quantity', si.quantity,
+        'unit_price', si.unit_price,
+        'total_price', si.total_price,
+        'price_type', si.price_type,
+        'colour', si.colour,
+        'name', p_item.name,
+        'product_name', p_item.name,
+        'short_name', p_item.short_name,
+        'product_short_name', p_item.short_name,
+        'brand', p_item.brand,
+        'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
+        'quality_variant', p_item.quality_variant,
+        'model', p_item.model,
+        'full_model_list', p_item.full_model_list,
+        'description', p_item.description
+      ) ORDER BY si.id ASC) AS items
+      FROM sale_items si
+      JOIN products p_item ON p_item.id = si.product_id
+      GROUP BY si.sale_id
+    ) si_agg ON si_agg.sale_id = sa.id
+    LEFT JOIN (
+      SELECT sale_id, json_agg(json_build_object('id', id, 'expense_type', expense_type, 'expense_name', expense_name, 'amount', amount)) AS expenses
+      FROM sale_expenses
+      GROUP BY sale_id
+    ) se ON se.sale_id = sa.id
     WHERE ${where.join(' AND ')}
     GROUP BY sa.shop_id, COALESCE(c.mobile, c.id::TEXT)
   `;
@@ -3895,9 +4279,10 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
       COALESCE(SUM(sa.pending_amount), 0) AS pending_amount,
-      (ARRAY_AGG(NULLIF(sa.due_date, '') ORDER BY ${groupOrderSql}))[1] AS due_date,
+      (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}))[1] AS due_date,
       JSON_AGG(JSON_BUILD_OBJECT(
         'id', sa.id,
+        'invoice_number', 'INV-' || LPAD(sa.id::TEXT, 6, '0'),
         'shop_id', sa.shop_id,
         'product_id', sa.product_id,
         'customer_id', sa.customer_id,
@@ -3905,8 +4290,12 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
         'total_amount', sa.total_amount,
         'paid_amount', sa.paid_amount,
         'pending_amount', sa.pending_amount,
+        'products_total', sa.products_total,
+        'extra_expenses_total', sa.extra_expenses_total,
+        'discount_amount', sa.discount_amount,
         'due_date', sa.due_date,
         'sale_date', sa.sale_date,
+        'invoice_date', COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT),
         'notes', sa.notes,
         'status', sa.status,
         'created_by', sa.created_by,
@@ -3925,7 +4314,21 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
         'shop_area', sh.area,
         'shop_address', sh.address,
         'shop_phone', sh.phone,
-        'display_name', COALESCE(p.short_name, p.name)
+        'display_name', COALESCE(p.short_name, p.name),
+        'items', COALESCE(si_agg.items, JSON_BUILD_ARRAY(JSON_BUILD_OBJECT(
+          'id', 0,
+          'product_id', sa.product_id,
+          'quantity', COALESCE(sa.quantity, 1),
+          'unit_price', CASE WHEN COALESCE(sa.quantity, 1) > 0 THEN sa.total_amount / COALESCE(sa.quantity, 1) ELSE sa.total_amount END,
+          'total_price', sa.total_amount,
+          'name', p.name,
+          'product_name', p.name,
+          'short_name', p.short_name,
+          'product_short_name', p.short_name,
+          'brand', p.brand,
+          'colour', sa.colour
+        ))),
+        'expenses', COALESCE(se.expenses, '[]'::json)
       ) ORDER BY ${groupOrderSql}) AS items
     ${baseSql}
     ORDER BY due_date ASC NULLS LAST, pending_amount DESC
@@ -4010,6 +4413,17 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
   await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale_id]);
   await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${paymentAmount}, remaining ${newPending}`);
   res.json({ success: true, pending_amount: newPending });
+});
+
+app.post('/api/audit', authenticateToken, async (req, res) => {
+  try {
+    const { action, entity_type, entity_id, details } = req.body;
+    if (!action) return res.status(400).json({ error: 'Action is required.' });
+    await audit(req, action, entity_type || 'share', entity_id || null, details || '');
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Unable to log audit event.' });
+  }
 });
 
 app.post('/api/stock-transfer', authenticateToken, requireSuperAdmin, async (req, res) => {

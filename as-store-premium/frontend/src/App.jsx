@@ -6,6 +6,7 @@ import {
   BarChart3,
   Boxes,
   Building2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Contact,
@@ -41,6 +42,10 @@ import {
   UserCog,
   Users,
   UploadCloud,
+  Check,
+  Clock,
+  Calendar,
+  Filter,
   X,
 } from 'lucide-react';
 import ModelsPage from './components/models/ModelsPage';
@@ -63,6 +68,12 @@ import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
 import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
 import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
 import { consolidateProductList } from './utils/productConsolidation';
+import { 
+  shareToWhatsAppService, 
+  generateInvoicePDFDoc, 
+  generateStatementPDFDoc, 
+  generateLedgerPDFDoc 
+} from './utils/pdfAndShareService';
 import { 
   exportToExcel, 
   exportStockPricesExcel, 
@@ -109,7 +120,7 @@ const isSessionError = (error) => (
   || (error?.status === 403 && /session expired|invalid token|login again/i.test(error.message))
 );
 const inferToastTone = (message) => (
-  /unable|failed|error|wrong|invalid|required|cannot|choose|select|enter|no matching|not found|already in use/i.test(String(message || ''))
+  /unable|failed|error|wrong|invalid|required|cannot|choose|select|enter|no matching|not found|already in use|not enough|stock|exceed|must be|denied|unauthorized|forbidden|rejected/i.test(String(message || ''))
     ? 'error'
     : 'success'
 );
@@ -175,6 +186,49 @@ const productName = (item, options = {}) => {
   }
   return baseName;
 };
+
+function getProductAvailableColors(product) {
+  if (!product) return [];
+  const colorSet = new Set();
+
+  const addColor = (c) => {
+    if (!c) return;
+    const str = String(c).trim();
+    if (!str || str.toLowerCase() === 'undefined' || str.toLowerCase() === 'null' || str.toLowerCase() === 'standard' || str.toLowerCase() === 'default') return;
+    colorSet.add(str);
+  };
+
+  // 1. From product.available_colours or product.available_colors
+  const rawAvail = product.available_colours || product.available_colors;
+  if (Array.isArray(rawAvail)) {
+    rawAvail.forEach(addColor);
+  } else if (typeof rawAvail === 'string' && rawAvail.trim()) {
+    try {
+      const parsed = JSON.parse(rawAvail);
+      if (Array.isArray(parsed)) parsed.forEach(addColor);
+      else rawAvail.split(',').forEach(addColor);
+    } catch {
+      rawAvail.split(',').forEach(addColor);
+    }
+  }
+
+  // 2. From product.colours or product.colors
+  const rawColours = product.colours || product.colors;
+  if (Array.isArray(rawColours)) {
+    rawColours.forEach(addColor);
+  } else if (typeof rawColours === 'string' && rawColours.trim()) {
+    try {
+      const parsed = JSON.parse(rawColours);
+      if (Array.isArray(parsed)) parsed.forEach(addColor);
+      else rawColours.split(',').forEach(addColor);
+    } catch {
+      rawColours.split(',').forEach(addColor);
+    }
+  }
+
+  return Array.from(colorSet);
+}
+
 const fullModelList = (item) => item?.full_model_list || item?.name || item?.product_name || item?.model_name || '';
 const priceLabel = (value) => Number(value) > 0 ? currency(value) : 'Price not set';
 const normalizedText = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
@@ -500,6 +554,46 @@ const handleFormKeyDown = (e) => {
   }
 };
 
+const PAYMENT_TERMS_PRESETS = [7, 15, 30, 45, 60];
+
+const getTodayIso = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const formatDateDMY = (dateStr) => {
+  if (!dateStr) return '';
+  const clean = String(dateStr).trim().slice(0, 10);
+  const parts = clean.split('-');
+  if (parts.length === 3 && parts[0].length === 4) {
+    // YYYY-MM-DD -> DD-MM-YYYY
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+  return dateStr;
+};
+
+const calculateDueDate = (invoiceDateStr, termsDays) => {
+  if (!invoiceDateStr) return '';
+  const days = parseInt(termsDays, 10);
+  const validDays = isNaN(days) ? 0 : days;
+  const parts = String(invoiceDateStr).slice(0, 10).split('-');
+  if (parts.length === 3) {
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    const d = new Date(year, month, day);
+    d.setDate(d.getDate() + validDays);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dt = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${dt}`;
+  }
+  return invoiceDateStr;
+};
+
 const initialForms = {
   shop: { name: '', area: '', address: '', phone: '' },
   shopkeeper: { username: '', password: '', name: '', contact: '', shop_id: '' },
@@ -518,15 +612,20 @@ const initialForms = {
     selling_price: '',
     original_total: '',
     final_total_amount: '',
+    products_total: '',
+    extra_expenses_total: '0',
     total_amount: '',
     discount_amount: '0',
     discount_percentage: '0',
     is_custom_total: false,
     paid_amount: '',
     payment_mode: 'cash',
-    due_date: '2026-06-15',
+    invoice_date: getTodayIso(),
+    payment_terms_days: 15,
+    due_date: calculateDueDate(getTodayIso(), 15),
     notes: '',
     items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
+    expenses: [],
   },
   payment: { sale_id: '', amount: '', note: '' },
   request: { product_id: '', model_name: '', quantity: 1, message: '' },
@@ -706,29 +805,565 @@ function Empty({ title }) {
 
 function BillSummary({ sale }) {
   const items = sale.items || [];
-  const grandTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+  const productsTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+  const expenses = Array.isArray(sale.expenses) ? sale.expenses : [];
+  const extraExpensesTotal = expenses.reduce((sum, exp) => sum + Math.max(Number(exp.amount || 0), 0), 0);
+  const grandTotal = productsTotal + extraExpensesTotal;
   const paidAmount = Number(sale.paid_amount || 0);
   const pendingAmount = Math.max(grandTotal - paidAmount, 0);
+
+  const getStatusBadge = () => {
+    if (grandTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (paidAmount >= grandTotal) return { label: 'Fully Paid', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+    if (paidAmount > 0) return { label: `Partial (₹${pendingAmount.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
+    return { label: 'Pending / Unpaid', color: 'bg-rose-100 text-rose-800 border-rose-300' };
+  };
+
+  const status = getStatusBadge();
+
   return (
     <section className="bill-summary md:col-span-4" aria-label="Bill summary">
-      <span className="bill-summary-kicker">Bill summary</span>
+      <div className="flex items-center justify-between col-span-full mb-1">
+        <span className="bill-summary-kicker">Bill summary & Accounting</span>
+        <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border ${status.color}`}>
+          {status.label}
+        </span>
+      </div>
       <div>
         <small>Items</small>
         <strong>{items.length || 1}</strong>
       </div>
       <div>
+        <small>Products total</small>
+        <strong>{currency(productsTotal)}</strong>
+      </div>
+      <div>
+        <small>Extra expenses</small>
+        <strong className={extraExpensesTotal > 0 ? 'text-teal-700' : 'text-slate-500'}>
+          {currency(extraExpensesTotal)}
+        </strong>
+      </div>
+      <div>
         <small>Grand total</small>
-        <strong>{currency(grandTotal)}</strong>
+        <strong className="text-slate-900 font-black">{currency(grandTotal)}</strong>
       </div>
       <div>
         <small>Paid amount</small>
-        <strong>{currency(paidAmount)}</strong>
+        <strong className="text-emerald-700">{currency(paidAmount)}</strong>
       </div>
       <div>
-        <small>Pending amount</small>
+        <small>Pending balance</small>
         <strong className={pendingAmount > 0 ? 'text-amber-700' : 'text-emerald-700'}>{currency(pendingAmount)}</strong>
       </div>
     </section>
+  );
+}
+
+function SalesCreationWorkspace({
+  forms,
+  setForms,
+  data,
+  saving,
+  needsSpecificShop,
+  salesProductOptions,
+  sellingPriceOptions,
+  updateSaleItemProduct,
+  updateSaleItemPriceType,
+  updateSaleItemSellingPrice,
+  updateSaleItemQuantity,
+  toggleSaleItemColor,
+  updateSaleItemColorQuantity,
+  addSaleItem,
+  removeSaleItem,
+  updateSaleInvoiceDate,
+  updateSalePaymentTerms,
+  addSaleExpense,
+  updateSaleExpense,
+  removeSaleExpense,
+  submitSale,
+  activeTab,
+  setShowQuickAddCustomerModal,
+  getProductAvailableColors,
+  title = 'Create sale',
+}) {
+  const [expensesExpanded, setExpensesExpanded] = useState((forms.sale?.expenses || []).length > 0);
+
+  const items = forms.sale?.items || [];
+  const productsTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+  const expenses = Array.isArray(forms.sale?.expenses) ? forms.sale.expenses : [];
+  const extraExpensesTotal = expenses.reduce((sum, exp) => sum + Math.max(Number(exp.amount || 0), 0), 0);
+  const grandTotal = productsTotal + extraExpensesTotal;
+  const paidAmount = Number(forms.sale?.paid_amount || 0);
+  const pendingAmount = Math.max(grandTotal - paidAmount, 0);
+
+  const getStatusBadge = () => {
+    if (grandTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (paidAmount >= grandTotal) return { label: 'Fully Paid', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+    if (paidAmount > 0) return { label: `Partial (₹${pendingAmount.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
+    return { label: 'Pending / Unpaid', color: 'bg-rose-100 text-rose-800 border-rose-300' };
+  };
+
+  const status = getStatusBadge();
+
+  return (
+    <div className="w-full">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
+        {/* Left Main Workspace Column */}
+        <div className="lg:col-span-8 space-y-3.5">
+          {/* Card 1: Customer Selection */}
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                <Users size={14} className="text-teal-600" />
+                Customer &amp; Account
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowQuickAddCustomerModal(true)}
+                className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer hover:underline"
+              >
+                <Plus size={13} /> Add New Customer
+              </button>
+            </div>
+            <SearchableCombobox
+              value={forms.sale.customer_id}
+              onChange={(v) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: v } }))}
+              options={(data.customers || []).map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}`])}
+              placeholder="Search or select customer..."
+              searchPlaceholder="Search by name or phone..."
+              className="w-full"
+            />
+          </div>
+
+          {/* Card 2: Items Purchased Table */}
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                <Package size={14} className="text-teal-600" />
+                Items Purchased
+              </span>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                {items.length} {items.length === 1 ? 'item' : 'items'}
+              </span>
+            </div>
+
+            <div className="space-y-2.5">
+              {items.map((item, idx) => {
+                const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(item.product_id)) 
+                  || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(item.product_id))
+                  || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(item.product_id));
+                const availableColors = getProductAvailableColors(selectedProd);
+                const hasMultipleColours = availableColors.length > 1;
+                const colorStockMap = selectedProd?.colour_stock || {};
+                const activeBreakdown = item.color_breakdown || [];
+
+                return (
+                  <div key={idx} className="bg-slate-50/60 border border-slate-200/70 rounded-xl p-3 space-y-2.5 transition-all hover:border-slate-300">
+                    <div className="flex flex-wrap items-end gap-2.5">
+                      {/* Product Selector with compact 40px combobox */}
+                      <div className="flex-1 min-w-[240px]">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Product / Model</label>
+                        <SearchableCombobox
+                          value={item.product_id}
+                          onChange={(v) => updateSaleItemProduct(idx, v)}
+                          options={salesProductOptions}
+                          placeholder="Search product, brand, model..."
+                          searchPlaceholder="Type model, OLED, battery..."
+                          className="w-full"
+                        />
+                      </div>
+
+                      {/* Price Tier */}
+                      <div className="w-[130px]">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price Tier</label>
+                        <select
+                          value={item.price_type || 'retail'}
+                          onChange={(e) => updateSaleItemPriceType(idx, e.target.value)}
+                          disabled={!item.product_id}
+                          className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer disabled:opacity-50"
+                        >
+                          <option value="retail">Retail</option>
+                          <option value="wholesale">Wholesale</option>
+                        </select>
+                      </div>
+
+                      {/* Selling Price */}
+                      <div className="w-[110px]">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price (₹)</label>
+                        <input
+                          type="number"
+                          placeholder="₹ 0"
+                          value={item.selling_price !== undefined ? item.selling_price : ''}
+                          onChange={(e) => updateSaleItemSellingPrice(idx, e.target.value)}
+                          disabled={!item.product_id}
+                          className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-50 text-right"
+                        />
+                      </div>
+
+                      {/* Quantity */}
+                      <div className="w-[85px]">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Qty</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={item.quantity}
+                          onChange={(e) => updateSaleItemQuantity(idx, e.target.value)}
+                          disabled={!item.product_id || activeBreakdown.length > 0}
+                          title={activeBreakdown.length > 0 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
+                          className="w-full h-10 px-2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-70 text-center"
+                        />
+                      </div>
+
+                      {/* Total Amount */}
+                      <div className="w-[115px]">
+                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Total (₹)</label>
+                        <div className="w-full h-10 px-2.5 flex items-center justify-end bg-slate-100/90 border border-slate-200 rounded-xl text-xs font-black text-slate-900">
+                          ₹{Number(item.total_amount || 0).toLocaleString('en-IN')}
+                        </div>
+                      </div>
+
+                      {/* Remove Button */}
+                      {items.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeSaleItem(idx)}
+                          className="h-10 px-2.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-transparent hover:border-rose-200 transition-all cursor-pointer flex items-center justify-center shrink-0"
+                          title="Remove item"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Smart Colour Selection System: CONDITIONAL VISIBILITY */}
+                    {Boolean(item.product_id) && hasMultipleColours && (
+                      <div className="pt-2.5 border-t border-slate-200/70">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5">
+                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1">
+                            <Tag size={11} className="text-teal-600" />
+                            Select Colour Breakdown:
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            Allocate quantities per colour
+                          </span>
+                        </div>
+
+                        {/* Colour chips */}
+                        <div className="flex flex-wrap items-center gap-1 mb-2">
+                          {availableColors.map((color) => {
+                            const isSelected = activeBreakdown.some((b) => b.color === color);
+                            const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
+                            return (
+                              <button
+                                key={color}
+                                type="button"
+                                onClick={() => toggleSaleItemColor(idx, color)}
+                                className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer border ${
+                                  isSelected
+                                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                                }`}
+                              >
+                                <span>{color}</span>
+                                {colorStockQty !== null && (
+                                  <span className={`text-[9px] px-1 py-0.2 rounded font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-100 text-slate-600'}`}>
+                                    {colorStockQty}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* Split colour quantity allocation row */}
+                        {activeBreakdown.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-2 p-2 bg-white rounded-lg border border-slate-200">
+                            {activeBreakdown.map((b) => (
+                              <div key={b.color} className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md border border-slate-200">
+                                <span className="text-[11px] font-bold text-slate-800">{b.color}:</span>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-white hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 cursor-pointer"
+                                  >
+                                    -
+                                  </button>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={b.qty}
+                                    onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
+                                    className="w-10 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-none bg-white"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
+                                    className="w-5 h-5 flex items-center justify-center rounded bg-white hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 cursor-pointer"
+                                  >
+                                    +
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleSaleItemColor(idx, b.color)}
+                                    className="text-slate-400 hover:text-rose-600 p-0.5 cursor-pointer ml-0.5"
+                                    title="Remove this colour"
+                                  >
+                                    <X size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Single-colour auto-assigned indicator (Selector completely hidden) */}
+                    {Boolean(item.product_id) && availableColors.length === 1 && (
+                      <div className="pt-2 border-t border-slate-200/60 flex items-center gap-2 text-[11px] text-slate-500 font-medium">
+                        <span className="w-2 h-2 rounded-full bg-teal-500 inline-block" />
+                        <span>Colour: <strong className="text-slate-800 font-bold">{availableColors[0]}</strong></span>
+                        <span className="text-[10px] text-slate-400 font-normal bg-slate-100 px-1.5 py-0.2 rounded">Single variant</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={addSaleItem}
+                className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus size={14} /> Add Another Item
+              </button>
+            </div>
+          </div>
+
+          {/* Card 3: Single-Row Invoice & Terms */}
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-2">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-600 block">
+              Invoice Date &amp; Payment Terms
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Invoice Date</label>
+                <input
+                  type="date"
+                  value={forms.sale.invoice_date || getTodayIso()}
+                  onChange={(e) => updateSaleInvoiceDate(e.target.value)}
+                  className="w-full h-10 px-3 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-600">Payment Terms</label>
+                  <span className="text-[10px] text-slate-400 font-medium">Days</span>
+                </div>
+                <div className="space-y-1">
+                  <input
+                    type="number"
+                    min="0"
+                    value={forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15}
+                    onChange={(e) => updateSalePaymentTerms(e.target.value)}
+                    placeholder="15"
+                    className="w-full h-10 px-3 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
+                  />
+                  <div className="flex items-center gap-1">
+                    {PAYMENT_TERMS_PRESETS.map((preset) => {
+                      const isSelected = Number(forms.sale.payment_terms_days) === preset;
+                      return (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => updateSalePaymentTerms(preset)}
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold cursor-pointer border transition-all ${
+                            isSelected
+                              ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
+                          }`}
+                        >
+                          {preset}d
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Due Date (Auto Calculated)</label>
+                <div className="w-full h-10 px-3 flex items-center bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
+                  {forms.sale.due_date ? formatDateDMY(forms.sale.due_date) : 'Auto calculated'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: Dynamic Extra Expenses */}
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Extra Expenses</span>
+                {extraExpensesTotal > 0 ? (
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-teal-100 text-teal-800 border border-teal-200">
+                    ₹{extraExpensesTotal.toLocaleString('en-IN')}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400 font-normal">Optional</span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => addSaleExpense()}
+                className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              >
+                <Plus size={14} />
+                <span>Add Expense</span>
+              </button>
+            </div>
+
+            {/* Dynamic Expense Rows */}
+            {(forms.sale.expenses || []).length > 0 ? (
+              <div className="space-y-2.5 pt-1">
+                {(forms.sale.expenses || []).map((exp, expIdx) => (
+                  <div key={exp.id || expIdx} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end bg-slate-50/90 p-3 rounded-xl border border-slate-200/80">
+                    <div className="sm:col-span-7">
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                        Expense Name / Description
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Courier, Delivery, Labour, Packing, Transport..."
+                        value={exp.expense_name || ''}
+                        onChange={(e) => updateSaleExpense(expIdx, 'expense_name', e.target.value)}
+                        className="w-full h-10 px-3 text-xs font-bold border border-slate-200 rounded-xl bg-white focus:border-teal-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="sm:col-span-4">
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                        Amount (₹)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="₹ 0"
+                        value={exp.amount !== undefined ? exp.amount : ''}
+                        onChange={(e) => updateSaleExpense(expIdx, 'amount', e.target.value)}
+                        className="w-full h-10 px-3 text-xs font-black border border-slate-200 rounded-xl bg-white focus:border-teal-500 focus:outline-none text-right"
+                      />
+                    </div>
+                    <div className="sm:col-span-1 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => removeSaleExpense(expIdx)}
+                        className="h-10 w-10 flex items-center justify-center text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-xl border border-slate-200 hover:border-rose-200 cursor-pointer transition-colors"
+                        title="Remove this expense"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-[11px] text-slate-400 font-normal">
+                No extra expenses added. Click &ldquo;Add Expense&rdquo; if courier, freight, or other charges apply.
+              </p>
+            )}
+          </div>
+        </div>
+
+        {/* Right Sticky Sidebar: Bill Summary & Accounting */}
+        <div className="lg:col-span-4 sticky top-4 space-y-3.5">
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-3.5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-600">Bill Summary</span>
+              <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border ${status.color}`}>
+                {status.label}
+              </span>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Items</span>
+                <strong className="text-slate-800 font-bold">{items.length || 1}</strong>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Products Subtotal</span>
+                <strong className="text-slate-800 font-bold">{currency(productsTotal)}</strong>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span>Extra Expenses</span>
+                <strong className={extraExpensesTotal > 0 ? 'text-teal-700 font-bold' : 'text-slate-500'}>
+                  {currency(extraExpensesTotal)}
+                </strong>
+              </div>
+
+              <div className="border-t border-slate-100 pt-2 flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-900">Grand Total</span>
+                <span className="text-xl font-black text-slate-900">{currency(grandTotal)}</span>
+              </div>
+            </div>
+
+            {/* Payment Inputs inside Sidebar */}
+            <div className="space-y-2.5 pt-2 border-t border-slate-100">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Paid Amount (₹)</label>
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="₹ 0"
+                  value={forms.sale.paid_amount || ''}
+                  onChange={(e) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, paid_amount: e.target.value } }))}
+                  className="w-full h-10 px-3 text-xs font-bold text-emerald-700 bg-white border border-slate-200 rounded-xl focus:border-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Payment Mode</label>
+                <select
+                  value={forms.sale.payment_mode || 'cash'}
+                  onChange={(e) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, payment_mode: e.target.value } }))}
+                  className="w-full h-10 px-3 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
+                >
+                  <option value="cash">Cash</option>
+                  <option value="upi">UPI</option>
+                  <option value="card">Card</option>
+                  <option value="bank">Bank Transfer</option>
+                  <option value="credit">Credit / Pending</option>
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between text-xs pt-1 px-1">
+                <span className="text-slate-500 font-medium">Pending Balance:</span>
+                <strong className={`font-black ${pendingAmount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {currency(pendingAmount)}
+                </strong>
+              </div>
+            </div>
+
+            {/* Create Sale Action Button */}
+            <div className="pt-2">
+              <button
+                type="button"
+                disabled={saving || needsSpecificShop}
+                onClick={() => submitSale(activeTab)}
+                className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold text-sm shadow-sm hover:shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Plus size={18} />
+                <span>{saving ? 'Creating Sale...' : 'Create Sale'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1106,6 +1741,14 @@ function App() {
   });
   const [isEditingShop, setIsEditingShop] = useState(false);
   const [editShopForm, setEditShopForm] = useState({ name: '', area: '', address: '', phone: '' });
+  const [expandedSaleId, setExpandedSaleId] = useState(null);
+  const [selectedPaymentCustomer, setSelectedPaymentCustomer] = useState(null);
+  const [paymentModalTarget, setPaymentModalTarget] = useState(null);
+  const [paymentModalForm, setPaymentModalForm] = useState({ amount: '', mode: 'cash', reference_no: '', note: '' });
+  const [pendingStatusFilter, setPendingStatusFilter] = useState('all');
+  const [openShareDropdownId, setOpenShareDropdownId] = useState(null);
+  const [shareModalTarget, setShareModalTarget] = useState(null);
+  const [shareModalLoading, setShareModalLoading] = useState(false);
 
   const token = session?.token || '';
   const role = session?.role || 'customer';
@@ -2415,6 +3058,14 @@ function App() {
         const models = p.full_model_list || p.compatible_models || p.model || (Array.isArray(p.compatible) ? p.compatible.join(' ') : p.compatible) || '';
         const retailPrice = Number(p.sale_price || p.retail_price || 0);
         const wholesalePrice = Number(p.wholesale_price || 0);
+        const imageUrl = p.image_url || p.imageUrl || (Array.isArray(p.image_urls) ? p.image_urls[0] : '');
+
+        // Find available stock for current shop
+        const stockItem = (data.stock || []).find((s) => String(s.product_id || s.id) === String(id));
+        const stockQty = stockItem ? Number(stockItem.quantity || stockItem.stock_quantity || 0) : Number(p.quantity || p.stock || 0);
+
+        // Available colors count
+        const colors = getProductAvailableColors(p);
 
         const labelParts = [
           title,
@@ -2424,9 +3075,9 @@ function App() {
         ].filter(Boolean);
 
         const priceDetails = [];
-        if (retailPrice > 0) priceDetails.push(`Retail: ₹${retailPrice.toLocaleString('en-IN')}`);
-        if (wholesalePrice > 0) priceDetails.push(`Wholesale: ₹${wholesalePrice.toLocaleString('en-IN')}`);
-        const priceLabelStr = priceDetails.length > 0 ? ` · (${priceDetails.join(' | ')})` : '';
+        if (retailPrice > 0) priceDetails.push(`₹${retailPrice.toLocaleString('en-IN')}`);
+        if (wholesalePrice > 0) priceDetails.push(`WS: ₹${wholesalePrice.toLocaleString('en-IN')}`);
+        const priceLabelStr = priceDetails.length > 0 ? ` (${priceDetails.join(' | ')})` : '';
 
         const visibleName = `${labelParts.join(' ').replace(/\s+/g, ' ').trim()}${priceLabelStr}`;
 
@@ -2461,6 +3112,9 @@ function App() {
           category: cat,
           quality: variant,
           model: models,
+          image_url: imageUrl,
+          stock: stockQty,
+          coloursCount: colors.length,
           retailPrice: retailPrice > 0 ? retailPrice : '',
           wholesalePrice: wholesalePrice > 0 ? wholesalePrice : '',
           defaultPrice: retailPrice > 0 ? retailPrice : (wholesalePrice > 0 ? wholesalePrice : ''),
@@ -2470,7 +3124,7 @@ function App() {
 
     return Array.from(map.values())
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [data.products, data.catalog, data.stock]);
+  }, [data.products, data.catalog, data.stock, data.reference]);
 
   const getProductDefaultPrice = useCallback((productId) => {
     if (!productId) return '';
@@ -2481,81 +3135,20 @@ function App() {
     return price > 0 ? String(price) : '';
   }, [data.products, data.catalog, data.stock]);
 
-  const calculateSaleTotals = (items) => {
-    const calculatedTotal = (items || []).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+  const calculateSaleTotals = (items, expenses = forms?.sale?.expenses || []) => {
+    const productsTotal = (items || []).reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const extraExpensesTotal = (expenses || []).reduce((sum, exp) => sum + Math.max(Number(exp.amount || 0), 0), 0);
+    const grandTotal = productsTotal + extraExpensesTotal;
     return {
-      original_total: String(calculatedTotal),
-      final_total_amount: String(calculatedTotal),
-      total_amount: String(calculatedTotal),
+      products_total: String(productsTotal),
+      extra_expenses_total: String(extraExpensesTotal),
+      original_total: String(grandTotal),
+      final_total_amount: String(grandTotal),
+      total_amount: String(grandTotal),
       discount_amount: '0',
       discount_percentage: '0',
       is_custom_total: false,
     };
-  };
-
-  const getProductAvailableColors = (product) => {
-    if (!product) return [];
-    const colorSet = new Set();
-
-    // 1. From product.colours (array, JSON, or comma-separated string)
-    if (Array.isArray(product.colours)) {
-      product.colours.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
-    } else if (typeof product.colours === 'string' && product.colours.trim()) {
-      try {
-        const parsed = JSON.parse(product.colours);
-        if (Array.isArray(parsed)) parsed.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
-        else product.colours.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
-      } catch {
-        product.colours.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
-      }
-    }
-
-    if (Array.isArray(product.available_colors)) {
-      product.available_colors.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
-    } else if (typeof product.available_colors === 'string' && product.available_colors.trim()) {
-      product.available_colors.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
-    }
-
-    // 2. From colour_stock keys
-    if (product.colour_stock && typeof product.colour_stock === 'object') {
-      Object.keys(product.colour_stock).forEach((col) => {
-        if (col && col !== 'Standard' && col !== 'undefined' && col !== 'null') {
-          colorSet.add(col.trim());
-        }
-      });
-    }
-
-    // 3. From batches / supplier_batches
-    const allBatches = [...(product.batches || []), ...(product.supplier_batches || [])];
-    allBatches.forEach((b) => {
-      if (b.colour && b.colour !== 'Standard' && b.colour !== 'undefined' && b.colour !== 'null') {
-        colorSet.add(b.colour.trim());
-      }
-    });
-
-    // 4. Also check matching products across data sources (by ID or model name)
-    const currentId = String(product.id || product.product_id || '');
-    const currentModel = String(product.short_name || product.name || '').trim().toLowerCase();
-    const allProducts = [...(data.products || []), ...(data.productResults || []), ...(data.catalog || []), ...(data.stock || [])];
-    
-    allProducts.forEach((p) => {
-      const pId = String(p.id || p.product_id || '');
-      const pModel = String(p.short_name || p.name || '').trim().toLowerCase();
-      if ((currentId && pId === currentId) || (currentModel && pModel === currentModel)) {
-        if (Array.isArray(p.colours)) {
-          p.colours.forEach((c) => { if (c) colorSet.add(String(c).trim()); });
-        } else if (typeof p.colours === 'string' && p.colours.trim()) {
-          p.colours.split(',').forEach((c) => { if (c.trim()) colorSet.add(c.trim()); });
-        }
-        if (p.colour_stock && typeof p.colour_stock === 'object') {
-          Object.keys(p.colour_stock).forEach((col) => {
-            if (col && col !== 'Standard' && col !== 'undefined' && col !== 'null') colorSet.add(col.trim());
-          });
-        }
-      }
-    });
-
-    return Array.from(colorSet).filter(Boolean);
   };
 
   const updateSaleItemProduct = (index, productId) => {
@@ -2564,16 +3157,26 @@ function App() {
     const qty = Math.max(Number(currentItems[index]?.quantity || 1), 1);
     const total = defaultPrice !== '' ? String(Number(defaultPrice) * qty) : '';
 
+    const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(productId)) 
+      || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(productId))
+      || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(productId));
+    const availableColors = getProductAvailableColors(selectedProd);
+
+    // If only 1 colour exists, auto-select it under the hood with quantity = qty
+    const initialBreakdown = availableColors.length === 1 
+      ? [{ color: availableColors[0], qty: qty }] 
+      : [];
+
     currentItems[index] = {
       product_id: productId,
       selling_price: defaultPrice,
       price_type: 'retail',
       quantity: qty,
       total_amount: total,
-      color_breakdown: [],
+      color_breakdown: initialBreakdown,
     };
 
-    const totals = calculateSaleTotals(currentItems);
+    const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
 
     setForms((prev) => ({
       ...prev,
@@ -2602,7 +3205,7 @@ function App() {
       total_amount: total,
     };
 
-    const totals = calculateSaleTotals(currentItems);
+    const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
     setForms((prev) => ({ ...prev, sale: { ...prev.sale, ...totals, items: currentItems } }));
   };
 
@@ -2619,7 +3222,7 @@ function App() {
       total_amount: total,
     };
 
-    const totals = calculateSaleTotals(currentItems);
+    const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
 
     setForms((prev) => ({
       ...prev,
@@ -2638,13 +3241,25 @@ function App() {
     const numericQty = quantityVal === '' ? '' : Number(quantityVal);
     const total = (quantityVal !== '' && !isNaN(numericQty) && numericPrice > 0) ? String(numericPrice * numericQty) : (item.total_amount || '');
 
+    const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(item.product_id)) 
+      || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(item.product_id))
+      || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(item.product_id));
+    const availableColors = getProductAvailableColors(selectedProd);
+
+    // If only 1 colour, update its color breakdown quantity automatically
+    let breakdown = item.color_breakdown || [];
+    if (availableColors.length === 1 && numericQty > 0) {
+      breakdown = [{ color: availableColors[0], qty: numericQty }];
+    }
+
     currentItems[index] = {
       ...item,
       quantity: quantityVal,
       total_amount: total,
+      color_breakdown: breakdown,
     };
 
-    const totals = calculateSaleTotals(currentItems);
+    const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
 
     setForms((prev) => ({
       ...prev,
@@ -2749,7 +3364,7 @@ function App() {
     const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
     if (currentItems.length <= 1) return;
     currentItems.splice(index, 1);
-    const totals = calculateSaleTotals(currentItems);
+    const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -2758,6 +3373,81 @@ function App() {
         quantity: currentItems[0]?.quantity || 1,
         ...totals,
         items: currentItems,
+      },
+    }));
+  };
+
+  const addSaleExpense = () => {
+    const currentExpenses = [...(forms.sale.expenses || [])];
+    currentExpenses.push({
+      id: Date.now() + Math.random(),
+      expense_type: 'custom',
+      expense_name: '',
+      amount: '',
+    });
+    const totals = calculateSaleTotals(forms.sale.items, currentExpenses);
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+        expenses: currentExpenses,
+      },
+    }));
+  };
+
+  const updateSaleExpense = (index, field, value) => {
+    const currentExpenses = [...(forms.sale.expenses || [])];
+    currentExpenses[index] = { ...currentExpenses[index], [field]: value };
+    const totals = calculateSaleTotals(forms.sale.items, currentExpenses);
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+        expenses: currentExpenses,
+      },
+    }));
+  };
+
+  const removeSaleExpense = (index) => {
+    const currentExpenses = [...(forms.sale.expenses || [])];
+    currentExpenses.splice(index, 1);
+    const totals = calculateSaleTotals(forms.sale.items, currentExpenses);
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        ...totals,
+        expenses: currentExpenses,
+      },
+    }));
+  };
+
+  const updateSaleInvoiceDate = (invoiceDate) => {
+    const terms = forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15;
+    const newDueDate = calculateDueDate(invoiceDate, terms);
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        invoice_date: invoiceDate,
+        due_date: newDueDate,
+      },
+    }));
+  };
+
+  const updateSalePaymentTerms = (termsDays) => {
+    const parsedDays = parseInt(termsDays, 10);
+    const validDays = isNaN(parsedDays) ? 0 : Math.max(0, parsedDays);
+    const invDate = forms.sale.invoice_date || getTodayIso();
+    const newDueDate = calculateDueDate(invDate, validDays);
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        payment_terms_days: termsDays === '' ? '' : validDays,
+        due_date: newDueDate,
       },
     }));
   };
@@ -2798,12 +3488,39 @@ function App() {
     const dueDate = forms.sale.due_date;
     const notes = forms.sale.notes;
     const items = forms.sale.items || [{ product_id: forms.sale.product_id, selling_price: forms.sale.selling_price, quantity: Number(forms.sale.quantity), total_amount: Number(forms.sale.total_amount) }];
+    const expenses = forms.sale.expenses || [];
     
-    if (!customerId || !items.length || items.some(i => !i.product_id || !i.quantity || Number(i.quantity) <= 0 || !i.total_amount || Number(i.total_amount) <= 0)) {
-      return showToast('Choose customer, items, and valid selling price/quantity for each row');
+    if (!customerId) {
+      return showToast('Please select a customer first', 'error');
     }
 
-    const calculatedTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    if (!items.length || items.some(i => !i.product_id)) {
+      return showToast('Please select a product for each line item', 'error');
+    }
+
+    if (items.some(i => !i.quantity || Number(i.quantity) <= 0)) {
+      return showToast('Each item quantity must be at least 1', 'error');
+    }
+
+    if (items.some(i => !i.selling_price || Number(i.selling_price) <= 0 || !i.total_amount || Number(i.total_amount) <= 0)) {
+      return showToast('Please enter a valid selling price greater than 0 for all items', 'error');
+    }
+
+    if (expenses.some(e => Number(e.amount || 0) < 0)) {
+      return showToast('Expense amounts cannot be negative', 'error');
+    }
+
+    const productsTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
+    const extraExpensesTotal = expenses.reduce((sum, exp) => sum + Math.max(Number(exp.amount || 0), 0), 0);
+    const calculatedTotal = productsTotal + extraExpensesTotal;
+
+    const validExpenses = expenses
+      .filter((e) => e && Number(e.amount) > 0 && String(e.expense_name || e.description || '').trim())
+      .map((e) => ({
+        expense_type: e.expense_type || 'custom',
+        expense_name: String(e.expense_name || e.description).trim(),
+        amount: Number(e.amount),
+      }));
 
     try {
       setSaving(true);
@@ -2813,13 +3530,18 @@ function App() {
           shop_id: shopId,
           customer_id: customerId,
           paid_amount: String(Number(forms.sale.paid_amount || 0)),
+          invoice_date: forms.sale.invoice_date || getTodayIso(),
+          payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15),
           due_date: dueDate,
           notes,
           payment_mode: forms.sale.payment_mode || 'cash',
+          products_total: productsTotal,
+          extra_expenses_total: extraExpensesTotal,
           original_total: calculatedTotal,
           final_total_amount: calculatedTotal,
           discount_amount: 0,
           discount_percentage: 0,
+          expenses: validExpenses,
           items: items.map((item) => {
             const unitPrice = Number(item.selling_price || (Number(item.total_amount) / Number(item.quantity || 1)));
             return {
@@ -2840,7 +3562,11 @@ function App() {
         ...prev,
         sale: {
           ...initialForms.sale,
+          invoice_date: getTodayIso(),
+          payment_terms_days: 15,
+          due_date: calculateDueDate(getTodayIso(), 15),
           items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
+          expenses: [],
         },
       }));
       showToast('Sale created successfully');
@@ -2855,7 +3581,7 @@ function App() {
       }
       await loadTab('dashboard', shopId);
     } catch (error) {
-      showToast(error.message || 'Unable to create sale right now');
+      showToast(error.message || 'Unable to create sale right now', 'error');
     } finally {
       setSaving(false);
     }
@@ -3225,9 +3951,112 @@ function App() {
     });
   };
 
+  const getDueDateInfo = (dueDateStr) => {
+    if (!dueDateStr) return { label: 'Not Set', shortLabel: 'No Date', type: 'none', daysDiff: null, color: 'slate', badgeClass: 'bg-slate-100 text-slate-600 border-slate-200' };
+    const raw = String(dueDateStr).split('T')[0];
+    const parts = raw.split('-').map(Number);
+    if (parts.length !== 3 || !parts[0] || !parts[1] || !parts[2]) {
+      return { label: dueDateStr, shortLabel: 'Date', type: 'none', daysDiff: null, color: 'slate', badgeClass: 'bg-slate-100 text-slate-600 border-slate-200' };
+    }
+    const [y, m, d] = parts;
+    const targetDate = new Date(y, m - 1, d);
+    const todayDate = new Date();
+    todayDate.setHours(0, 0, 0, 0);
+    targetDate.setHours(0, 0, 0, 0);
+    
+    const diffTime = targetDate.getTime() - todayDate.getTime();
+    const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+    
+    if (diffDays < 0) {
+      const overdueDays = Math.abs(diffDays);
+      return {
+        label: `${overdueDays} Day${overdueDays === 1 ? '' : 's'} Overdue`,
+        shortLabel: 'Overdue',
+        type: 'overdue',
+        daysDiff: diffDays,
+        color: 'rose',
+        badgeClass: 'bg-rose-50 text-rose-700 border-rose-200 font-bold'
+      };
+    } else if (diffDays === 0) {
+      return {
+        label: 'Due Today',
+        shortLabel: 'Due Today',
+        type: 'today',
+        daysDiff: 0,
+        color: 'amber',
+        badgeClass: 'bg-amber-50 text-amber-800 border-amber-200 font-bold'
+      };
+    } else {
+      return {
+        label: `Due in ${diffDays} Day${diffDays === 1 ? '' : 's'}`,
+        shortLabel: 'Upcoming',
+        type: 'upcoming',
+        daysDiff: diffDays,
+        color: 'emerald',
+        badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200 font-bold'
+      };
+    }
+  };
+
   const whatsappLink = (item) => {
-    const msg = `Hello ${item.customer_name}, your pending payment of ${currency(item.pending_amount)} is due on ${item.due_date}. Please complete the payment soon.`;
-    return `https://wa.me/91${item.mobile}?text=${encodeURIComponent(msg)}`;
+    const mobile = String(item.mobile || '').replace(/\D/g, '');
+    const cleanMobile = mobile.startsWith('91') && mobile.length > 10 ? mobile : (mobile.length === 10 ? `91${mobile}` : mobile);
+    const dueDateStr = item.due_date ? formatDateDMY(item.due_date) : 'earliest';
+    const invoiceCount = item.items?.length || 1;
+    const msg = `Dear ${item.customer_name},\nThis is a friendly reminder from ${item.shop_name || 'Pinky Sales'}.\nYou have an outstanding pending balance of ${currency(item.pending_amount)} across ${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'} (Due: ${dueDateStr}).\nKindly arrange for the payment at your earliest convenience.\nThank you!`;
+    return cleanMobile ? `https://wa.me/${cleanMobile}?text=${encodeURIComponent(msg)}` : '#';
+  };
+
+  const submitRecordPaymentModal = async (e) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    if (!paymentModalTarget) return;
+    const numericAmount = Number(paymentModalForm.amount);
+    if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
+      return showToast('Enter a valid payment amount greater than zero');
+    }
+    const maxPending = Number(paymentModalTarget.pending_amount || 0);
+    if (numericAmount > maxPending) {
+      return showToast(`Payment cannot exceed the pending balance of ${currency(maxPending)}`);
+    }
+
+    try {
+      setSaving(true);
+      const payload = {
+        amount: numericAmount,
+        payment_mode: paymentModalForm.mode || 'cash',
+        note: [
+          paymentModalForm.note?.trim(),
+          paymentModalForm.reference_no ? `Ref: ${paymentModalForm.reference_no.trim()}` : ''
+        ].filter(Boolean).join(' · '),
+      };
+
+      if (paymentModalTarget.items || paymentModalTarget.customer_id) {
+        payload.customer_id = paymentModalTarget.customer_id;
+        payload.shop_id = paymentModalTarget.shop_id || shopId;
+      } else {
+        payload.sale_id = paymentModalTarget.id;
+      }
+
+      await authedFetch('/payments', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      showToast(`Payment of ${currency(numericAmount)} recorded successfully!`);
+      setPaymentModalTarget(null);
+      setPaymentModalForm({ amount: '', mode: 'cash', reference_no: '', note: '' });
+      await Promise.all([
+        loadTab('payments', shopId),
+        loadTab('sales', shopId),
+        loadTab('customers', shopId),
+        loadTab('dashboard', shopId),
+        loadCore(),
+      ]);
+    } catch (error) {
+      showToast(error.message || 'Unable to record payment right now');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const printStockPDF = (shopName, shopArea, stockData) => {
@@ -3332,151 +4161,69 @@ function App() {
       minute: '2-digit',
     });
     const totalStock = stockData.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    const rows = stockData.map((item) => `
+    const rows = stockData.map(item => `
       <tr>
         <td>
           <strong>${escapeHtml(productName(item))}</strong>
           <small>${escapeHtml([item.brand || 'No brand', item.category || 'Mobile'].filter(Boolean).join(' / '))}</small>
         </td>
         <td>${escapeHtml(fullModelList(item) || productName(item))}</td>
-        <td class="num">${escapeHtml(printPrice(item.purchase_price))}</td>
-        <td class="num">${escapeHtml(printPrice(item.sale_price))}</td>
-        <td class="qty ${Number(item.quantity || 0) <= 3 ? 'low' : ''}">${Number(item.quantity || 0).toLocaleString('en-IN')} pcs</td>
+        <td class="num">${currency(item.purchase_price)}</td>
+        <td class="num">${currency(item.sale_price)}</td>
+        <td class="qty ${Number(item.quantity || 0) <= 3 ? 'low' : ''}">${Number(item.quantity || 0).toLocaleString('en-IN')}</td>
       </tr>
     `).join('');
 
     printWindow.document.write(`
-      <!doctype html>
-      <html lang="en">
+      <html>
         <head>
-          <title>Stock Sheet - ${escapeHtml(shopName)}</title>
+          <title>Stock Sheet - ${shopName}</title>
           <style>
             @page { size: A4; margin: 12mm; }
-            body {
-              font-family: Arial, Helvetica, sans-serif;
-              color: #0f172a;
-              margin: 0;
-              background: #ffffff;
-              font-size: 12px;
-            }
-            header {
-              display: flex;
-              justify-content: space-between;
-              align-items: flex-start;
-              gap: 24px;
-              padding-bottom: 12px;
-              margin-bottom: 12px;
-              border-bottom: 2px solid #0f766e;
-            }
-            h1 {
-              margin: 0 0 4px;
-              font-size: 20px;
-              letter-spacing: 0;
-            }
-            p {
-              margin: 0;
-              color: #475569;
-              line-height: 1.45;
-            }
-            .meta {
-              text-align: right;
-              font-size: 11px;
-            }
-            .summary {
-              display: flex;
-              gap: 16px;
-              margin: 0 0 12px;
-              padding: 9px 10px;
-              border: 1px solid #cbd5e1;
-              background: #f8fafc;
-            }
-            .summary span {
-              color: #475569;
-            }
-            .summary b {
-              color: #0f172a;
-            }
-            table {
-              width: 100%;
-              border-collapse: collapse;
-              table-layout: fixed;
-            }
-            th {
-              background: #e2f8f5;
-              color: #0f172a;
-              font-weight: 800;
-              text-transform: uppercase;
-              font-size: 10px;
-              letter-spacing: 0;
-              padding: 8px 9px;
-              border: 1px solid #cbd5e1;
-              text-align: left;
-            }
-            td {
-              padding: 8px 9px;
-              border: 1px solid #e2e8f0;
-              vertical-align: top;
-              line-height: 1.35;
-              overflow-wrap: anywhere;
-            }
-            td strong,
-            td small {
-              display: block;
-            }
-            td small {
-              margin-top: 3px;
-              color: #64748b;
-              font-size: 10px;
-            }
-            .num,
-            .qty {
-              text-align: right;
-              font-weight: 700;
-              white-space: nowrap;
-            }
-            .qty {
-              color: #0f766e;
-            }
-            .qty.low {
-              color: #b45309;
-            }
-            tbody tr:nth-child(even) {
-              background: #f8fafc;
-            }
-            @media print {
-              body {
-                print-color-adjust: exact;
-                -webkit-print-color-adjust: exact;
-              }
-            }
+            body { font-family: 'Inter', system-ui, sans-serif; color: #0f172a; margin: 0; font-size: 12px; }
+            header { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 2px solid #0f766e; }
+            h1 { margin: 0 0 4px; font-size: 20px; }
+            p { margin: 0; color: #475569; }
+            .meta { text-align: right; font-size: 11px; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+            th, td { border-bottom: 1px solid #e2e8f0; padding: 7px 8px; vertical-align: top; }
+            th { background: #f1f5f9; text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #334155; }
+            th.num, td.num { text-align: right; width: 90px; }
+            th.qty, td.qty { text-align: right; width: 75px; font-weight: 700; }
+            td.qty.low { color: #dc2626; }
+            td small { display: block; color: #64748b; font-size: 10.5px; margin-top: 1px; }
+            footer { margin-top: 16px; font-size: 10.5px; color: #64748b; display: flex; justify-content: space-between; border-top: 1px solid #e2e8f0; padding-top: 8px; }
           </style>
         </head>
         <body>
           <header>
             <div>
-              <h1>Stock Sheet</h1>
-              <p><strong>${escapeHtml(shopName)}</strong>${shopArea ? ` - ${escapeHtml(shopArea)}` : ''}</p>
+              <h1>${escapeHtml(shopName)}</h1>
+              <p>${escapeHtml(shopArea || '')} · Complete Stock Sheet</p>
             </div>
-            <p class="meta">Generated<br>${escapeHtml(printedAt)}</p>
+            <div class="meta">
+              <p>Generated: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+              <p>Total Items: ${stockData.length} | Units: ${totalStock.toLocaleString('en-IN')}</p>
+            </div>
           </header>
-          <div class="summary">
-            <span>Total items: <b>${stockData.length.toLocaleString('en-IN')}</b></span>
-            <span>Total stock: <b>${totalStock.toLocaleString('en-IN')} pcs</b></span>
-          </div>
           <table>
             <thead>
               <tr>
-                <th style="width: 25%;">Product</th>
-                <th style="width: 31%;">Compatible Device</th>
-                <th style="width: 14%;">Stock Price</th>
-                <th style="width: 14%;">Sale Price</th>
-                <th style="width: 16%;">Stock Remaining</th>
+                <th style="width: 35%;">Product</th>
+                <th style="width: 30%;">Full Model List</th>
+                <th class="num">Buy Price</th>
+                <th class="num">Sale Price</th>
+                <th class="qty">Stock</th>
               </tr>
             </thead>
             <tbody>
               ${rows}
             </tbody>
           </table>
+          <footer>
+            <span>${escapeHtml(shopName)} - Internal Stock Report</span>
+            <span>Page 1</span>
+          </footer>
           <script>
             window.onload = function() {
               window.print();
@@ -3492,8 +4239,13 @@ function App() {
   const printInvoicePDF = (sale) => {
     const printWindow = window.open('', '_blank');
     const invoiceNo = `INV-${String(sale.id).padStart(6, '0')}`;
-    const dateStr = sale.sale_date || new Date().toISOString().slice(0, 10);
+    const invDateStr = formatDateDMY(sale.invoice_date || sale.sale_date || new Date().toISOString().slice(0, 10));
+    const dueDateStr = sale.due_date ? formatDateDMY(sale.due_date) : 'Not set';
+    const termsStr = sale.payment_terms_days ? `${sale.payment_terms_days} Days` : '15 Days';
     const shopName = sale.shop_name || 'Pinky Sales';
+    const rawExpenses = Array.isArray(sale.expenses) ? sale.expenses : [];
+    const expensesTotal = Number(sale.extra_expenses_total || rawExpenses.reduce((s, e) => s + Number(e.amount || 0), 0) || 0);
+    const prodTotal = Number(sale.products_total || Math.max(Number(sale.total_amount || 0) - expensesTotal, 0));
     
     printWindow.document.write(`
       <html>
@@ -3548,12 +4300,15 @@ function App() {
             }
             .meta-grid {
               display: grid;
-              grid-template-columns: 1fr 1fr;
-              gap: 40px;
-              margin-bottom: 40px;
+              grid-template-columns: 1fr 1fr 1fr;
+              gap: 20px;
+              margin-bottom: 30px;
+              padding: 16px;
+              background: #f8fafc;
+              border-radius: 12px;
             }
             .meta-section h3 {
-              margin: 0 0 10px;
+              margin: 0 0 8px;
               font-size: 11px;
               text-transform: uppercase;
               letter-spacing: 1px;
@@ -3561,8 +4316,8 @@ function App() {
               font-weight: 800;
             }
             .meta-section p {
-              margin: 0 0 6px;
-              font-size: 14px;
+              margin: 0 0 4px;
+              font-size: 13px;
               color: #334155;
             }
             .meta-section strong {
@@ -3586,32 +4341,32 @@ function App() {
               text-align: left;
             }
             td {
-              padding: 16px;
+              padding: 14px 16px;
               border-bottom: 1px solid #f1f5f9;
-              font-size: 14px;
+              font-size: 13px;
               color: #334155;
             }
             .text-right {
               text-align: right;
             }
             .summary-box {
-              width: 280px;
+              width: 320px;
               margin-left: auto;
               margin-top: 20px;
-              padding-top: 20px;
+              padding-top: 16px;
             }
             .summary-row {
               display: flex;
               justify-content: space-between;
-              padding: 8px 0;
-              font-size: 14px;
+              padding: 6px 0;
+              font-size: 13px;
               color: #64748b;
             }
             .summary-row.total {
-              border-top: 2px solid #f1f5f9;
+              border-top: 2px solid #e2e8f0;
               margin-top: 8px;
               padding-top: 12px;
-              font-size: 18px;
+              font-size: 17px;
               font-weight: 800;
               color: #0f172a;
             }
@@ -3624,11 +4379,11 @@ function App() {
               font-weight: 700;
             }
             .footer {
-              margin-top: 60px;
+              margin-top: 50px;
               border-top: 1px solid #f1f5f9;
-              padding-top: 24px;
+              padding-top: 20px;
               text-align: center;
-              font-size: 13px;
+              font-size: 12px;
               color: #94a3b8;
             }
             @media print {
@@ -3646,12 +4401,12 @@ function App() {
             <div class="header">
               <div class="brand">
                 <h1>${shopName}</h1>
-                <p>Premium Mobile & Display Solutions</p>
+                <p>Premium Mobile &amp; Display Solutions</p>
               </div>
               <div class="inv-details">
                 <h2>INVOICE</h2>
                 <p><strong>Invoice No:</strong> ${invoiceNo}</p>
-                <p><strong>Date:</strong> ${dateStr}</p>
+                <p><strong>Invoice Date:</strong> ${invDateStr}</p>
               </div>
             </div>
             
@@ -3661,6 +4416,12 @@ function App() {
                 <p><strong>${sale.customer_name || 'Walk-in Customer'}</strong></p>
                 <p>${sale.mobile || ''}</p>
                 <p>${sale.address || 'No Address Provided'}</p>
+              </div>
+              <div class="meta-section">
+                <h3>Payment Terms</h3>
+                <p><strong>Terms:</strong> ${termsStr}</p>
+                <p><strong>Due Date:</strong> ${dueDateStr}</p>
+                <p><strong>Payment Mode:</strong> ${(sale.payment_mode || 'cash').toUpperCase()}</p>
               </div>
               <div class="meta-section" style="text-align: right;">
                 <h3>Store Details</h3>
@@ -3673,28 +4434,59 @@ function App() {
               <thead>
                 <tr>
                   <th>Item / Description</th>
-                  <th class="text-right" style="width: 100px;">Qty</th>
-                  <th class="text-right" style="width: 150px;">Unit Price</th>
-                  <th class="text-right" style="width: 150px;">Amount</th>
+                  <th class="text-right" style="width: 90px;">Qty</th>
+                  <th class="text-right" style="width: 130px;">Unit Price</th>
+                  <th class="text-right" style="width: 130px;">Amount</th>
                 </tr>
               </thead>
               <tbody>
-                <tr>
-                  <td>
-                    <strong>${productName(sale)}</strong>
-                    <br/>
-                    <small style="color: #64748b; font-size: 12px;">${sale.price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price</small>
-                  </td>
-                  <td class="text-right">${sale.quantity || 1} pcs</td>
-                  <td class="text-right">₹${Number(Number(sale.total_amount) / Number(sale.quantity || 1)).toLocaleString('en-IN')}</td>
-                  <td class="text-right">₹${Number(sale.total_amount).toLocaleString('en-IN')}</td>
-                </tr>
+                ${(Array.isArray(sale.items) && sale.items.length > 0 ? sale.items : [{
+                  product_name: productName(sale),
+                  colour: sale.colour,
+                  price_type: sale.price_type || 'retail',
+                  quantity: sale.quantity || 1,
+                  unit_price: Number(prodTotal) / Number(sale.quantity || 1),
+                  total_price: prodTotal,
+                }]).map((it) => `
+                  <tr>
+                    <td>
+                      <strong>${escapeHtml(it.product_name || it.name || productName(it))}</strong>
+                      ${it.colour ? `<br/><span style="display:inline-block; margin-top:3px; padding:1px 6px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:4px; font-size:11px; font-weight:700;">Colour: ${escapeHtml(it.colour)}</span>` : ''}
+                      <br/>
+                      <small style="color: #64748b; font-size: 11px;">${it.price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price</small>
+                    </td>
+                    <td class="text-right">${it.quantity || 1} pcs</td>
+                    <td class="text-right">₹${Number(it.unit_price || (Number(it.total_price || 0) / Number(it.quantity || 1))).toLocaleString('en-IN')}</td>
+                    <td class="text-right">₹${Number(it.total_price || (Number(it.unit_price || 0) * Number(it.quantity || 1))).toLocaleString('en-IN')}</td>
+                  </tr>
+                `).join('')}
+                ${rawExpenses.map((exp) => `
+                  <tr style="background: #fafafa;">
+                    <td>
+                      <span style="font-weight: 600; color: #0f766e;">+ ${escapeHtml(exp.expense_name || 'Extra Expense')}</span>
+                      <small style="color: #94a3b8; font-size: 11px; display: block;">Additional Service / Charge</small>
+                    </td>
+                    <td class="text-right">1</td>
+                    <td class="text-right">₹${Number(exp.amount || 0).toLocaleString('en-IN')}</td>
+                    <td class="text-right">₹${Number(exp.amount || 0).toLocaleString('en-IN')}</td>
+                  </tr>
+                `).join('')}
               </tbody>
             </table>
 
             <div class="summary-box">
               <div class="summary-row">
-                <span>Subtotal</span>
+                <span>Products Subtotal</span>
+                <span>₹${Number(prodTotal).toLocaleString('en-IN')}</span>
+              </div>
+              ${expensesTotal > 0 ? `
+                <div class="summary-row" style="color: #0f766e; font-weight: 600;">
+                  <span>Extra Expenses</span>
+                  <span>+₹${Number(expensesTotal).toLocaleString('en-IN')}</span>
+                </div>
+              ` : ''}
+              <div class="summary-row total">
+                <span>Grand Total</span>
                 <span>₹${Number(sale.total_amount).toLocaleString('en-IN')}</span>
               </div>
               <div class="summary-row paid">
@@ -3705,15 +4497,11 @@ function App() {
                 <span>Outstanding Balance</span>
                 <span>₹${Number(sale.pending_amount || 0).toLocaleString('en-IN')}</span>
               </div>
-              <div class="summary-row total">
-                <span>Total Bill</span>
-                <span>₹${Number(sale.total_amount).toLocaleString('en-IN')}</span>
-              </div>
             </div>
 
             <div class="footer">
               <p>Thank you for choosing ${shopName}!</p>
-              <p style="font-size: 11px; margin-top: 8px; color: #cbd5e1;">This is a computer-generated document. No signature required.</p>
+              <p style="font-size: 11px; margin-top: 6px; color: #cbd5e1;">This is a computer-generated document. No signature required.</p>
             </div>
           </div>
           <script>
@@ -3785,10 +4573,33 @@ function App() {
     const total = invoiceItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
     const paid = invoiceItems.reduce((sum, item) => sum + Number(item.paid_amount || 0), 0);
     const pending = invoiceItems.reduce((sum, item) => sum + Number(item.pending_amount || 0), 0);
+
+    const allExpenses = (sale.expenses && Array.isArray(sale.expenses) ? sale.expenses : []).concat(
+      invoiceItems.flatMap(it => (Array.isArray(it.expenses) ? it.expenses : []))
+    ).filter((exp, idx, self) => exp && exp.amount > 0 && self.findIndex(o => o.id === exp.id && o.expense_name === exp.expense_name) === idx);
+
+    const extraExpensesSum = Number(sale.extra_expenses_total || allExpenses.reduce((s, e) => s + Number(e.amount || 0), 0) || 0);
+    const productsSubtotal = Number(sale.products_total || Math.max(total - extraExpensesSum, 0));
+
+    const invoiceDateVal = sale.invoice_date || (isConsolidated ? new Date().toISOString().slice(0, 10) : sale.sale_date);
+    const termsLabel = sale.payment_terms_days ? `${sale.payment_terms_days} Days` : '15 Days';
+    const dueDateVal = sale.due_date || (outstandingDueDates.length ? outstandingDueDates[0] : (hasOutstandingBalance ? 'Not set' : 'Paid'));
+
     const periodLabel = firstPurchaseDate === latestPurchaseDate
       ? formatDate(firstPurchaseDate)
       : `${formatDate(firstPurchaseDate)} to ${formatDate(latestPurchaseDate)}`;
-    const itemRows = invoiceItems.map((item, index) => {
+    const expandedItems = invoiceItems.flatMap((item) => {
+      if (Array.isArray(item.items) && item.items.length > 0) {
+        return item.items.map((sub) => ({
+          ...sub,
+          sale_date: item.sale_date,
+          total_amount: sub.total_price || (Number(sub.unit_price || 0) * Number(sub.quantity || 1)),
+        }));
+      }
+      return [item];
+    });
+
+    const itemRows = expandedItems.map((item, index) => {
       const itemQuantity = Number(item.quantity || 1);
       const itemTotal = Number(item.total_amount || 0);
       const unitPrice = itemQuantity ? itemTotal / itemQuantity : itemTotal;
@@ -3797,7 +4608,11 @@ function App() {
         <tr>
           <td class="number">${index + 1}</td>
           <td class="date">${formatDate(item.sale_date)}</td>
-          <td class="item">${safe(productName(item))}${productDetails ? `<small>${productDetails}</small>` : ''}</td>
+          <td class="item">
+            ${safe(item.product_name || item.name || productName(item))}
+            ${item.colour ? `<span style="display:inline-block; margin-left:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(item.colour)}</span>` : ''}
+            ${productDetails ? `<small>${productDetails}</small>` : ''}
+          </td>
           <td class="qty">${itemQuantity}<br/>PCS</td>
           <td class="money">${formatAmount(unitPrice)}</td>
           <td class="money">${formatAmount(itemTotal)}</td>
@@ -3862,12 +4677,14 @@ function App() {
             <div class="meta">
               <div>
                 <div class="meta-line"><span>Invoice No</span><b>:</b><strong>${invoiceNo}</strong></div>
-                <div class="meta-line"><span>Invoice Date</span><b>:</b><strong>${formatDate(isConsolidated ? new Date().toISOString().slice(0, 10) : sale.sale_date)}</strong></div>
+                <div class="meta-line"><span>Invoice Date</span><b>:</b><strong>${formatDate(invoiceDateVal)}</strong></div>
                 <div class="meta-line"><span>Purchase Period</span><b>:</b><strong>${periodLabel}</strong></div>
-                <div class="meta-line"><span>Terms</span><b>:</b><strong>Due on Receipt</strong></div>
-                <div class="meta-line"><span>Due Date</span><b>:</b><strong>${outstandingDueDates.length ? formatDate(outstandingDueDates[0]) : hasOutstandingBalance ? 'Not set' : 'Paid'}</strong></div>
+                <div class="meta-line"><span>Payment Terms</span><b>:</b><strong>${termsLabel}</strong></div>
+                <div class="meta-line"><span>Due Date</span><b>:</b><strong>${dueDateVal !== 'Not set' && dueDateVal !== 'Paid' ? formatDate(dueDateVal) : dueDateVal}</strong></div>
               </div>
-              <div></div>
+              <div>
+                <div class="meta-line"><span>Payment Mode</span><b>:</b><strong>${(sale.payment_mode || 'cash').toUpperCase()}</strong></div>
+              </div>
             </div>
             <div class="bill-title">Bill To</div>
             <div class="bill-to">${safe(sale.customer_name || 'Walk-in Customer')}${customerDetails ? `<small>${customerDetails}</small>` : ''}</div>
@@ -3883,9 +4700,19 @@ function App() {
                 <div class="notes-block">Terms &amp; Conditions<br/>Goods once sold will not be returned or exchanged.</div>
               </div>
               <div class="totals">
-                <div class="total-line"><span>Sub Total</span><span>${formatAmount(total)}</span></div>
-                <div class="total-line"><span>Shipping charge</span><span>0.00</span></div>
-                <div class="total-line grand"><span>Total</span><span>Rs.${formatAmount(total)}</span></div>
+                <div class="total-line"><span>Products Subtotal</span><span>${formatAmount(productsSubtotal)}</span></div>
+                ${allExpenses.length > 0 ? allExpenses.map(exp => `
+                  <div class="total-line" style="color: #0f766e;">
+                    <span>+ ${safe(exp.expense_name)}</span>
+                    <span>${formatAmount(exp.amount)}</span>
+                  </div>
+                `).join('') : (extraExpensesSum > 0 ? `
+                  <div class="total-line" style="color: #0f766e;">
+                    <span>+ Extra Expenses</span>
+                    <span>${formatAmount(extraExpensesSum)}</span>
+                  </div>
+                ` : '')}
+                <div class="total-line grand"><span>Grand Total</span><span>Rs.${formatAmount(total)}</span></div>
                 <div class="total-line grand"><span>Amount Paid</span><span>Rs.${formatAmount(paid)}</span></div>
                 <div class="total-line grand"><span>Balance Due</span><span>Rs.${formatAmount(pending)}</span></div>
                 <div class="signature">Authorized Signature</div>
@@ -3953,8 +4780,76 @@ function App() {
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
   }) : productPageItems;
-  const priceItems = productPageItems;
   const visibleSales = data.sales;
+  const customerSalesGroups = useMemo(() => {
+    const map = new Map();
+    for (const sale of visibleSales) {
+      const key = String(sale.customer_id || sale.customer_name || 'unknown');
+      if (!map.has(key)) {
+        map.set(key, {
+          customer_id: sale.customer_id,
+          customer_name: sale.customer_name || 'Walk-in Customer',
+          mobile: sale.mobile,
+          address: sale.address,
+          shop_name: sale.shop_name,
+          total_invoices: 0,
+          total_purchase_amount: 0,
+          total_paid: 0,
+          total_pending: 0,
+          last_purchase_date: null,
+          invoices: [],
+        });
+      }
+      const g = map.get(key);
+      g.total_invoices += 1;
+      g.total_purchase_amount += Number(sale.total_amount || 0);
+      g.total_paid += Number(sale.paid_amount || 0);
+      g.total_pending += Number(sale.pending_amount || 0);
+      const invDate = sale.invoice_date || sale.sale_date;
+      if (!g.last_purchase_date || String(invDate) > String(g.last_purchase_date)) {
+        g.last_purchase_date = invDate;
+      }
+      g.invoices.push(sale);
+    }
+    return Array.from(map.values());
+  }, [visibleSales]);
+
+  const pendingMetrics = useMemo(() => {
+    const list = data.pending || [];
+    const totalPendingAmount = list.reduce((sum, item) => sum + Number(item.pending_amount || 0), 0);
+    const totalCustomers = list.length;
+    let overdueCustomers = 0;
+    let dueTodayCustomers = 0;
+    let totalPendingInvoices = 0;
+
+    list.forEach((item) => {
+      const info = getDueDateInfo(item.due_date);
+      if (info.type === 'overdue') overdueCustomers += 1;
+      if (info.type === 'today') dueTodayCustomers += 1;
+      totalPendingInvoices += (item.items?.length || 1);
+    });
+
+    return {
+      totalPendingAmount,
+      totalCustomers,
+      overdueCustomers,
+      dueTodayCustomers,
+      totalPendingInvoices,
+    };
+  }, [data.pending]);
+
+  const filteredPendingCustomers = useMemo(() => {
+    let list = data.pending || [];
+    if (pendingStatusFilter === 'overdue') {
+      list = list.filter((item) => getDueDateInfo(item.due_date).type === 'overdue');
+    } else if (pendingStatusFilter === 'due_today') {
+      list = list.filter((item) => getDueDateInfo(item.due_date).type === 'today');
+    } else if (pendingStatusFilter === 'upcoming') {
+      list = list.filter((item) => getDueDateInfo(item.due_date).type === 'upcoming');
+    }
+    return list;
+  }, [data.pending, pendingStatusFilter]);
+
   const shopkeeperQuery = normalizedText(deferredShopkeeperSearch);
   const visibleShopkeepers = data.shopkeepers.filter((user) => {
     if (!shopkeeperQuery) return true;
@@ -4628,258 +5523,36 @@ function App() {
                   <Input label="Address" className="md:col-span-2" value={forms.customer.address} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, address: v } })} />
                   <Input label="Notes" className="md:col-span-4" value={forms.customer.notes} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, notes: v } })} />
                 </FormPanel>
-                <FormPanel title="Record customer purchase" action={saving ? 'Saving...' : 'Add transaction'} onSubmit={() => submitSale('customers')} disabled={saving || needsSpecificShop}>
-                  <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '16px' }}>
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-slate-700">Customer</span>
-                        <button
-                          type="button"
-                          onClick={() => setShowQuickAddCustomerModal(true)}
-                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
-                        >
-                          <Plus size={12} /> Add New Customer
-                        </button>
-                      </div>
-                      <SearchableCombobox
-                        value={forms.sale.customer_id}
-                        onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })}
-                        options={data.customers.map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}`])}
-                        placeholder="Search or select customer..."
-                        searchPlaceholder="Search customer by name or phone..."
-                        className="w-full"
-                      />
-                    </div>
-                    
-                    <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4 relative z-30">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
-                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }]).map((item, idx) => {
-                        const selectedProd = data.products.find((p) => String(p.id) === String(item.product_id)) 
-                          || data.productResults?.find((p) => String(p.id) === String(item.product_id))
-                          || data.catalog?.find((p) => String(p.id) === String(item.product_id));
-                        const availableColors = getProductAvailableColors(selectedProd);
-                        const colorStockMap = selectedProd?.colour_stock || {};
-                        const activeBreakdown = item.color_breakdown || [];
-
-                        return (
-                          <div key={idx} className="sale-line-item bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs relative z-30 focus-within:z-40 space-y-3">
-                            <div className="flex flex-wrap items-end gap-3">
-                              <div className="flex-1 min-w-[260px]">
-                                <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
-                                <SearchableCombobox 
-                                  value={item.product_id} 
-                                  onChange={(v) => updateSaleItemProduct(idx, v)} 
-                                  options={salesProductOptions}
-                                  placeholder="Search catalog or select item..."
-                                  searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
-                                  className="w-full"
-                                />
-                              </div>
-                              <div style={{ width: '175px' }}>
-                                <Select
-                                  label="Price tier"
-                                  placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
-                                  value={item.price_type || ''}
-                                  onChange={(v) => updateSaleItemPriceType(idx, v)}
-                                  options={sellingPriceOptions(item.product_id)}
-                                  disabled={!item.product_id}
-                                />
-                              </div>
-                              <div style={{ width: '150px' }}>
-                                <Input
-                                  label="Selling price (₹)"
-                                  type="number"
-                                  placeholder="₹ 0"
-                                  value={item.selling_price !== undefined ? item.selling_price : ''}
-                                  onChange={(v) => updateSaleItemSellingPrice(idx, v)}
-                                  disabled={!item.product_id}
-                                />
-                              </div>
-                              <div style={{ width: '110px' }}>
-                                <Input 
-                                  label="Quantity" 
-                                  type="number" 
-                                  min="1" 
-                                  value={item.quantity} 
-                                  onChange={(v) => updateSaleItemQuantity(idx, v)} 
-                                  disabled={!item.product_id || activeBreakdown.length > 0}
-                                  title={activeBreakdown.length > 0 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
-                                />
-                              </div>
-                              <div style={{ width: '140px' }}>
-                                <Input 
-                                  label="Total price (₹)" 
-                                  type="number" 
-                                  value={item.total_amount || ''} 
-                                  readOnly 
-                                  disabled 
-                                />
-                              </div>
-                              {(forms.sale.items || []).length > 1 && (
-                                <button 
-                                  type="button" 
-                                  className="soft !min-h-[44px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer rounded-xl"
-                                  onClick={() => removeSaleItem(idx)}
-                                  title="Remove item"
-                                >
-                                  <X size={16} />
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Dynamic Color Variant Breakdown Container */}
-                            {Boolean(item.product_id) && (
-                              <div className="pt-3 border-t border-slate-100 mt-2">
-                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                                    <Tag className="w-3.5 h-3.5 text-teal-600" />
-                                    Color Variant Breakdown
-                                  </span>
-                                  <span className="text-[11px] text-slate-400 font-medium">
-                                    Click color chip to allocate units
-                                  </span>
-                                </div>
-
-                                {/* Color Selection Chips */}
-                                <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-                                  {(availableColors.length > 0 
-                                    ? availableColors 
-                                    : (data.reference?.colours?.map(c => c.name) || ['Black', 'Gold', 'Rose Gold', 'Silver', 'Green', 'Purple'])
-                                  ).map((color) => {
-                                    const isSelected = activeBreakdown.some((b) => b.color === color);
-                                    const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
-                                    return (
-                                      <button
-                                        key={color}
-                                        type="button"
-                                        onClick={() => toggleSaleItemColor(idx, color)}
-                                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
-                                          isSelected
-                                            ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
-                                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                                        }`}
-                                      >
-                                        <span>{color}</span>
-                                        {colorStockQty !== null && (
-                                          <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-200/80 text-slate-600'}`}>
-                                            {colorStockQty} in stock
-                                          </span>
-                                        )}
-                                      </button>
-                                    );
-                                  })}
-
-                                  {/* Any Other Reference Color Dropdown */}
-                                  <select
-                                    value=""
-                                    onChange={(e) => {
-                                      if (e.target.value) {
-                                        toggleSaleItemColor(idx, e.target.value);
-                                      }
-                                    }}
-                                    className="px-2.5 py-1 rounded-xl text-xs font-bold bg-white hover:bg-slate-50 text-teal-700 border border-teal-300 cursor-pointer shadow-2xs focus:outline-hidden"
-                                  >
-                                    <option value="" disabled>+ Add Any Color...</option>
-                                    {(data.reference?.colours || []).map((c) => (
-                                      <option key={c.id || c.name} value={c.name}>
-                                        {c.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-
-                                {/* Active Color Quantity Inputs Sub-Grid */}
-                                {activeBreakdown.length > 0 && (
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/70">
-                                    {activeBreakdown.map((b) => (
-                                      <div key={b.color} className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-2xs">
-                                        <span className="text-xs font-black text-slate-800 truncate">{b.color}</span>
-                                        <div className="flex items-center gap-1.5">
-                                          <button
-                                            type="button"
-                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
-                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
-                                          >
-                                            -
-                                          </button>
-                                          <input
-                                            type="number"
-                                            min="1"
-                                            value={b.qty}
-                                            onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
-                                            className="w-12 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-hidden"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
-                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
-                                          >
-                                            +
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => toggleSaleItemColor(idx, b.color)}
-                                            className="text-slate-400 hover:text-rose-600 ml-1 cursor-pointer p-0.5"
-                                            title="Remove this color"
-                                          >
-                                            <X size={13} />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                      <button 
-                        type="button" 
-                        className="soft !px-4 !py-2 text-xs font-bold mt-2 cursor-pointer" 
-                        onClick={addSaleItem}
-                      >
-                        + Add Another Display/Item
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="md:col-span-2 space-y-1.5">
-                    <Input
-                      label="Total bill amount (₹)"
-                      type="number"
-                      value={forms.sale.total_amount || '0'}
-                      readOnly
-                      disabled
-                    />
-                    <div className="text-[11px] text-slate-400 px-1">
-                      Calculated automatically from item line totals.
-                    </div>
-                  </div>
-                  <Input 
-                    label="Paid amount (₹)" 
-                    type="number" 
-                    className="md:col-span-1" 
-                    value={forms.sale.paid_amount || ''} 
-                    placeholder="₹ 0"
-                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} 
+                <div className="panel p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs mb-4">
+                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Record customer purchase</h2>
+                  <SalesCreationWorkspace
+                    forms={forms}
+                    setForms={setForms}
+                    data={data}
+                    saving={saving}
+                    needsSpecificShop={needsSpecificShop}
+                    salesProductOptions={salesProductOptions}
+                    sellingPriceOptions={sellingPriceOptions}
+                    updateSaleItemProduct={updateSaleItemProduct}
+                    updateSaleItemPriceType={updateSaleItemPriceType}
+                    updateSaleItemSellingPrice={updateSaleItemSellingPrice}
+                    updateSaleItemQuantity={updateSaleItemQuantity}
+                    toggleSaleItemColor={toggleSaleItemColor}
+                    updateSaleItemColorQuantity={updateSaleItemColorQuantity}
+                    addSaleItem={addSaleItem}
+                    removeSaleItem={removeSaleItem}
+                    updateSaleInvoiceDate={updateSaleInvoiceDate}
+                    updateSalePaymentTerms={updateSalePaymentTerms}
+                    addSaleExpense={addSaleExpense}
+                    updateSaleExpense={updateSaleExpense}
+                    removeSaleExpense={removeSaleExpense}
+                    submitSale={submitSale}
+                    activeTab="customers"
+                    setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
+                    getProductAvailableColors={getProductAvailableColors}
+                    title="Record customer purchase"
                   />
-                  <Select 
-                    label="Payment mode" 
-                    className="md:col-span-1" 
-                    value={forms.sale.payment_mode} 
-                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} 
-                    options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} 
-                  />
-                  <Input 
-                    label="Due date" 
-                    type="date" 
-                    className="md:col-span-2" 
-                    value={forms.sale.due_date} 
-                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} 
-                  />
-                  <BillSummary sale={forms.sale} />
-                </FormPanel>
+                </div>
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox">
                     <Search size={18} />
@@ -4945,258 +5618,40 @@ function App() {
             <PageWrapper activeKey="sales" key="sales">
               <section className="space">
                 {role === 'superadmin' && !shopId && <div className="loading">Select Warehouse or a branch from the location filter to create a sale. All-location sales remain visible below.</div>}
-                <FormPanel title={data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'} action="Create sale" onSubmit={() => submitSale('sales')} disabled={saving || needsSpecificShop}>
-                  <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '16px' }}>
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-slate-700">Customer</span>
-                        <button
-                          type="button"
-                          onClick={() => setShowQuickAddCustomerModal(true)}
-                          className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer"
-                        >
-                          <Plus size={12} /> Add New Customer
-                        </button>
-                      </div>
-                      <SearchableCombobox
-                        value={forms.sale.customer_id}
-                        onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, customer_id: v } })}
-                        options={data.customers.map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}`])}
-                        placeholder="Search or select customer..."
-                        searchPlaceholder="Search customer by name or phone..."
-                        className="w-full"
-                      />
-                    </div>
-                    
-                    <div className="border border-slate-100 rounded-2xl p-5 bg-slate-50/30 space-y-4 relative z-30">
-                      <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block mb-2">Items Purchased</span>
-                      {(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }]).map((item, idx) => {
-                        const selectedProd = data.products.find((p) => String(p.id) === String(item.product_id)) 
-                          || data.productResults?.find((p) => String(p.id) === String(item.product_id))
-                          || data.catalog?.find((p) => String(p.id) === String(item.product_id));
-                        const availableColors = getProductAvailableColors(selectedProd);
-                        const colorStockMap = selectedProd?.colour_stock || {};
-                        const activeBreakdown = item.color_breakdown || [];
-
-                        return (
-                          <div key={idx} className="sale-line-item bg-white border border-slate-200/80 p-4 rounded-2xl shadow-xs relative z-30 focus-within:z-40 space-y-3">
-                            <div className="flex flex-wrap items-end gap-3">
-                              <div className="flex-1 min-w-[260px]">
-                                <label className="block text-xs font-bold text-slate-700 mb-1">Item bought</label>
-                                <SearchableCombobox 
-                                  value={item.product_id} 
-                                  onChange={(v) => updateSaleItemProduct(idx, v)} 
-                                  options={salesProductOptions}
-                                  placeholder="Search catalog or select item..."
-                                  searchPlaceholder="Type model, brand, variant (e.g. IP 13, OLED)..."
-                                  className="w-full"
-                                />
-                              </div>
-                              <div style={{ width: '175px' }}>
-                                <Select
-                                  label="Price tier"
-                                  placeholder={item.product_id ? 'Select tier' : 'Choose item first'}
-                                  value={item.price_type || ''}
-                                  onChange={(v) => updateSaleItemPriceType(idx, v)}
-                                  options={sellingPriceOptions(item.product_id)}
-                                  disabled={!item.product_id}
-                                />
-                              </div>
-                              <div style={{ width: '150px' }}>
-                                <Input
-                                  label="Selling price (₹)"
-                                  type="number"
-                                  placeholder="₹ 0"
-                                  value={item.selling_price !== undefined ? item.selling_price : ''}
-                                  onChange={(v) => updateSaleItemSellingPrice(idx, v)}
-                                  disabled={!item.product_id}
-                                />
-                              </div>
-                              <div style={{ width: '110px' }}>
-                                <Input 
-                                  label="Quantity" 
-                                  type="number" 
-                                  min="1" 
-                                  value={item.quantity} 
-                                  onChange={(v) => updateSaleItemQuantity(idx, v)} 
-                                  disabled={!item.product_id || activeBreakdown.length > 0}
-                                  title={activeBreakdown.length > 0 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
-                                />
-                              </div>
-                              <div style={{ width: '140px' }}>
-                                <Input 
-                                  label="Total price (₹)" 
-                                  type="number" 
-                                  value={item.total_amount || ''} 
-                                  readOnly 
-                                  disabled 
-                                />
-                              </div>
-                              {(forms.sale.items || []).length > 1 && (
-                                <button 
-                                  type="button" 
-                                  className="soft !min-h-[44px] !px-3 text-red-600 hover:text-red-800 border-red-200 hover:border-red-300 cursor-pointer rounded-xl"
-                                  onClick={() => removeSaleItem(idx)}
-                                  title="Remove item"
-                                >
-                                  <X size={16} />
-                                </button>
-                              )}
-                            </div>
-
-                            {/* Dynamic Color Variant Breakdown Container */}
-                            {Boolean(item.product_id) && (
-                              <div className="pt-3 border-t border-slate-100 mt-2">
-                                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                                  <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                                    <Tag className="w-3.5 h-3.5 text-teal-600" />
-                                    Color Variant Breakdown
-                                  </span>
-                                  <span className="text-[11px] text-slate-400 font-medium">
-                                    Click color chip to allocate units
-                                  </span>
-                                </div>
-
-                                {/* Color Selection Chips */}
-                                <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-                                  {(availableColors.length > 0 
-                                    ? availableColors 
-                                    : (data.reference?.colours?.map(c => c.name) || ['Black', 'Gold', 'Rose Gold', 'Silver', 'Green', 'Purple'])
-                                  ).map((color) => {
-                                    const isSelected = activeBreakdown.some((b) => b.color === color);
-                                    const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
-                                    return (
-                                      <button
-                                        key={color}
-                                        type="button"
-                                        onClick={() => toggleSaleItemColor(idx, color)}
-                                        className={`px-3 py-1 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
-                                          isSelected
-                                            ? 'bg-teal-600 text-white border-teal-600 shadow-xs'
-                                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                                        }`}
-                                      >
-                                        <span>{color}</span>
-                                        {colorStockQty !== null && (
-                                          <span className={`text-[10px] px-1.5 py-0.2 rounded-md font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-200/80 text-slate-600'}`}>
-                                            {colorStockQty} in stock
-                                          </span>
-                                        )}
-                                      </button>
-                                    );
-                                  })}
-
-                                  {/* Any Other Reference Color Dropdown */}
-                                  <select
-                                    value=""
-                                    onChange={(e) => {
-                                      if (e.target.value) {
-                                        toggleSaleItemColor(idx, e.target.value);
-                                      }
-                                    }}
-                                    className="px-2.5 py-1 rounded-xl text-xs font-bold bg-white hover:bg-slate-50 text-teal-700 border border-teal-300 cursor-pointer shadow-2xs focus:outline-hidden"
-                                  >
-                                    <option value="" disabled>+ Add Any Color...</option>
-                                    {(data.reference?.colours || []).map((c) => (
-                                      <option key={c.id || c.name} value={c.name}>
-                                        {c.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-
-                                {/* Active Color Quantity Inputs Sub-Grid */}
-                                {activeBreakdown.length > 0 && (
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 p-3 rounded-xl bg-slate-50/80 border border-slate-200/70">
-                                    {activeBreakdown.map((b) => (
-                                      <div key={b.color} className="flex items-center justify-between gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 shadow-2xs">
-                                        <span className="text-xs font-black text-slate-800 truncate">{b.color}</span>
-                                        <div className="flex items-center gap-1.5">
-                                          <button
-                                            type="button"
-                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
-                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
-                                          >
-                                            -
-                                          </button>
-                                          <input
-                                            type="number"
-                                            min="1"
-                                            value={b.qty}
-                                            onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
-                                            className="w-12 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-hidden"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
-                                            className="w-6 h-6 flex items-center justify-center rounded bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold text-xs cursor-pointer select-none"
-                                          >
-                                            +
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => toggleSaleItemColor(idx, b.color)}
-                                            className="text-slate-400 hover:text-rose-600 ml-1 cursor-pointer p-0.5"
-                                            title="Remove this color"
-                                          >
-                                            <X size={13} />
-                                          </button>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                      <button 
-                        type="button" 
-                        className="soft !px-4 !py-2 text-xs font-bold mt-2 cursor-pointer" 
-                        onClick={addSaleItem}
-                      >
-                        + Add Another Display/Item
-                      </button>
-                    </div>
+                <div className="panel p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                      {data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'}
+                    </h2>
                   </div>
-
-                  <div className="md:col-span-2 space-y-1.5">
-                    <Input
-                      label="Total bill amount (₹)"
-                      type="number"
-                      value={forms.sale.total_amount || '0'}
-                      readOnly
-                      disabled
-                    />
-                    <div className="text-[11px] text-slate-400 px-1">
-                      Calculated automatically from item line totals.
-                    </div>
-                  </div>
-                  <Input 
-                    label="Paid amount (₹)" 
-                    type="number" 
-                    className="md:col-span-1" 
-                    value={forms.sale.paid_amount || ''} 
-                    placeholder="₹ 0"
-                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, paid_amount: v } })} 
+                  <SalesCreationWorkspace
+                    forms={forms}
+                    setForms={setForms}
+                    data={data}
+                    saving={saving}
+                    needsSpecificShop={needsSpecificShop}
+                    salesProductOptions={salesProductOptions}
+                    sellingPriceOptions={sellingPriceOptions}
+                    updateSaleItemProduct={updateSaleItemProduct}
+                    updateSaleItemPriceType={updateSaleItemPriceType}
+                    updateSaleItemSellingPrice={updateSaleItemSellingPrice}
+                    updateSaleItemQuantity={updateSaleItemQuantity}
+                    toggleSaleItemColor={toggleSaleItemColor}
+                    updateSaleItemColorQuantity={updateSaleItemColorQuantity}
+                    addSaleItem={addSaleItem}
+                    removeSaleItem={removeSaleItem}
+                    updateSaleInvoiceDate={updateSaleInvoiceDate}
+                    updateSalePaymentTerms={updateSalePaymentTerms}
+                    addSaleExpense={addSaleExpense}
+                    updateSaleExpense={updateSaleExpense}
+                    removeSaleExpense={removeSaleExpense}
+                    submitSale={submitSale}
+                    activeTab="sales"
+                    setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
+                    getProductAvailableColors={getProductAvailableColors}
+                    title={data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'}
                   />
-                  <Select 
-                    label="Payment mode" 
-                    className="md:col-span-1" 
-                    value={forms.sale.payment_mode} 
-                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, payment_mode: v } })} 
-                    options={[['cash', 'Cash'], ['upi', 'UPI'], ['card', 'Card'], ['bank', 'Bank transfer'], ['credit', 'Credit / pending']]} 
-                  />
-                  <Input 
-                    label="Due date" 
-                    type="date" 
-                    className="md:col-span-2" 
-                    value={forms.sale.due_date} 
-                    onChange={(v) => setForms({ ...forms, sale: { ...forms.sale, due_date: v } })} 
-                  />
-                  <BillSummary sale={forms.sale} />
-                </FormPanel>
+                </div>
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox"><Search size={18} /><input placeholder="Filter by customer, model, category, shop, or payment mode" value={salesFilters.search} onChange={(event) => setSalesFilters({ ...salesFilters, search: event.target.value })} /></div>
                   <input type="date" value={salesFilters.date} onChange={(event) => setSalesFilters({ ...salesFilters, date: event.target.value })} />
@@ -5204,30 +5659,200 @@ function App() {
                   {pageLoading.sales && <span className="status-badge due">Loading</span>}
                   <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
                 </div>
-                {visibleSales.length ? (
+                {customerSalesGroups.length ? (
                   <motion.div 
                     variants={listVariants}
                     initial="hidden"
                     whileInView="visible"
                     viewport={{ once: true, margin: "-10px" }}
-                    className="table panel"
+                    className="space-y-3.5"
                   >
-                    {visibleSales.map((sale) => (
-                      <motion.div variants={itemVariants} className="row" key={sale.id}>
-                        <span><b>{sale.customer_name}</b><small title={sale.product_name}>{productName(sale)} · {sale.shop_name} · {sale.price_type || 'retail'} · {sale.payment_mode || 'cash'}</small></span>
-                        <span>{currency(sale.total_amount)}</span>
-                        <span>{currency(sale.paid_amount)}</span>
-                        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-                          <strong className={`status-badge ${sale.pending_amount > 0 ? 'pending' : 'paid'}`}>{currency(sale.pending_amount)}</strong>
-                          <span className="sale-row-actions">
-                            <button className="soft" type="button" onClick={() => printTaxInvoicePDF(sale)}><ReceiptText size={16} /> Invoice</button>
-                            {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
-                              <button className="soft sale-delete-action" type="button" onClick={() => deleteSale(sale)}><Trash2 size={16} /> Delete</button>
-                            )}
-                          </span>
-                        </span>
-                      </motion.div>
-                    ))}
+                    {customerSalesGroups.map((group) => {
+                      const groupKey = String(group.customer_id || group.customer_name);
+                      const isExpanded = expandedSaleId === groupKey;
+
+                      return (
+                        <motion.div 
+                          variants={itemVariants} 
+                          key={groupKey}
+                          className={`bg-white border transition-all rounded-2xl p-4 shadow-2xs ${
+                            isExpanded ? 'border-teal-500/80 ring-2 ring-teal-500/10' : 'border-slate-200/80 hover:border-slate-300'
+                          }`}
+                        >
+                          {/* Main Customer Group Card */}
+                          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3.5 items-center">
+                            {/* Left: Customer Info & Invoices Count */}
+                            <div className="lg:col-span-4 space-y-1.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h3 className="text-sm font-black text-slate-800 tracking-tight">{group.customer_name}</h3>
+                                <span className="px-2 py-0.5 rounded-lg text-[10.5px] font-black bg-teal-50 text-teal-800 border border-teal-200">
+                                  {group.total_invoices} {group.total_invoices === 1 ? 'Invoice' : 'Invoices'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-500 font-medium">
+                                {group.mobile ? `Mobile: ${group.mobile}` : 'No mobile number'}
+                                {group.shop_name ? ` · ${group.shop_name}` : ''}
+                              </p>
+                              <p className="text-[11px] text-slate-400 font-medium">
+                                Last Purchase: <strong className="text-slate-700 font-bold">{formatDateDMY(group.last_purchase_date)}</strong>
+                              </p>
+                            </div>
+
+                            {/* Middle: Financials (Total Purchases, Paid, Pending) */}
+                            <div className="lg:col-span-5 grid grid-cols-3 gap-2 text-center sm:text-left bg-slate-50/90 p-3 rounded-xl border border-slate-100">
+                              <div>
+                                <span className="block text-[10px] uppercase font-bold text-slate-400">Total Purchases</span>
+                                <strong className="text-xs font-black text-slate-900">{currency(group.total_purchase_amount)}</strong>
+                              </div>
+                              <div>
+                                <span className="block text-[10px] uppercase font-bold text-slate-400">Paid</span>
+                                <span className="text-xs font-bold text-emerald-700">{currency(group.total_paid)}</span>
+                              </div>
+                              <div>
+                                <span className="block text-[10px] uppercase font-bold text-slate-400">Pending</span>
+                                <span className={`text-xs font-black ${Number(group.total_pending) > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                                  {currency(group.total_pending)}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Right: Actions */}
+                            <div className="lg:col-span-3 flex items-center justify-end gap-2 flex-wrap">
+                              <button 
+                                className={`px-3 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs ${
+                                  isExpanded 
+                                    ? 'bg-teal-600 text-white border-teal-600' 
+                                    : 'bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-200'
+                                }`}
+                                type="button" 
+                                onClick={() => setExpandedSaleId(isExpanded ? null : groupKey)}
+                              >
+                                <Eye size={15} /> {isExpanded ? 'Hide Details' : `View Details (${group.total_invoices})`}
+                              </button>
+
+                              {group.invoices.length > 0 && (
+                                <button 
+                                  className="px-2.5 py-2 text-xs font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                                  type="button"
+                                  title="Print Consolidated Customer Invoice"
+                                  onClick={() => printCustomerInvoicePDF(group.invoices[0])}
+                                >
+                                  <ReceiptText size={15} /> All Invoices
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Expandable Details: List of all Invoices for this customer */}
+                          {isExpanded && (
+                            <div className="mt-4 pt-4 border-t border-slate-100 space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-black uppercase tracking-wider text-slate-700">
+                                  Customer Purchase Invoices ({group.invoices.length})
+                                </span>
+                              </div>
+
+                              <div className="space-y-3">
+                                {group.invoices.map((sale) => {
+                                  const saleItems = (Array.isArray(sale.items) && sale.items.length > 0)
+                                    ? sale.items
+                                    : [{
+                                        id: sale.product_id || sale.id,
+                                        product_name: productName(sale),
+                                        quantity: sale.quantity || 1,
+                                        unit_price: Number(sale.products_total || sale.total_amount || 0) / Number(sale.quantity || 1),
+                                        total_price: sale.products_total || sale.total_amount,
+                                        price_type: sale.price_type || 'retail',
+                                        colour: sale.colour,
+                                      }];
+                                  const invNumber = `INV-${String(sale.id).padStart(6, '0')}`;
+                                  const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
+
+                                  return (
+                                    <div key={sale.id} className="bg-slate-50/80 border border-slate-200/80 rounded-xl p-3.5 space-y-2.5">
+                                      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/60 pb-2">
+                                        <div className="flex items-center gap-2">
+                                          <span className="px-2 py-0.5 rounded-lg text-[11px] font-black bg-teal-100/70 text-teal-800 border border-teal-200">
+                                            {invNumber}
+                                          </span>
+                                          <span className="text-xs font-bold text-slate-700">
+                                            Date: {formatDateDMY(sale.invoice_date || sale.sale_date)}
+                                          </span>
+                                          <span className="text-[11px] text-slate-400 font-medium">
+                                            · Due: {sale.due_date ? formatDateDMY(sale.due_date) : 'Not set'}
+                                          </span>
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
+                                          <strong className="text-xs font-black text-slate-900">{currency(sale.total_amount)}</strong>
+                                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                            Number(sale.pending_amount) > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                                          }`}>
+                                            {Number(sale.pending_amount) > 0 ? `Pending: ${currency(sale.pending_amount)}` : 'Fully Paid'}
+                                          </span>
+
+                                          <button 
+                                            className="px-2 py-1 text-xs font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                            type="button"
+                                            onClick={() => printTaxInvoicePDF(sale)}
+                                          >
+                                            <ReceiptText size={13} /> Invoice
+                                          </button>
+
+                                          {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
+                                            <button 
+                                              className="p-1 text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-lg border border-slate-200 cursor-pointer transition-colors"
+                                              type="button"
+                                              title="Delete this invoice"
+                                              onClick={() => deleteSale(sale)}
+                                            >
+                                              <Trash2 size={13} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      </div>
+
+                                      {/* Products List in this Invoice */}
+                                      <div className="space-y-1 pl-1">
+                                        <span className="text-[10.5px] font-bold uppercase text-slate-400 block">Products</span>
+                                        {saleItems.map((it, itIdx) => (
+                                          <div key={it.id || itIdx} className="flex items-center justify-between text-xs text-slate-700 py-0.5">
+                                            <div className="flex items-center gap-1.5">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
+                                              <span className="font-bold">{it.product_name || it.name || productName(it)}</span>
+                                              {it.colour && (
+                                                <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
+                                                  ● {it.colour}
+                                                </span>
+                                              )}
+                                              <span className="text-slate-400 text-[11px]">· Qty: {it.quantity || 1} pcs</span>
+                                            </div>
+                                            <span className="font-bold text-slate-900">
+                                              {currency(it.total_price || (Number(it.unit_price || 0) * Number(it.quantity || 1)))}
+                                            </span>
+                                          </div>
+                                        ))}
+
+                                        {expensesList.length > 0 && (
+                                          <div className="pt-1 text-[11px] text-teal-800 font-semibold flex items-center gap-2">
+                                            <span>Extra Expenses:</span>
+                                            {expensesList.map((e, eIdx) => (
+                                              <span key={e.id || eIdx} className="bg-teal-50 px-1.5 py-0.5 rounded border border-teal-200 text-[10px]">
+                                                {e.expense_name}: {currency(e.amount)}
+                                              </span>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </motion.div>
+                      );
+                    })}
                   </motion.div>
                 ) : (
                   <Empty title="No sales records found" />
@@ -5278,89 +5903,302 @@ function App() {
           {active === 'payments' && (
             <PageWrapper activeKey="payments" key="payments">
               <section className="space">
-                <div className="catalog-toolbar panel sales-toolbar">
-                  <div className="searchbox">
-                    <Search size={18} />
-                    <input
-                      placeholder="Search customer, mobile, model, brand, or shop"
+                {/* 1. COLLECTIONS KPI HEADER */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
+                  {/* Card 1: Total Pending Receivables */}
+                  <div className="bg-gradient-to-br from-white via-teal-50/20 to-teal-50/50 p-4 rounded-2xl border border-teal-200/80 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-teal-800">Pending Collections</span>
+                      <div className="w-8 h-8 rounded-xl bg-teal-100/80 text-teal-700 flex items-center justify-center font-bold">
+                        <IndianRupee size={16} />
+                      </div>
+                    </div>
+                    <div className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                      {currency(pendingMetrics.totalPendingAmount)}
+                    </div>
+                    <p className="text-[11.5px] text-slate-500 font-medium mt-1">
+                      Across {pendingMetrics.totalPendingInvoices} unpaid {pendingMetrics.totalPendingInvoices === 1 ? 'invoice' : 'invoices'}
+                    </p>
+                  </div>
+
+                  {/* Card 2: Total Debtors / Customers */}
+                  <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-600">Debtor Accounts</span>
+                      <div className="w-8 h-8 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
+                        <Users size={16} />
+                      </div>
+                    </div>
+                    <div className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                      {pendingMetrics.totalCustomers}
+                    </div>
+                    <p className="text-[11.5px] text-slate-500 font-medium mt-1">
+                      Customers with pending dues
+                    </p>
+                  </div>
+
+                  {/* Card 3: Overdue Customers */}
+                  <div className="bg-gradient-to-br from-white via-rose-50/20 to-rose-50/50 p-4 rounded-2xl border border-rose-200/80 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-800">Overdue Customers</span>
+                      <div className="w-8 h-8 rounded-xl bg-rose-100/80 text-rose-700 flex items-center justify-center font-bold">
+                        <AlertTriangle size={16} />
+                      </div>
+                    </div>
+                    <div className="text-xl sm:text-2xl font-black text-rose-700 tracking-tight">
+                      {pendingMetrics.overdueCustomers}
+                    </div>
+                    <p className="text-[11.5px] text-rose-600 font-medium mt-1">
+                      {pendingMetrics.overdueCustomers > 0 ? 'Requires immediate reminder' : 'Zero overdue dues'}
+                    </p>
+                  </div>
+
+                  {/* Card 4: Due Today & Invoices */}
+                  <div className="bg-gradient-to-br from-white via-amber-50/20 to-amber-50/50 p-4 rounded-2xl border border-amber-200/80 shadow-2xs">
+                    <div className="flex items-center justify-between text-slate-500 mb-1.5">
+                      <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-800">Due Today</span>
+                      <div className="w-8 h-8 rounded-xl bg-amber-100/80 text-amber-700 flex items-center justify-center font-bold">
+                        <Clock size={16} />
+                      </div>
+                    </div>
+                    <div className="text-xl sm:text-2xl font-black text-amber-800 tracking-tight">
+                      {pendingMetrics.dueTodayCustomers}
+                    </div>
+                    <p className="text-[11.5px] text-amber-700 font-medium mt-1">
+                      Scheduled for follow-up today
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. SEARCH & FILTER TOOLBAR */}
+                <div className="bg-white p-3 rounded-2xl border border-slate-200/80 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+                  {/* Search box */}
+                  <div className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200 flex-1 max-w-md">
+                    <Search size={16} className="text-slate-400 shrink-0" />
+                    <input 
+                      className="bg-transparent text-xs w-full focus:outline-none text-slate-800 font-medium placeholder:text-slate-400"
+                      placeholder="Search customer, mobile, shop, or product..."
                       value={pendingFilters.search}
-                      onChange={(event) => setPendingFilters({ ...pendingFilters, search: event.target.value })}
+                      onChange={(e) => setPendingFilters({ ...pendingFilters, search: e.target.value })}
                     />
                   </div>
-                  <input type="date" value={pendingFilters.date} onChange={(event) => setPendingFilters({ ...pendingFilters, date: event.target.value })} />
-                  {pageLoading.pending && <span className="status-badge due">Loading</span>}
-                  <span className="status-badge stock-ok">{pendingPager.loaded ? pendingPager.total.toLocaleString('en-IN') : data.pending.length} pending</span>
+
+                  {/* Date Filter & Status Filter Chips */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <input 
+                      type="date" 
+                      className="text-xs px-2.5 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-slate-700 font-medium focus:outline-none"
+                      value={pendingFilters.date} 
+                      onChange={(event) => setPendingFilters({ ...pendingFilters, date: event.target.value })} 
+                    />
+
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setPendingStatusFilter('all')}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                          pendingStatusFilter === 'all'
+                            ? 'bg-slate-900 text-white shadow-2xs'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}
+                      >
+                        All ({data.pending.length})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPendingStatusFilter('overdue')}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1 ${
+                          pendingStatusFilter === 'overdue'
+                            ? 'bg-rose-600 text-white shadow-2xs'
+                            : 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
+                        }`}
+                      >
+                        🔴 Overdue ({pendingMetrics.overdueCustomers})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPendingStatusFilter('due_today')}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1 ${
+                          pendingStatusFilter === 'due_today'
+                            ? 'bg-amber-600 text-white shadow-2xs'
+                            : 'bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200'
+                        }`}
+                      >
+                        🟠 Due Today ({pendingMetrics.dueTodayCustomers})
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPendingStatusFilter('upcoming')}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1 ${
+                          pendingStatusFilter === 'upcoming'
+                            ? 'bg-emerald-600 text-white shadow-2xs'
+                            : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                        }`}
+                      >
+                        🟢 Upcoming ({Math.max(0, pendingMetrics.totalCustomers - pendingMetrics.overdueCustomers - pendingMetrics.dueTodayCustomers)})
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <motion.div 
-                  variants={listVariants}
-                  initial="hidden"
-                  animate="visible"
-                  className="payment-list"
-                >
-                  {data.pending.map((item) => (
-                    <motion.article 
-                      variants={itemVariants}
-                      className={`panel payment-card ${expandedPaymentId === String(item.id) ? 'expanded' : ''}`} 
-                      key={item.id}
-                    >
-                      <div>
-                        <h3>{item.customer_name}</h3>
-                        <p>{item.items?.length || 1} pending purchase{(item.items?.length || 1) === 1 ? '' : 's'} · {item.shop_name}</p>
-                      </div>
-                      <strong>{currency(item.pending_amount)}</strong>
-                      <span className="status-badge due">Due {item.due_date || 'not set'}</span>
-                      <input placeholder="Payment amount" type="number" value={forms.payment.sale_id === String(item.id) ? forms.payment.amount : ''} onChange={(e) => setForms({ ...forms, payment: { ...forms.payment, sale_id: String(item.id), amount: e.target.value } })} />
-                      <div className="actions">
-                        <button className="soft" type="button" onClick={() => printCustomerInvoicePDF(item)}><ReceiptText size={17} /> Invoice</button>
-                        <button className="soft" type="button" onClick={() => setExpandedPaymentId(expandedPaymentId === String(item.id) ? '' : String(item.id))}><ReceiptText size={17} /> Ledger</button>
-                        <a className="soft" href={whatsappLink(item)} target="_blank" rel="noreferrer"><Send size={17} /> WhatsApp</a>
-                        <button className="primary" onClick={() => recordPayment(item)}><CreditCard size={17} /> Paid</button>
-                      </div>
-                      <div className="ledger-panel" aria-hidden={expandedPaymentId !== String(item.id)}>
-                        <div className="ledger-summary">
-                          <span><b>Sold</b><strong>{currency(item.total_amount)}</strong></span>
-                          <span><b>Paid</b><strong>{currency(item.paid_amount)}</strong></span>
-                          <span><b>Pending</b><strong>{currency(item.pending_amount)}</strong></span>
-                        </div>
-                        <div className="ledger-items">
-                          {(item.items || [item]).map((sale) => (
-                            <div className="ledger-item" key={sale.id}>
-                              <span>
-                                <b 
-                                  title="Click to view details" 
-                                  className="cursor-pointer hover:text-teal transition-colors"
-                                  style={{ cursor: 'pointer' }}
-                                  onClick={() => {
-                                    const prod = data.products.find(p => Number(p.id) === Number(sale.product_id));
-                                    setSelectedProductDetails(prod || { ...sale, id: sale.product_id, name: sale.product_name });
-                                  }}
-                                >
-                                  {productName(sale)}
-                                </b>
-                                <small>{sale.quantity || 1} pcs · Purchased {sale.sale_date || 'date not set'} · Due {sale.due_date || 'not set'}</small>
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <strong>{currency(sale.pending_amount)}</strong>
-                                <button
-                                  type="button"
-                                  className="soft !text-rose-600 hover:!bg-rose-50 p-1.5 rounded-lg transition-all"
-                                  title="Delete this sale and restore stock"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    deleteSale(sale);
-                                  }}
-                                >
-                                  <Trash2 size={15} />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </motion.article>
-                  ))}
-                  {!data.pending.length && <Empty title="No pending payments" />}
-                </motion.div>
+
+                {/* 3. CUSTOMER COLLECTIONS LEDGER TABLE */}
+                {filteredPendingCustomers.length > 0 ? (
+                  <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50/90 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                            <th className="py-3.5 px-4">Customer &amp; Account</th>
+                            <th className="py-3.5 px-4 text-right">Pending Balance</th>
+                            <th className="py-3.5 px-4 text-center">Invoices</th>
+                            <th className="py-3.5 px-4">Last Invoice</th>
+                            <th className="py-3.5 px-4">Due Date &amp; Status</th>
+                            <th className="py-3.5 px-4 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredPendingCustomers.map((item) => {
+                            const dueInfo = getDueDateInfo(item.due_date);
+                            const invoiceCount = item.items?.length || 1;
+                            const lastPurchase = item.items?.[0]?.sale_date || item.items?.[0]?.invoice_date || item.sale_date;
+
+                            return (
+                              <tr key={item.id} className="hover:bg-slate-50/70 transition-colors group">
+                                {/* Customer info */}
+                                <td className="py-3.5 px-4">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-teal-50 text-teal-800 font-black text-xs flex items-center justify-center border border-teal-200 shrink-0">
+                                      {(item.customer_name || 'C').charAt(0).toUpperCase()}
+                                    </div>
+                                    <div>
+                                      <h4 
+                                        className="font-bold text-slate-900 text-sm hover:text-teal-700 transition-colors cursor-pointer"
+                                        onClick={() => setSelectedPaymentCustomer(item)}
+                                      >
+                                        {item.customer_name}
+                                      </h4>
+                                      <p className="text-[11.5px] text-slate-500">
+                                        {item.mobile || 'No phone'} {item.shop_name ? `· ${item.shop_name}` : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                </td>
+
+                                {/* Pending Balance */}
+                                <td className="py-3.5 px-4 text-right">
+                                  <strong className="text-sm font-black text-slate-900 block">
+                                    {currency(item.pending_amount)}
+                                  </strong>
+                                  <span className="text-[10.5px] text-slate-400">
+                                    Total: {currency(item.total_amount)}
+                                  </span>
+                                </td>
+
+                                {/* Invoices Count */}
+                                <td className="py-3.5 px-4 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedPaymentCustomer(item)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
+                                  >
+                                    <ReceiptText size={12} /> {invoiceCount} {invoiceCount === 1 ? 'Invoice' : 'Invoices'}
+                                  </button>
+                                </td>
+
+                                {/* Last Invoice */}
+                                <td className="py-3.5 px-4 font-medium text-slate-600">
+                                  {lastPurchase ? formatDateDMY(lastPurchase) : 'Not set'}
+                                </td>
+
+                                {/* Due Date & Status */}
+                                <td className="py-3.5 px-4">
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] border w-fit ${dueInfo.badgeClass}`}>
+                                      <span className="w-1.5 h-1.5 rounded-full bg-current"></span>
+                                      {dueInfo.label}
+                                    </span>
+                                    <span className="text-[10.5px] text-slate-400 pl-1">
+                                      Due: {item.due_date ? formatDateDMY(item.due_date) : 'Not set'}
+                                    </span>
+                                  </div>
+                                </td>
+
+                                {/* Actions */}
+                                <td className="py-3.5 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {/* Record Payment Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setPaymentModalTarget(item);
+                                        setPaymentModalForm({
+                                          amount: String(item.pending_amount || ''),
+                                          mode: 'cash',
+                                          reference_no: '',
+                                          note: '',
+                                        });
+                                      }}
+                                      className="px-2.5 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs shadow-2xs transition-all flex items-center gap-1 cursor-pointer"
+                                    >
+                                      <CreditCard size={13} /> Record Payment
+                                    </button>
+
+                                    {/* View Customer Drawer */}
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedPaymentCustomer(item)}
+                                      className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition-all cursor-pointer"
+                                      title="View Customer Ledger Drawer"
+                                    >
+                                      <Eye size={14} />
+                                    </button>
+
+                                    {/* WhatsApp & PDF Share Button */}
+                                    <button
+                                       type="button"
+                                       onClick={() => setShareModalTarget(item)}
+                                       className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                                       title="Share WhatsApp Reminder & Invoice PDF"
+                                     >
+                                       <Send size={12} /> Share
+                                     </button>
+
+                                    {/* Customer Invoice Statement Print */}
+                                    <button
+                                      type="button"
+                                      onClick={() => printCustomerInvoicePDF(item)}
+                                      className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition-all cursor-pointer"
+                                      title="Print Complete Statement"
+                                    >
+                                      <ReceiptText size={14} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  /* 10. MODERN EMPTY STATE */
+                  <div className="bg-white rounded-2xl border border-slate-200/80 p-12 text-center shadow-2xs">
+                    <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-3 border border-emerald-200 text-2xl">
+                      🎉
+                    </div>
+                    <h3 className="text-lg font-black text-slate-900 mb-1">
+                      No Pending Payments
+                    </h3>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                      All customer receivables and invoice balances are currently cleared.
+                    </p>
+                  </div>
+                )}
+
                 <Pagination
                   meta={pendingPager}
                   loading={pageLoading.pending}
@@ -5368,6 +6206,598 @@ function App() {
                   onPageSizeChange={(limit) => setPendingPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
                 />
               </section>
+
+              {/* 3. CUSTOMER DETAIL RIGHT-SIDE DRAWER (500px) */}
+              <AnimatePresence>
+                {selectedPaymentCustomer && (
+                  <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
+                    {/* Backdrop */}
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => setSelectedPaymentCustomer(null)}
+                      className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+                    />
+
+                    {/* Sliding Drawer */}
+                    <motion.div
+                      initial={{ x: '100%' }}
+                      animate={{ x: 0 }}
+                      exit={{ x: '100%' }}
+                      transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+                      className="relative w-full max-w-md md:max-w-lg bg-white h-full shadow-2xl z-10 flex flex-col"
+                    >
+                      {/* Drawer Header */}
+                      <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-lg font-black text-slate-900">
+                              {selectedPaymentCustomer.customer_name}
+                            </h3>
+                            <span className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                              Customer Ledger
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {selectedPaymentCustomer.mobile || 'No phone'} · {selectedPaymentCustomer.shop_name}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPaymentCustomer(null)}
+                          className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+
+                      {/* Drawer Body */}
+                      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+                        {/* Financial Balance Summary Card */}
+                        <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-sm space-y-3">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                            Total Outstanding Due
+                          </span>
+                          <div className="text-2xl font-black text-teal-400">
+                            {currency(selectedPaymentCustomer.pending_amount)}
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60 text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[10.5px]">Total Invoiced</span>
+                              <strong className="text-slate-200 font-bold">{currency(selectedPaymentCustomer.total_amount)}</strong>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[10.5px]">Total Paid</span>
+                              <strong className="text-emerald-400 font-bold">{currency(selectedPaymentCustomer.paid_amount)}</strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Invoices List */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                              Unpaid Invoices ({(selectedPaymentCustomer.items || [selectedPaymentCustomer]).length})
+                            </h4>
+                            <button
+                              type="button"
+                              onClick={() => printCustomerInvoicePDF(selectedPaymentCustomer)}
+                              className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1"
+                            >
+                              <ReceiptText size={13} /> Complete Statement
+                            </button>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            {(selectedPaymentCustomer.items || [selectedPaymentCustomer]).map((sale) => {
+                              const saleDueInfo = getDueDateInfo(sale.due_date);
+                              const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
+                              
+                              return (
+                                <div key={sale.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2.5 hover:border-slate-300 transition-all">
+                                  <div className="flex items-center justify-between">
+                                    <div>
+                                      <span className="font-mono font-black text-slate-900 text-xs">
+                                        {invNumber}
+                                      </span>
+                                      <span className="text-[11px] text-slate-500 ml-2">
+                                        {formatDateDMY(sale.sale_date || sale.invoice_date)}
+                                      </span>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
+                                      {saleDueInfo.label}
+                                    </span>
+                                  </div>
+
+                                  <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
+                                    <div>
+                                      <span className="text-slate-500 text-[11px]">Pending: </span>
+                                      <strong className="font-bold text-slate-900">{currency(sale.pending_amount)}</strong>
+                                      <span className="text-slate-400 text-[10.5px] ml-1.5">(Total: {currency(sale.total_amount)})</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => printTaxInvoicePDF(sale)}
+                                        className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                                      >
+                                        <ReceiptText size={12} /> Invoice
+                                      </button>
+                                      {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => deleteSale(sale)}
+                                          className="p-1 text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors"
+                                          title="Delete invoice and restore stock"
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Multi-product line items in this invoice */}
+                                  {(() => {
+                                    const invoiceProducts = Array.isArray(sale.items) && sale.items.length > 0
+                                      ? sale.items
+                                      : [{
+                                          id: 0,
+                                          product_name: sale.product_name || productName(sale),
+                                          quantity: sale.quantity || 1,
+                                          unit_price: Number(sale.total_amount || 0) / Math.max(1, Number(sale.quantity || 1)),
+                                          total_price: sale.total_amount,
+                                          colour: sale.colour
+                                        }];
+                                    const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
+
+                                    return (
+                                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 space-y-1.5">
+                                        <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                                          <span>Invoice Items ({invoiceProducts.length})</span>
+                                          <span>Line Total</span>
+                                        </div>
+                                        {invoiceProducts.map((it, itIdx) => {
+                                          const itemQty = Number(it.quantity || 1);
+                                          const itemUnit = Number(it.unit_price || 0) || (Number(it.total_price || 0) / Math.max(1, itemQty));
+                                          const itemLineTotal = Number(it.total_price || (itemUnit * itemQty));
+
+                                          return (
+                                            <div key={it.id || itIdx} className="flex items-center justify-between text-xs py-1 border-b border-slate-100 last:border-0">
+                                              <div>
+                                                <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                                                  <span className="w-1.5 h-1.5 rounded-full bg-teal-500 shrink-0"></span>
+                                                  <span>{it.product_name || it.name || productName(it)}</span>
+                                                  {it.colour && (
+                                                    <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
+                                                      ● {it.colour}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="text-[11px] text-slate-400 pl-3">
+                                                  Qty: {itemQty} pcs · Rate: {currency(itemUnit)}
+                                                </div>
+                                              </div>
+                                              <strong className="text-slate-900 font-bold text-xs shrink-0 ml-2">
+                                                {currency(itemLineTotal)}
+                                              </strong>
+                                            </div>
+                                          );
+                                        })}
+
+                                        {expensesList.length > 0 && (
+                                          <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[11px]">
+                                            <span className="text-[10px] font-bold text-teal-700 uppercase">Extra Expenses:</span>
+                                            {expensesList.map((exp, expIdx) => (
+                                              <div key={exp.id || expIdx} className="flex justify-between text-teal-800 font-medium">
+                                                <span>+ {exp.expense_name || exp.expense_type}</span>
+                                                <span>{currency(exp.amount)}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Drawer Sticky Footer Actions */}
+                      <div className="p-4 border-t border-slate-200 bg-slate-50/90 flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPaymentModalTarget(selectedPaymentCustomer);
+                            setPaymentModalForm({
+                              amount: String(selectedPaymentCustomer.pending_amount || ''),
+                              mode: 'cash',
+                              reference_no: '',
+                              note: '',
+                            });
+                          }}
+                          className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs shadow-2xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <CreditCard size={15} /> Record Payment
+                        </button>
+                        {/* Drawer Share Button */}
+                        <button
+                          type="button"
+                          onClick={() => setShareModalTarget(selectedPaymentCustomer)}
+                          className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        >
+                          <Send size={15} /> Share
+                        </button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
+
+              {/* 6. RECORD PAYMENT MODAL */}
+              <AnimatePresence>
+                {paymentModalTarget && (
+                  <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+                    {/* Modal Backdrop */}
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => setPaymentModalTarget(null)}
+                      className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs transition-opacity"
+                    />
+
+                    {/* Modal Content */}
+                    <motion.div
+                      initial={{ scale: 0.95, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.95, opacity: 0 }}
+                      className="relative bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 z-10 space-y-4"
+                    >
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
+                            <CreditCard size={16} />
+                          </div>
+                          <div>
+                            <h3 className="text-base font-black text-slate-900">Record Payment</h3>
+                            <p className="text-xs text-slate-500">Collect customer dues safely</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setPaymentModalTarget(null)}
+                          className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+
+                      {/* Customer & Due Details */}
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+                        <div>
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Customer</span>
+                          <strong className="text-sm font-bold text-slate-800">{paymentModalTarget.customer_name}</strong>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Pending Balance</span>
+                          <strong className="text-sm font-black text-rose-600">{currency(paymentModalTarget.pending_amount)}</strong>
+                        </div>
+                      </div>
+
+                      <form onSubmit={submitRecordPaymentModal} className="space-y-3.5">
+                        {/* Payment Amount Input & Quick Fill */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">
+                            Payment Amount (₹) <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="number"
+                            step="any"
+                            min="1"
+                            max={paymentModalTarget.pending_amount}
+                            required
+                            autoFocus
+                            placeholder="Enter amount"
+                            className="w-full text-base font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-900"
+                            value={paymentModalForm.amount}
+                            onChange={(e) => setPaymentModalForm({ ...paymentModalForm, amount: e.target.value })}
+                          />
+
+                          {/* Quick Chips */}
+                          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                            <button
+                              type="button"
+                              onClick={() => setPaymentModalForm({ ...paymentModalForm, amount: String(paymentModalTarget.pending_amount) })}
+                              className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-colors"
+                            >
+                              Full ({currency(paymentModalTarget.pending_amount)})
+                            </button>
+                            {Number(paymentModalTarget.pending_amount) > 1000 && (
+                              <button
+                                type="button"
+                                onClick={() => setPaymentModalForm({ ...paymentModalForm, amount: String(Math.round(Number(paymentModalTarget.pending_amount) / 2)) })}
+                                className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors"
+                              >
+                                50% ({currency(Math.round(Number(paymentModalTarget.pending_amount) / 2))})
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Payment Mode & Reference No */}
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Payment Mode</label>
+                            <select
+                              className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                              value={paymentModalForm.mode}
+                              onChange={(e) => setPaymentModalForm({ ...paymentModalForm, mode: e.target.value })}
+                            >
+                              <option value="cash">Cash</option>
+                              <option value="upi">UPI / GPay</option>
+                              <option value="bank">Bank Transfer</option>
+                              <option value="cheque">Cheque</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">Reference No</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. UPI Ref / Txn ID"
+                              className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                              value={paymentModalForm.reference_no}
+                              onChange={(e) => setPaymentModalForm({ ...paymentModalForm, reference_no: e.target.value })}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Notes */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Payment Notes (Optional)</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Received by store manager"
+                            className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                            value={paymentModalForm.note}
+                            onChange={(e) => setPaymentModalForm({ ...paymentModalForm, note: e.target.value })}
+                          />
+                        </div>
+
+                        {/* Submit Button */}
+                        <div className="pt-2 flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setPaymentModalTarget(null)}
+                            className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={saving}
+                            className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Check size={14} /> {saving ? 'Recording...' : 'Save Payment'}
+                          </button>
+                        </div>
+                      </form>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
+
+              {/* 7. SHARE DOCUMENTS & WHATSAPP MODAL */}
+              <AnimatePresence>
+                {shareModalTarget && (
+                  <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+                    {/* Modal Backdrop */}
+                    <motion.div 
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      onClick={() => setShareModalTarget(null)}
+                      className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
+                    />
+
+                    {/* Modal Content */}
+                    <motion.div
+                      initial={{ scale: 0.95, opacity: 0, y: 10 }}
+                      animate={{ scale: 1, opacity: 1, y: 0 }}
+                      exit={{ scale: 0.95, opacity: 0, y: 10 }}
+                      className="relative bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 z-10 space-y-5"
+                    >
+                      {/* Header */}
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shadow-2xs">
+                            <Send size={18} />
+                          </div>
+                          <div>
+                            <h3 className="text-base font-black text-slate-900">
+                              Share Documents &amp; Reminder
+                            </h3>
+                            <p className="text-xs text-slate-500 font-medium">
+                              Customer: <strong className="text-slate-800">{shareModalTarget.customer_name || shareModalTarget.name}</strong> · Pending: <strong className="text-rose-600 font-bold">{currency(shareModalTarget.pending_amount)}</strong>
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setShareModalTarget(null)}
+                          className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-colors"
+                        >
+                          <X size={18} />
+                        </button>
+                      </div>
+
+                      {/* Action 1: Recommended Primary Button */}
+                      <button
+                        type="button"
+                        disabled={shareModalLoading}
+                        onClick={async () => {
+                          setShareModalLoading(true);
+                          try {
+                            await shareToWhatsAppService({
+                              customer: shareModalTarget,
+                              type: 'invoice_and_reminder',
+                              sale: shareModalTarget.items?.[0] || shareModalTarget,
+                              shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
+                              authedFetch,
+                              showToast,
+                            });
+                            setShareModalTarget(null);
+                          } catch (e) {
+                            showToast('Sharing error: ' + e.message);
+                          } finally {
+                            setShareModalLoading(false);
+                          }
+                        }}
+                        className="w-full p-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-2xl font-bold text-sm shadow-md transition-all flex items-center justify-between group cursor-pointer"
+                      >
+                        <div className="flex items-center gap-3 text-left">
+                          <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
+                            <Send size={16} />
+                          </div>
+                          <div>
+                            <span className="block font-black text-white">Send Invoice PDF + WhatsApp Reminder</span>
+                            <span className="text-[11px] text-emerald-100 font-normal">Auto-generates PDF, pre-fills message &amp; opens WhatsApp</span>
+                          </div>
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-black uppercase tracking-wider text-white">
+                          Default
+                        </span>
+                      </button>
+
+                      {/* Secondary Document Options */}
+                      <div className="space-y-2">
+                        <span className="text-[10.5px] font-black uppercase text-slate-400 tracking-wider block">
+                          Individual Document Options
+                        </span>
+                        <div className="grid grid-cols-2 gap-2">
+                          {/* Tax Invoice PDF */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              shareToWhatsAppService({
+                                customer: shareModalTarget,
+                                type: 'invoice_pdf',
+                                sale: shareModalTarget.items?.[0] || shareModalTarget,
+                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
+                                authedFetch,
+                                showToast,
+                              });
+                              setShareModalTarget(null);
+                            }}
+                            className="p-3 bg-slate-50 hover:bg-teal-50/60 border border-slate-200 hover:border-teal-200 rounded-2xl text-left transition-all cursor-pointer group"
+                          >
+                            <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
+                              <FileText size={14} />
+                            </div>
+                            <strong className="text-xs font-bold text-slate-900 block">Tax Invoice PDF</strong>
+                            <span className="text-[10px] text-slate-400 block">Download official invoice</span>
+                          </button>
+
+                          {/* Account Statement */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              shareToWhatsAppService({
+                                customer: shareModalTarget,
+                                type: 'statement',
+                                sale: shareModalTarget.items?.[0] || shareModalTarget,
+                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
+                                authedFetch,
+                                showToast,
+                              });
+                              setShareModalTarget(null);
+                            }}
+                            className="p-3 bg-slate-50 hover:bg-indigo-50/60 border border-slate-200 hover:border-indigo-200 rounded-2xl text-left transition-all cursor-pointer group"
+                          >
+                            <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
+                              <ReceiptText size={14} />
+                            </div>
+                            <strong className="text-xs font-bold text-slate-900 block">Account Statement</strong>
+                            <span className="text-[10px] text-slate-400 block">Multi-invoice summary PDF</span>
+                          </button>
+
+                          {/* Customer Ledger */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              shareToWhatsAppService({
+                                customer: shareModalTarget,
+                                type: 'ledger',
+                                sale: shareModalTarget.items?.[0] || shareModalTarget,
+                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
+                                authedFetch,
+                                showToast,
+                              });
+                              setShareModalTarget(null);
+                            }}
+                            className="p-3 bg-slate-50 hover:bg-amber-50/60 border border-slate-200 hover:border-amber-200 rounded-2xl text-left transition-all cursor-pointer group"
+                          >
+                            <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
+                              <BarChart3 size={14} />
+                            </div>
+                            <strong className="text-xs font-bold text-slate-900 block">Customer Ledger</strong>
+                            <span className="text-[10px] text-slate-400 block">Running debit/credit balance</span>
+                          </button>
+
+                          {/* WhatsApp Reminder Text Only */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              shareToWhatsAppService({
+                                customer: shareModalTarget,
+                                type: 'reminder_only',
+                                sale: shareModalTarget.items?.[0] || shareModalTarget,
+                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
+                                authedFetch,
+                                showToast,
+                              });
+                              setShareModalTarget(null);
+                            }}
+                            className="p-3 bg-slate-50 hover:bg-emerald-50/60 border border-slate-200 hover:border-emerald-200 rounded-2xl text-left transition-all cursor-pointer group"
+                          >
+                            <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
+                              <Send size={14} />
+                            </div>
+                            <strong className="text-xs font-bold text-slate-900 block">Reminder Only</strong>
+                            <span className="text-[10px] text-slate-400 block">Send text without PDF</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Message Preview Box */}
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400">
+                          <span>WhatsApp Text Preview</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const msg = `Dear ${shareModalTarget.customer_name || shareModalTarget.name},\n\nThis is a friendly reminder from Warehouse (Pinky Sales).\n\nOutstanding Balance: Rs. ${Number(shareModalTarget.pending_amount || 0).toLocaleString('en-IN')}\nDue Date: ${shareModalTarget.due_date ? new Date(shareModalTarget.due_date).toLocaleDateString('en-GB') : 'Earliest'}\n\nPlease find your official invoice document attached.\n\nKindly arrange payment at your earliest convenience. Thank you!`;
+                              navigator.clipboard.writeText(msg);
+                              showToast('Reminder text copied to clipboard!');
+                            }}
+                            className="text-teal-700 hover:text-teal-800 font-bold flex items-center gap-1 cursor-pointer"
+                          >
+                            Copy Text
+                          </button>
+                        </div>
+                        <p className="text-slate-600 text-[11px] leading-relaxed font-mono whitespace-pre-line bg-white p-2 rounded-lg border border-slate-200">
+                          {`Dear ${shareModalTarget.customer_name || shareModalTarget.name},\nOutstanding Balance: Rs. ${Number(shareModalTarget.pending_amount || 0).toLocaleString('en-IN')}\nPlease find the invoice attached. Thank you!`}
+                        </p>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
             </PageWrapper>
           )}
 
