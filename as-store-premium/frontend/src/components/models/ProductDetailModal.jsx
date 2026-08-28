@@ -28,7 +28,9 @@ import {
   ChevronDown,
   ChevronUp,
   Calculator,
-  Calendar
+  Calendar,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { getCategoryIconInfo } from '../ui/ProductThumbnail';
 import { calculateConsolidatedProduct } from '../../utils/productConsolidation';
@@ -68,6 +70,7 @@ export default function ProductDetailModal({
   const isSupplier = role === 'supplier';
   const canViewWholesale = isSuperAdmin || isSupplier || Boolean(priceVisibility?.show_wholesale_price_shopkeeper) || isShopkeeper;
   const canViewPurchase = !isSupplier && (isSuperAdmin || Boolean(priceVisibility?.show_purchase_price_shopkeeper));
+  const [showWholesale, setShowWholesale] = useState(!isShopkeeper);
 
   // Normalize image list across all possible schema variations
   const imageList = useMemo(() => {
@@ -465,9 +468,21 @@ export default function ProductDetailModal({
                   </div>
 
                   <div className="p-3 rounded-2xl bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-800/50 flex flex-col justify-between">
-                    <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-700 dark:text-indigo-400">Wholesale</span>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] uppercase font-extrabold tracking-wider text-indigo-700 dark:text-indigo-400">Wholesale</span>
+                      {canViewWholesale && (
+                        <button
+                          type="button"
+                          onClick={() => setShowWholesale((prev) => !prev)}
+                          className="text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 p-0.5 rounded cursor-pointer transition-colors"
+                          title={showWholesale ? "Hide wholesale price" : "Show wholesale price"}
+                        >
+                          {showWholesale ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                        </button>
+                      )}
+                    </div>
                     <span className="text-xl font-black text-indigo-950 dark:text-indigo-200 mt-1">
-                      {canViewWholesale && wholesalePrice > 0 ? priceLabel(wholesalePrice) : '—'}
+                      {canViewWholesale && wholesalePrice > 0 ? (showWholesale ? priceLabel(wholesalePrice) : '••••••') : '—'}
                     </span>
                   </div>
 
