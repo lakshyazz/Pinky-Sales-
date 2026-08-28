@@ -47,6 +47,9 @@ import {
   Calendar,
   Filter,
   X,
+  Wrench,
+  Cpu,
+  Layers,
 } from 'lucide-react';
 import ModelsPage from './components/models/ModelsPage';
 import ProductDetailModal from './components/models/ProductDetailModal';
@@ -354,47 +357,63 @@ const groupPendingPayments = (rows = []) => {
 const navByRole = {
   superadmin: [
     ['dashboard', 'Dashboard', BarChart3],
+    ['prices', 'Prices', IndianRupee],
     ['stock', 'Stock', Package],
+    ['customers', 'Customers', Users],
+    ['sales', 'Sales', ReceiptText],
+    ['payments', 'Pending', CreditCard],
+    ['tools', 'Tools', Wrench],
+    ['spares', 'Spares', Cpu],
+    ['oca-glass', 'OCA glass', Layers],
+    ['other-category', 'Other category', LayoutGrid],
     ['low-stock', 'Low Stock', AlertTriangle],
+    ['requests', 'Stock Requisitions', Boxes],
+    ['models', 'Models', Smartphone],
     ['brands', 'Brands', Tags],
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['suppliers', 'Suppliers', Users],
-    ['models', 'Models', Smartphone],
-    ['prices', 'Prices', IndianRupee],
     ['categories', 'Product Categories', Store],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
     ['import', 'Supplier Import', UploadCloud],
-    ['customers', 'Customers', Users],
-    ['sales', 'Sales', ReceiptText],
-    ['requests', 'Stock Requisitions', Boxes],
-    ['payments', 'Pending', CreditCard],
     ['reports', 'Reports', FileText],
   ],
   shopkeeper: [
     ['dashboard', 'Dashboard', BarChart3],
-    ['order-stock', 'Order Stock', ShoppingCart],
-    ['requests', 'My Requisitions', History],
-    ['stock', 'Stock', Package],
-    ['low-stock', 'Low Stock', AlertTriangle],
-    ['brands', 'Brands', Tags],
-    ['manufacturing-brands', 'Manufacturing Brands', Tags],
-    ['suppliers', 'Suppliers', Users],
-    ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
-    ['categories', 'Product Categories', Store],
+    ['stock', 'Stock', Package],
     ['customers', 'Customers', Users],
     ['sales', 'Create Sale', ReceiptText],
     ['payments', 'Pending', CreditCard],
+    ['tools', 'Tools', Wrench],
+    ['spares', 'Spares', Cpu],
+    ['oca-glass', 'OCA glass', Layers],
+    ['other-category', 'Other category', LayoutGrid],
+    ['low-stock', 'Low Stock', AlertTriangle],
+    ['order-stock', 'Order Stock', ShoppingCart],
+    ['requests', 'My Requisitions', History],
+    ['models', 'Models', Smartphone],
+    ['brands', 'Brands', Tags],
+    ['manufacturing-brands', 'Manufacturing Brands', Tags],
+    ['suppliers', 'Suppliers', Users],
+    ['categories', 'Product Categories', Store],
     ['reports', 'Reports', FileText],
   ],
   supplier: [
     ['dashboard', 'Dashboard', BarChart3],
-    ['models', 'Models', Smartphone],
     ['prices', 'Prices', IndianRupee],
+    ['tools', 'Tools', Wrench],
+    ['spares', 'Spares', Cpu],
+    ['oca-glass', 'OCA glass', Layers],
+    ['other-category', 'Other category', LayoutGrid],
+    ['models', 'Models', Smartphone],
   ],
   customer: [
     ['catalog', 'Catalog', ShoppingBag],
+    ['tools', 'Tools', Wrench],
+    ['spares', 'Spares', Cpu],
+    ['oca-glass', 'OCA glass', Layers],
+    ['other-category', 'Other category', LayoutGrid],
     ['models', 'Models', Smartphone],
   ],
 };
@@ -403,27 +422,86 @@ navByRole.user = navByRole.customer;
 
 const sidebarSectionsByRole = {
   superadmin: [
-    { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Inventory', ids: ['stock', 'low-stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
-    { title: 'Operations', ids: ['shops', 'shopkeepers', 'import', 'customers', 'sales', 'requests', 'payments'] },
+    { title: 'Overview', ids: ['dashboard'] },
+    { title: 'Operations', ids: ['prices', 'stock', 'customers', 'sales', 'payments', 'tools', 'spares', 'oca-glass', 'other-category'] },
+    { title: 'Inventory & Catalog', ids: ['low-stock', 'requests', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
+    { title: 'Management', ids: ['shops', 'shopkeepers', 'import'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   shopkeeper: [
-    { title: 'Dashboard', ids: ['dashboard'] },
-    { title: 'Stock Replenishment', ids: ['order-stock', 'requests'] },
-    { title: 'Inventory', ids: ['stock', 'low-stock', 'prices', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
-    { title: 'Operations', ids: ['customers', 'sales', 'payments'] },
+    { title: 'Overview', ids: ['dashboard'] },
+    { title: 'Operations', ids: ['prices', 'stock', 'customers', 'sales', 'payments', 'tools', 'spares', 'oca-glass', 'other-category'] },
+    { title: 'Stock Replenishment', ids: ['low-stock', 'order-stock', 'requests'] },
+    { title: 'Catalog & Brands', ids: ['models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   supplier: [
-    { title: 'Catalog & Prices', ids: ['dashboard', 'models', 'prices'] },
+    { title: 'Overview', ids: ['dashboard'] },
+    { title: 'Catalog & Prices', ids: ['prices', 'tools', 'spares', 'oca-glass', 'other-category', 'models'] },
   ],
   customer: [
-    { title: 'Catalog', ids: ['catalog', 'models'] },
+    { title: 'Catalog', ids: ['catalog', 'tools', 'spares', 'oca-glass', 'other-category', 'models'] },
   ],
 };
 sidebarSectionsByRole.admin = sidebarSectionsByRole.shopkeeper;
 sidebarSectionsByRole.user = sidebarSectionsByRole.customer;
+
+const isToolsCategory = (p) => {
+  const cat = String(p?.part_category || p?.part_category_name || p?.category || '').trim().toLowerCase();
+  const name = String(p?.short_name || p?.name || '').toLowerCase();
+  return cat.includes('tool') || 
+         cat.includes('blade') || 
+         cat.includes('cutter') || 
+         cat.includes('tweezer') || 
+         cat.includes('cleaning') || 
+         cat.includes('solvent') || 
+         cat.includes('machine') || 
+         cat.includes('soldering') || 
+         cat.includes('screw') || 
+         cat.includes('opening') ||
+         name.includes('screw') ||
+         name.includes('tweezer') ||
+         name.includes('opener');
+};
+
+const isSparesCategory = (p) => {
+  const cat = String(p?.part_category || p?.part_category_name || p?.category || '').trim().toLowerCase();
+  const name = String(p?.short_name || p?.name || '').toLowerCase();
+  return cat.includes('spare') || 
+         cat.includes('flex') || 
+         cat.includes('ic') || 
+         cat.includes('camera') || 
+         cat.includes('battery') || 
+         cat.includes('charging') || 
+         cat.includes('speaker') || 
+         cat.includes('sim') || 
+         cat.includes('housing') || 
+         cat.includes('button') || 
+         cat.includes('pcb') || 
+         cat.includes('mic') || 
+         cat.includes('ringer') || 
+         cat.includes('vibrat') ||
+         cat.includes('sensor');
+};
+
+const isOcaGlassCategory = (p) => {
+  const cat = String(p?.part_category || p?.part_category_name || p?.category || '').trim().toLowerCase();
+  const name = String(p?.short_name || p?.name || '').toLowerCase();
+  return cat.includes('oca') || 
+         cat.includes('glass') || 
+         cat.includes('touch') || 
+         name.includes('oca') || 
+         (name.includes('glass') && !name.includes('back glass') && !cat.includes('display'));
+};
+
+const isDisplayCategory = (p) => {
+  const cat = String(p?.part_category || p?.part_category_name || p?.category || '').trim().toLowerCase();
+  return cat.includes('display') || cat.includes('combo') || cat.includes('folder') || cat.includes('screen') || cat.includes('lcd') || cat.includes('oled') || cat.includes('tft') || cat.includes('in-cell');
+};
+
+const isOtherCategory = (p) => {
+  return !isToolsCategory(p) && !isSparesCategory(p) && !isOcaGlassCategory(p) && !isDisplayCategory(p);
+};
 
 const pageMetaById = {
   dashboard: {
@@ -481,6 +559,26 @@ const pageMetaById = {
     title: 'Stock Prices',
     description: 'Review and edit purchase, selling, and wholesale prices from the product catalog.',
   },
+  tools: {
+    group: 'Operations',
+    title: 'Tools',
+    description: 'Browse repair tools, opening kits, soldering items, screwdrivers, and workshop equipment.',
+  },
+  spares: {
+    group: 'Operations',
+    title: 'Spares',
+    description: 'Browse replacement flex cables, ICs, charging ports, cameras, batteries, and hardware spare parts.',
+  },
+  'oca-glass': {
+    group: 'Operations',
+    title: 'OCA glass',
+    description: 'Browse OCA sheets, outer glass, touch digitizers, and lamination consumables.',
+  },
+  'other-category': {
+    group: 'Operations',
+    title: 'Other category',
+    description: 'Browse all other specialized product categories, accessories, and consumables.',
+  },
   'categories': {
     group: 'Inventory',
     title: 'Product Categories',
@@ -523,7 +621,7 @@ const pageMetaById = {
   },
 };
 
-const validPageIds = new Set([...Object.values(navByRole).flatMap((items) => items.map(([id]) => id)), 'low-stock', 'order-stock', 'stock-requests']);
+const validPageIds = new Set([...Object.values(navByRole).flatMap((items) => items.map(([id]) => id)), 'low-stock', 'order-stock', 'stock-requests', 'tools', 'spares', 'oca-glass', 'other-category']);
 const defaultPageForRole = (role) => (role === 'customer' || role === 'user' ? 'catalog' : 'dashboard');
 const pageFromPath = () => {
   if (typeof window === 'undefined') return '';
@@ -1611,6 +1709,10 @@ function App() {
   const [newReference, setNewReference] = useState({ type: '', name: '' });
   const [modelSearch, setModelSearch] = useState('');
   const [priceSearch, setPriceSearch] = useState('');
+  const [toolsSearch, setToolsSearch] = useState('');
+  const [sparesSearch, setSparesSearch] = useState('');
+  const [ocaSearch, setOcaSearch] = useState('');
+  const [otherCategorySearch, setOtherCategorySearch] = useState('');
   const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
   const [showQuickAddCustomerModal, setShowQuickAddCustomerModal] = useState(false);
   const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', notes: '' });
@@ -2900,8 +3002,8 @@ function App() {
       setSaving(true);
       const dateStr = getExportDateStr();
 
-      // Case 1: Stock Prices Export (/prices page)
-      if (type === 'prices') {
+      // Case 1: Stock Prices / Category Export
+      if (type === 'prices' || type === 'tools' || type === 'spares' || type === 'oca-glass' || type === 'other-category') {
         let items = preloadedItems;
         if (!items || !items.length) {
           if (data.products && data.products.length) {
@@ -2911,14 +3013,15 @@ function App() {
               const fetched = await authedFetch('/export-data?type=products');
               items = consolidateProductList(Array.isArray(fetched) ? fetched : []);
             } catch (fetchErr) {
-              console.warn('Export fetch failed for prices, using local state', fetchErr);
+              console.warn('Export fetch failed for prices/category, using local state', fetchErr);
               items = consolidateProductList(data.products || []);
             }
           }
         }
-        if (!items || !items.length) return showToast('No price catalog items found to export');
-        exportStockPricesExcel(items, `Stock_Prices_${dateStr}.xlsx`);
-        showToast('Stock prices Excel (.xlsx) downloaded');
+        if (!items || !items.length) return showToast('No items found to export');
+        const prefix = type === 'tools' ? 'Tools' : type === 'spares' ? 'Spares' : type === 'oca-glass' ? 'OCA_Glass' : type === 'other-category' ? 'Other_Category' : 'Stock_Prices';
+        exportStockPricesExcel(items, `${prefix}_${dateStr}.xlsx`);
+        showToast(`${prefix.replace('_', ' ')} Excel (.xlsx) downloaded`);
         return;
       }
 
@@ -4787,6 +4890,52 @@ function App() {
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
   }) : productPageItems;
+
+  const allCategoryPool = role === 'customer' ? data.catalog : (data.products || []);
+
+  const toolsItems = useMemo(() => {
+    return allCategoryPool.filter((item) => {
+      if (!isToolsCategory(item)) return false;
+      const query = toolsSearch.trim().toLowerCase();
+      if (!query) return true;
+      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [allCategoryPool, toolsSearch]);
+
+  const sparesItems = useMemo(() => {
+    return allCategoryPool.filter((item) => {
+      if (!isSparesCategory(item)) return false;
+      const query = sparesSearch.trim().toLowerCase();
+      if (!query) return true;
+      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [allCategoryPool, sparesSearch]);
+
+  const ocaGlassItems = useMemo(() => {
+    return allCategoryPool.filter((item) => {
+      if (!isOcaGlassCategory(item)) return false;
+      const query = ocaSearch.trim().toLowerCase();
+      if (!query) return true;
+      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [allCategoryPool, ocaSearch]);
+
+  const otherCategoryItems = useMemo(() => {
+    return allCategoryPool.filter((item) => {
+      if (!isOtherCategory(item)) return false;
+      const query = otherCategorySearch.trim().toLowerCase();
+      if (!query) return true;
+      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+    });
+  }, [allCategoryPool, otherCategorySearch]);
   const visibleSales = data.sales;
   const customerSalesGroups = useMemo(() => {
     const map = new Map();
@@ -5435,6 +5584,118 @@ function App() {
                 onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setPriceSearch(value); }}
                 onPageChange={(page) => setProductPager((prev) => ({ ...prev, page }))}
                 onPageSizeChange={(limit) => setProductPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                onViewDetails={setSelectedProductDetails}
+                onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
+                onDeleteProduct={deleteProduct}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'tools' && (
+            <PageWrapper activeKey="tools" key="tools">
+              <PricesPage
+                role={role}
+                shopId={shopId}
+                shops={data.shops || []}
+                suppliers={data.reference?.suppliers || []}
+                stock={data.stock || []}
+                updateStock={updateStock}
+                showToast={showToast}
+                saving={saving}
+                items={toolsItems}
+                search={toolsSearch}
+                pager={productPager}
+                loading={productPageLoading}
+                onExportProducts={(exportItems) => exportExcel('tools', {}, exportItems || toolsItems)}
+                onSearchChange={(value) => setToolsSearch(value)}
+                onViewDetails={setSelectedProductDetails}
+                onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
+                onDeleteProduct={deleteProduct}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'spares' && (
+            <PageWrapper activeKey="spares" key="spares">
+              <PricesPage
+                role={role}
+                shopId={shopId}
+                shops={data.shops || []}
+                suppliers={data.reference?.suppliers || []}
+                stock={data.stock || []}
+                updateStock={updateStock}
+                showToast={showToast}
+                saving={saving}
+                items={sparesItems}
+                search={sparesSearch}
+                pager={productPager}
+                loading={productPageLoading}
+                onExportProducts={(exportItems) => exportExcel('spares', {}, exportItems || sparesItems)}
+                onSearchChange={(value) => setSparesSearch(value)}
+                onViewDetails={setSelectedProductDetails}
+                onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
+                onDeleteProduct={deleteProduct}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'oca-glass' && (
+            <PageWrapper activeKey="oca-glass" key="oca-glass">
+              <PricesPage
+                role={role}
+                shopId={shopId}
+                shops={data.shops || []}
+                suppliers={data.reference?.suppliers || []}
+                stock={data.stock || []}
+                updateStock={updateStock}
+                showToast={showToast}
+                saving={saving}
+                items={ocaGlassItems}
+                search={ocaSearch}
+                pager={productPager}
+                loading={productPageLoading}
+                onExportProducts={(exportItems) => exportExcel('oca-glass', {}, exportItems || ocaGlassItems)}
+                onSearchChange={(value) => setOcaSearch(value)}
+                onViewDetails={setSelectedProductDetails}
+                onEditProduct={editProduct}
+                onCloneProduct={cloneProduct}
+                onDeleteProduct={deleteProduct}
+                productName={productName}
+                fullModelList={fullModelList}
+                priceLabel={priceLabel}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'other-category' && (
+            <PageWrapper activeKey="other-category" key="other-category">
+              <PricesPage
+                role={role}
+                shopId={shopId}
+                shops={data.shops || []}
+                suppliers={data.reference?.suppliers || []}
+                stock={data.stock || []}
+                updateStock={updateStock}
+                showToast={showToast}
+                saving={saving}
+                items={otherCategoryItems}
+                search={otherCategorySearch}
+                pager={productPager}
+                loading={productPageLoading}
+                onExportProducts={(exportItems) => exportExcel('other-category', {}, exportItems || otherCategoryItems)}
+                onSearchChange={(value) => setOtherCategorySearch(value)}
                 onViewDetails={setSelectedProductDetails}
                 onEditProduct={editProduct}
                 onCloneProduct={cloneProduct}
