@@ -3060,6 +3060,77 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
   }
 });
 
+app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const customerId = Number(req.params.id);
+    if (!customerId || isNaN(customerId)) {
+      return res.status(400).json({ error: 'Valid customer ID is required.' });
+    }
+    const customer = await getRecord('SELECT * FROM customers WHERE id = ?', [customerId]);
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found.' });
+    }
+    if (isShopStaffRole(req.user.role) && customer.created_by && customer.created_by !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied to edit this customer.' });
+    }
+    const { name, mobile, address, notes, default_payment_terms_days } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Customer name is required.' });
+    }
+
+    const cleanName = String(name).trim();
+    const cleanMobile = mobile !== undefined ? String(mobile).trim() : customer.mobile;
+    const cleanAddress = address !== undefined ? String(address).trim() : customer.address;
+    const cleanNotes = notes !== undefined ? String(notes).trim() : customer.notes;
+    const paymentTerms = default_payment_terms_days !== undefined && !isNaN(Number(default_payment_terms_days))
+      ? Number(default_payment_terms_days)
+      : (customer.default_payment_terms_days || 15);
+
+    await runQuery(
+      `UPDATE customers
+       SET name = ?, mobile = ?, address = ?, notes = ?, default_payment_terms_days = ?
+       WHERE id = ?`,
+      [cleanName, cleanMobile, cleanAddress, cleanNotes, paymentTerms, customerId]
+    );
+
+    const updated = await getRecord(`
+      SELECT c.*, sh.name AS shop_name, COALESCE(SUM(s.pending_amount), 0) AS pending
+      FROM customers c
+      LEFT JOIN sales s ON s.customer_id = c.id
+      LEFT JOIN shops sh ON sh.id = c.shop_id
+      WHERE c.id = ?
+      GROUP BY c.id, sh.id
+    `, [customerId]);
+
+    await audit(req, 'Updated customer', 'customer', customerId, cleanName);
+    res.json(updated || { id: customerId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes: cleanNotes });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to update customer.' });
+  }
+});
+
+app.delete(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const customerId = Number(req.params.id);
+    if (!customerId || isNaN(customerId)) {
+      return res.status(400).json({ error: 'Valid customer ID is required.' });
+    }
+    const customer = await getRecord('SELECT * FROM customers WHERE id = ?', [customerId]);
+    if (!customer) {
+      return res.status(404).json({ error: 'Customer not found.' });
+    }
+    if (isShopStaffRole(req.user.role) && customer.created_by && customer.created_by !== req.user.id) {
+      return res.status(403).json({ error: 'Access denied to delete this customer.' });
+    }
+
+    await runQuery('DELETE FROM customers WHERE id = ?', [customerId]);
+    await audit(req, 'Deleted customer', 'customer', customerId, customer.name);
+    res.json({ success: true, message: 'Customer deleted successfully.' });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to delete customer.' });
+  }
+});
+
 app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   const requestedShopId = scopeShopId(req);
   const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;

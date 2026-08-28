@@ -1715,6 +1715,7 @@ function App() {
   const [otherCategorySearch, setOtherCategorySearch] = useState('');
   const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
   const [showQuickAddCustomerModal, setShowQuickAddCustomerModal] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState(null);
   const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', notes: '' });
   const [savingQuickCustomer, setSavingQuickCustomer] = useState(false);
 
@@ -1724,24 +1725,74 @@ function App() {
     try {
       setSavingQuickCustomer(true);
       const scoped = shopId ? `?shopId=${shopId}` : '';
-      const created = await authedFetch(`/customers${scoped}`, {
-        method: 'POST',
-        body: JSON.stringify(quickCustomerForm),
-      });
-      const updatedCustomers = await authedFetch(`/customers${scoped}`);
-      setData((prev) => ({ ...prev, customers: updatedCustomers }));
-      const newId = created?.id || updatedCustomers.find(c => c.name.toLowerCase() === quickCustomerForm.name.trim().toLowerCase())?.id;
-      if (newId) {
-        setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: String(newId) } }));
+      if (editingCustomer) {
+        const updated = await authedFetch(`/customers/${editingCustomer.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(quickCustomerForm),
+        });
+        setData((prev) => ({
+          ...prev,
+          customers: prev.customers.map((c) =>
+            Number(c.id) === Number(editingCustomer.id) ? { ...c, ...updated, ...quickCustomerForm } : c
+          ),
+        }));
+        setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+        setEditingCustomer(null);
+        setShowQuickAddCustomerModal(false);
+        showToast('Customer updated successfully');
+      } else {
+        const created = await authedFetch(`/customers${scoped}`, {
+          method: 'POST',
+          body: JSON.stringify(quickCustomerForm),
+        });
+        const updatedCustomers = await authedFetch(`/customers${scoped}`);
+        const rows = getPaginatedRows(updatedCustomers);
+        setData((prev) => ({ ...prev, customers: rows }));
+        const newId = created?.id || rows.find(c => c.name.toLowerCase() === quickCustomerForm.name.trim().toLowerCase())?.id;
+        if (newId) {
+          setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: String(newId) } }));
+        }
+        setCustomerPager((prev) => ({ ...prev, total: (prev.total || 0) + 1 }));
+        setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+        setEditingCustomer(null);
+        setShowQuickAddCustomerModal(false);
+        showToast('Customer created successfully');
       }
-      setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
-      setShowQuickAddCustomerModal(false);
-      showToast('Customer created and selected for sale');
     } catch (err) {
-      showToast(err.message || 'Failed to add customer');
+      showToast(err.message || 'Failed to save customer');
     } finally {
       setSavingQuickCustomer(false);
     }
+  };
+
+  const handleDeleteCustomer = (customer) => {
+    if (!customer) return;
+    requestConfirmation({
+      title: `Delete ${customer.name}?`,
+      message: `Are you sure you want to delete customer "${customer.name}"? Previous invoices and sales transactions will be preserved in the system with the customer unlinked. This action cannot be undone.`,
+      confirmLabel: 'Delete Customer',
+      onConfirm: async () => {
+        try {
+          setSaving(true);
+          await authedFetch(`/customers/${customer.id}`, {
+            method: 'DELETE',
+          });
+          setData((prev) => ({
+            ...prev,
+            customers: prev.customers.filter((c) => Number(c.id) !== Number(customer.id)),
+          }));
+          setCustomerPager((prev) => ({
+            ...prev,
+            total: Math.max(0, (prev.total || 1) - 1),
+          }));
+          showToast(`Customer "${customer.name}" deleted successfully`);
+        } catch (err) {
+          showToast(err.message || 'Failed to delete customer');
+        } finally {
+          setSaving(false);
+        }
+      },
+    });
   };
   const [pendingFilters, setPendingFilters] = useState({ search: '', date: '' });
   const [globalSearch, setGlobalSearch] = useState('');
@@ -5837,6 +5888,17 @@ function App() {
                   </select>
                   {pageLoading.customers && <span className="status-badge due">Loading</span>}
                   <span className="status-badge stock-ok">{customerPager.loaded ? customerPager.total.toLocaleString('en-IN') : data.customers.length} customers</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingCustomer(null);
+                      setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+                      setShowQuickAddCustomerModal(true);
+                    }}
+                    className="px-3.5 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs bg-teal-600 hover:bg-teal-700 text-white border-teal-600"
+                  >
+                    <Plus size={15} /> Add Customer
+                  </button>
                 </div>
                 <CardGrid items={data.customers} render={(customer) => {
                   const allCustomerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id));
@@ -5844,8 +5906,41 @@ function App() {
                   const lastPurchase = allCustomerSales[0]?.sale_date ? String(allCustomerSales[0].sale_date).slice(0, 10) : 'No purchases';
                   return (
                     <>
-                      <div className="card-icon-wrapper">
-                        <Contact size={18} />
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="card-icon-wrapper">
+                          <Contact size={18} />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors cursor-pointer border border-transparent hover:border-teal-200"
+                            title="Edit Customer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingCustomer(customer);
+                              setQuickCustomerForm({
+                                name: customer.name || '',
+                                mobile: customer.mobile || '',
+                                address: customer.address || '',
+                                notes: customer.notes || '',
+                              });
+                              setShowQuickAddCustomerModal(true);
+                            }}
+                          >
+                            <Edit3 size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer border border-transparent hover:border-rose-200"
+                            title="Delete Customer"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteCustomer(customer);
+                            }}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
                       </div>
                       <h3>{customer.name}</h3>
                       <p>{customer.mobile}</p>
@@ -7615,11 +7710,11 @@ function App() {
                 <div className="flex items-center justify-between pb-4 border-b border-slate-100">
                   <div className="flex items-center gap-2.5">
                     <div className="p-2 rounded-2xl bg-teal-100 text-teal-700">
-                      <Users size={20} />
+                      {editingCustomer ? <Edit3 size={20} /> : <Users size={20} />}
                     </div>
-                    <h3 className="text-base font-extrabold text-slate-900">Add New Customer</h3>
+                    <h3 className="text-base font-extrabold text-slate-900">{editingCustomer ? 'Edit Customer' : 'Add New Customer'}</h3>
                   </div>
-                  <button type="button" onClick={() => setShowQuickAddCustomerModal(false)} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+                  <button type="button" onClick={() => { setShowQuickAddCustomerModal(false); setEditingCustomer(null); }} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
                     <X size={18} />
                   </button>
                 </div>
@@ -7671,7 +7766,7 @@ function App() {
                   <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
                     <button
                       type="button"
-                      onClick={() => setShowQuickAddCustomerModal(false)}
+                      onClick={() => { setShowQuickAddCustomerModal(false); setEditingCustomer(null); }}
                       className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs"
                     >
                       Cancel
@@ -7681,7 +7776,15 @@ function App() {
                       disabled={savingQuickCustomer}
                       className="px-5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-teal-600/20"
                     >
-                      <Plus size={14} /> {savingQuickCustomer ? 'Creating...' : 'Create & Select Customer'}
+                      {editingCustomer ? (
+                        <>
+                          <Check size={14} /> {savingQuickCustomer ? 'Saving...' : 'Save Changes'}
+                        </>
+                      ) : (
+                        <>
+                          <Plus size={14} /> {savingQuickCustomer ? 'Creating...' : 'Create & Select Customer'}
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
