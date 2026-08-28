@@ -28,6 +28,7 @@ export default function BranchOrderStockPage({
   currentShop,
   shops = [],
   reference = {},
+  onRequisitionSubmitted,
 }) {
   const [activeView, setActiveView] = useState('catalog'); // 'catalog' | 'history'
   const [warehouseProducts, setWarehouseProducts] = useState([]);
@@ -237,18 +238,31 @@ export default function BranchOrderStockPage({
       return showToast('Your requisition order is empty');
     }
 
+    const effectiveShopId = currentShop || shops.find((s) => s.location_type !== 'warehouse')?.id;
+    if (!effectiveShopId) {
+      return showToast('Please select a valid branch before submitting a requisition.');
+    }
+
     try {
       setSubmitting(true);
       const payload = {
-        shop_id: currentShop,
+        shop_id: Number(effectiveShopId),
+        branch_id: Number(effectiveShopId),
+        workspace_id: Number(effectiveShopId),
         notes: orderNotes,
+        message: orderNotes,
+        status: 'PENDING',
+        created_at: new Date().toISOString(),
         items: cart.map((item) => ({
           product_id: item.product.id,
           product_name: item.product.short_name || item.product.name,
-          brand: item.product.brand,
-          quality_grade: item.product.quality_variant,
-          requested_qty: Number(item.total_qty),
+          brand: item.product.brand || '',
+          quality_grade: item.product.quality_variant || item.product.grade || '',
+          variant: item.product.quality_variant || item.product.grade || '',
+          requested_qty: Number(item.total_qty || 1),
+          quantity: Number(item.total_qty || 1),
           color_breakdown: item.color_breakdown || [],
+          unit_cost: Number(item.product.cost_price || item.product.wholesale_price || 0),
         })),
       };
 
@@ -262,18 +276,24 @@ export default function BranchOrderStockPage({
       setOrderNotes('');
       setIsCartOpen(false);
       await loadPastRequests();
+      if (typeof onRequisitionSubmitted === 'function') {
+        onRequisitionSubmitted(res);
+      }
       setActiveView('history');
     } catch (error) {
+      console.error('[Requisition Submit Error]', error);
       showToast(error.message || 'Unable to submit requisition order');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const getStatusBadge = (status) => {
+  const getStatusBadge = (rawStatus) => {
+    const status = String(rawStatus || '').toLowerCase().trim();
     switch (status) {
       case 'completed':
       case 'approved':
+      case 'dispatched':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">
             <CheckCircle2 size={13} className="text-emerald-600" />

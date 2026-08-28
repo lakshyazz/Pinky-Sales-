@@ -27,9 +27,10 @@ export default function SuperAdminStockRequestsPage({
   showToast,
   shops = [],
   data = {},
+  onRefresh,
 }) {
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [requests, setRequests] = useState(Array.isArray(data.requests) ? data.requests : []);
+  const [loading, setLoading] = useState(!Array.isArray(data.requests) || data.requests.length === 0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all'); // 'all' | 'pending' | 'completed' | 'rejected'
   const [shopFilter, setShopFilter] = useState('all');
@@ -45,7 +46,11 @@ export default function SuperAdminStockRequestsPage({
     try {
       setLoading(true);
       const res = await authedFetch('/stock-requests');
-      setRequests(Array.isArray(res) ? res : []);
+      const loaded = Array.isArray(res) ? res : [];
+      setRequests(loaded);
+      if (typeof onRefresh === 'function') {
+        onRefresh(loaded);
+      }
     } catch (error) {
       showToast(error.message || 'Unable to load stock requisitions');
     } finally {
@@ -57,14 +62,22 @@ export default function SuperAdminStockRequestsPage({
     loadRequests();
   }, []);
 
+  useEffect(() => {
+    if (Array.isArray(data.requests) && data.requests.length > 0 && requests.length === 0) {
+      setRequests(data.requests);
+      setLoading(false);
+    }
+  }, [data.requests]);
+
   // Filtered Requisitions
   const filteredRequests = useMemo(() => {
     const q = search.trim().toLowerCase();
     return requests.filter((req) => {
+      const status = String(req.status || '').toLowerCase().trim();
       if (statusFilter !== 'all') {
-        if (statusFilter === 'pending' && !['pending', 'open'].includes(req.status)) return false;
-        if (statusFilter === 'completed' && !['completed', 'approved', 'dispatched'].includes(req.status)) return false;
-        if (statusFilter === 'rejected' && req.status !== 'rejected') return false;
+        if (statusFilter === 'pending' && !['pending', 'open'].includes(status)) return false;
+        if (statusFilter === 'completed' && !['completed', 'approved', 'dispatched'].includes(status)) return false;
+        if (statusFilter === 'rejected' && status !== 'rejected') return false;
       }
 
       if (shopFilter !== 'all' && String(req.shop_id) !== String(shopFilter)) {
@@ -84,9 +97,9 @@ export default function SuperAdminStockRequestsPage({
 
   // Summary Metrics
   const metrics = useMemo(() => {
-    const pending = requests.filter((r) => ['pending', 'open'].includes(r.status));
-    const completed = requests.filter((r) => ['completed', 'approved', 'dispatched'].includes(r.status));
-    const rejected = requests.filter((r) => r.status === 'rejected');
+    const pending = requests.filter((r) => ['pending', 'open'].includes(String(r.status || '').toLowerCase().trim()));
+    const completed = requests.filter((r) => ['completed', 'approved', 'dispatched'].includes(String(r.status || '').toLowerCase().trim()));
+    const rejected = requests.filter((r) => String(r.status || '').toLowerCase().trim() === 'rejected');
     const totalUnitsRequested = requests.reduce((sum, r) => sum + Number(r.total_quantity || r.quantity || 0), 0);
 
     return {
@@ -107,6 +120,9 @@ export default function SuperAdminStockRequestsPage({
       showToast(res.message || 'Stock requisition approved and transferred to branch!');
       setActiveRequest(null);
       await loadRequests();
+      if (typeof onRefresh === 'function') {
+        onRefresh();
+      }
     } catch (error) {
       showToast(error.message || 'Unable to approve stock requisition');
     } finally {
@@ -128,6 +144,9 @@ export default function SuperAdminStockRequestsPage({
       setRejectionReason('');
       setActiveRequest(null);
       await loadRequests();
+      if (typeof onRefresh === 'function') {
+        onRefresh();
+      }
     } catch (error) {
       showToast(error.message || 'Unable to reject requisition');
     } finally {
@@ -135,10 +154,12 @@ export default function SuperAdminStockRequestsPage({
     }
   };
 
-  const getStatusBadge = (status) => {
+  const getStatusBadge = (rawStatus) => {
+    const status = String(rawStatus || '').toLowerCase().trim();
     switch (status) {
       case 'completed':
       case 'approved':
+      case 'dispatched':
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">
             <CheckCircle2 size={14} className="text-emerald-600" />

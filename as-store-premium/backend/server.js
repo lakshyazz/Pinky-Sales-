@@ -4,7 +4,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import { initDatabase, runQuery, getRecord, allRecords, runTransaction } from './database.js';
+import { initDatabase, runQuery, getRecord, allRecords, runTransaction, executeTransaction } from './database.js';
 import { uploadImageToR2, deleteImageFromR2, isR2Configured, getImageBufferFromStorage } from './r2Storage.js';
 
 const upload = multer({
@@ -42,8 +42,67 @@ app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   next();
 });
+
+// Brute-force protection & rate limiter for login
+const loginAttempts = new Map();
+
+const checkLoginRateLimit = (req, res, next) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+  const username = String(req.body?.username || '').toLowerCase().trim();
+  const key = `${ip}:${username}`;
+  const now = Date.now();
+  const record = loginAttempts.get(key);
+
+  if (record && record.blockedUntil && now < record.blockedUntil) {
+    const remainingMin = Math.ceil((record.blockedUntil - now) / 60000);
+    return res.status(429).json({
+      error: `Too many failed login attempts. Account temporarily locked for security. Please try again in ${remainingMin} minute(s).`
+    });
+  }
+  next();
+};
+
+const recordFailedLogin = (req) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+  const username = String(req.body?.username || '').toLowerCase().trim();
+  const key = `${ip}:${username}`;
+  const now = Date.now();
+  const record = loginAttempts.get(key) || { count: 0, firstAttempt: now, blockedUntil: 0 };
+
+  if (now - record.firstAttempt > 15 * 60 * 1000) {
+    record.count = 1;
+    record.firstAttempt = now;
+    record.blockedUntil = 0;
+  } else {
+    record.count += 1;
+  }
+
+  if (record.count >= 5) {
+    record.blockedUntil = now + 15 * 60 * 1000;
+    console.warn(`[Security Alert] IP ${ip} exceeded 5 failed login attempts for user "${username}". Temporary 15-minute lock activated.`);
+  }
+  loginAttempts.set(key, record);
+};
+
+const clearLoginAttempts = (req) => {
+  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+  const username = String(req.body?.username || '').toLowerCase().trim();
+  loginAttempts.delete(`${ip}:${username}`);
+};
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of loginAttempts.entries()) {
+    if (now - record.firstAttempt > 30 * 60 * 1000 && (!record.blockedUntil || now > record.blockedUntil)) {
+      loginAttempts.delete(key);
+    }
+  }
+}, 15 * 60 * 1000).unref();
+
 app.use(express.json({ limit: '1mb' }));
 
 const wrapRouteHandler = (handler) => {
@@ -670,7 +729,7 @@ const inventoryJoinScope = (req, shopId, alias = 'ib') => {
   };
 };
 
-app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
+app.post(['/api/auth/login', '/auth/login'], checkLoginRateLimit, async (req, res) => {
   const body = req.body || {};
   const username = String(body.username || '').trim();
   const password = String(body.password || '');
@@ -691,6 +750,7 @@ app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
 
     if (!user) {
       console.log('[AuthLog] 3. Failed: User record not found for username:', username);
+      recordFailedLogin(req);
       return res.status(401).json({ error: 'Wrong username or password.' });
     }
 
@@ -699,6 +759,7 @@ app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
 
     if (!passwordValid) {
       console.log('[AuthLog] 5. Failed: Password comparison returned false.');
+      recordFailedLogin(req);
       return res.status(401).json({ error: 'Wrong username or password.' });
     }
 
@@ -711,6 +772,7 @@ app.post(['/api/auth/login', '/auth/login'], async (req, res) => {
       return res.status(403).json({ error: 'This account is not assigned to a shop. Contact the Super Admin.' });
     }
 
+    clearLoginAttempts(req);
     const token = createToken(user);
     console.log('[AuthLog] 8. JWT generated successfully.');
 
@@ -3952,18 +4014,47 @@ app.get('/api/branch/warehouse-stock', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/stock-requests', authenticateToken, async (req, res) => {
+app.get(['/api/stock-requests', '/api/requisitions', '/api/stock-orders'], authenticateToken, async (req, res) => {
   try {
-    const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : (req.query.shopId || scopeShopId(req));
     const warehouse = await getWarehouse();
     const warehouseId = warehouse?.id || null;
 
-    const queryParams = [];
-    let whereClause = '';
-    if (shopId) {
-      whereClause = 'WHERE sr.shop_id = ?';
-      queryParams.push(shopId);
+    let targetShopId = null;
+    if (isShopStaffRole(req.user.role)) {
+      targetShopId = req.user.shop_id;
+    } else {
+      const candidateShopId = req.query.shopId || req.query.branchId || req.query.branch_id;
+      if (candidateShopId && candidateShopId !== 'all') {
+        const parsed = Number(candidateShopId);
+        // If superadmin is filtering by the warehouse (Workspace: Warehouse) or 'all',
+        // do not filter by branch shop_id so all branch requests to the warehouse are shown.
+        if (parsed && (!warehouseId || parsed !== Number(warehouseId))) {
+          targetShopId = parsed;
+        }
+      }
     }
+
+    const queryParams = [];
+    const whereConditions = [];
+
+    if (targetShopId) {
+      whereConditions.push('sr.shop_id = ?');
+      queryParams.push(targetShopId);
+    }
+
+    if (req.query.status && req.query.status !== 'all') {
+      const statusParam = String(req.query.status).toLowerCase().trim();
+      if (statusParam === 'pending' || statusParam === 'open') {
+        whereConditions.push("LOWER(sr.status) IN ('pending', 'open')");
+      } else if (statusParam === 'completed' || statusParam === 'approved' || statusParam === 'dispatched') {
+        whereConditions.push("LOWER(sr.status) IN ('completed', 'approved', 'dispatched')");
+      } else {
+        whereConditions.push('LOWER(sr.status) = ?');
+        queryParams.push(statusParam);
+      }
+    }
+
+    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
     const requests = await allRecords(`
       SELECT 
@@ -3975,12 +4066,12 @@ app.get('/api/stock-requests', authenticateToken, async (req, res) => {
         u.name AS created_by_name,
         approver.name AS approved_by_name
       FROM stock_requests sr
-      JOIN shops sh ON sh.id = sr.shop_id
+      LEFT JOIN shops sh ON sh.id = sr.shop_id
       LEFT JOIN users u ON u.id = sr.created_by
       LEFT JOIN users approver ON approver.id = sr.approved_by
       ${whereClause}
       ORDER BY 
-        CASE sr.status WHEN 'pending' THEN 0 WHEN 'open' THEN 1 WHEN 'approved' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
+        CASE LOWER(sr.status) WHEN 'pending' THEN 0 WHEN 'open' THEN 1 WHEN 'approved' THEN 2 WHEN 'completed' THEN 3 ELSE 4 END,
         sr.id DESC
     `, queryParams);
 
@@ -4017,12 +4108,29 @@ app.get('/api/stock-requests', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/stock-requests', authenticateToken, async (req, res) => {
+app.post(['/api/stock-requests', '/api/requisitions', '/api/stock-orders'], authenticateToken, async (req, res) => {
   try {
-    const shopId = req.user.role === 'superadmin' ? (req.body.shop_id || req.user.shop_id) : (req.user.shop_id || req.body.shop_id);
+    const warehouse = await getWarehouse();
+    const warehouseId = warehouse?.id || null;
+
+    let shopId = isShopStaffRole(req.user.role) 
+      ? (req.user.shop_id || req.body.shop_id || req.body.branch_id || req.body.workspace_id)
+      : (req.body.shop_id || req.body.branch_id || req.body.workspace_id || req.user.shop_id);
+
+    // If shopId was somehow pointing to warehouse, fall back to first non-warehouse branch
+    if (warehouseId && Number(shopId) === Number(warehouseId)) {
+      const branchShops = await allRecords("SELECT id FROM shops WHERE location_type != 'warehouse' ORDER BY id");
+      if (req.body.branch_id && Number(req.body.branch_id) !== Number(warehouseId)) {
+        shopId = req.body.branch_id;
+      } else if (branchShops.length > 0) {
+        shopId = branchShops[0].id;
+      }
+    }
+
     if (!shopId) return res.status(400).json({ error: 'Valid shop/branch ID is required.' });
 
-    const { items = [], notes = '', message = '' } = req.body;
+    const { items = [], notes = '', message = '', status: rawStatus } = req.body;
+    const initialStatus = (rawStatus ? String(rawStatus).toLowerCase().trim() : 'pending') || 'pending';
     
     // Handle single-item legacy fallback if body has product_id directly
     const normalizedItems = Array.isArray(items) && items.length > 0
@@ -4041,12 +4149,12 @@ app.post('/api/stock-requests', authenticateToken, async (req, res) => {
     const totalQuantity = normalizedItems.reduce((sum, item) => sum + (Number(item.requested_qty || item.quantity) || 1), 0);
     const totalItems = normalizedItems.length;
 
-    const result = await executeTransaction(async (tx) => {
+    const result = await runTransaction(async (tx) => {
       const header = await tx.runQuery(`
         INSERT INTO stock_requests (
           request_number, shop_id, product_id, model_name, quantity, total_items, total_quantity,
           message, notes, created_by, status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       `, [
         requestNumber,
         shopId,
@@ -4057,7 +4165,8 @@ app.post('/api/stock-requests', authenticateToken, async (req, res) => {
         totalQuantity,
         message || notes || '',
         notes || message || '',
-        req.user.id
+        req.user.id,
+        initialStatus
       ]);
 
       const requestId = header.id;
@@ -4066,14 +4175,14 @@ app.post('/api/stock-requests', authenticateToken, async (req, res) => {
         const prodId = item.product_id;
         let prodInfo = null;
         if (prodId) {
-          prodInfo = await tx.getRecord(`SELECT name, short_name, brand, part_category, quality_variant, cost_price, wholesale_price FROM products WHERE id = ?`, [prodId]);
+          prodInfo = await tx.getRecord(`SELECT name, short_name, brand, part_category, quality_variant, purchase_price, wholesale_price FROM products WHERE id = ?`, [prodId]);
         }
         const prodName = prodInfo?.name || item.product_name || 'Product';
         const brand = prodInfo?.brand || item.brand || '';
-        const quality = prodInfo?.quality_variant || item.quality_grade || '';
+        const quality = prodInfo?.quality_variant || item.quality_grade || item.variant || '';
         const reqQty = Math.max(1, Number(item.requested_qty || item.quantity || 1));
         const colorBreakdown = Array.isArray(item.color_breakdown) ? JSON.stringify(item.color_breakdown) : '[]';
-        const unitCost = Number(prodInfo?.cost_price || prodInfo?.wholesale_price || item.unit_cost || 0);
+        const unitCost = Number(prodInfo?.purchase_price || prodInfo?.wholesale_price || item.unit_cost || 0);
 
         await tx.runQuery(`
           INSERT INTO stock_request_items (
@@ -4085,7 +4194,7 @@ app.post('/api/stock-requests', authenticateToken, async (req, res) => {
         ]);
       }
 
-      return { id: requestId, request_number: requestNumber };
+      return { id: requestId, request_number: requestNumber, status: initialStatus };
     });
 
     await audit(req, 'Created stock requisition', 'stock_request', result.id, `${requestNumber} with ${totalQuantity} units`);
@@ -4095,16 +4204,17 @@ app.post('/api/stock-requests', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/admin/stock-requests/:id/approve', authenticateToken, requireSuperAdmin, async (req, res) => {
+app.put(['/api/admin/stock-requests/:id/approve', '/api/admin/requisitions/:id/approve'], authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const requestId = Number(req.params.id);
     const warehouse = await getWarehouse();
     if (!warehouse) return res.status(400).json({ error: 'Warehouse configuration not found.' });
 
-    const result = await executeTransaction(async (tx) => {
+    const result = await runTransaction(async (tx) => {
       const request = await tx.getRecord(`SELECT * FROM stock_requests WHERE id = ? FOR UPDATE`, [requestId]);
       if (!request) throw new Error('Stock requisition not found.');
-      if (['approved', 'completed', 'dispatched'].includes(request.status)) {
+      const currentStatus = String(request.status || '').toLowerCase().trim();
+      if (['approved', 'completed', 'dispatched'].includes(currentStatus)) {
         throw new Error('This stock requisition has already been approved and fulfilled.');
       }
 
@@ -4190,8 +4300,8 @@ app.put('/api/admin/stock-requests/:id/approve', authenticateToken, requireSuper
                 colour, quantity_received, quantity_remaining, received_date, notes, created_by
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
-              targetShopId, prodId, batch.purchase_price, batch.wholesale_price, batch.official_price, batch.retail_price,
-              batch.colour, moved, moved, today(), `Requisition ${request.request_number || requestId} fulfillment`, req.user.id
+                targetShopId, prodId, batch.purchase_price, batch.wholesale_price, batch.official_price, batch.retail_price,
+                batch.colour, moved, moved, today(), `Requisition ${request.request_number || requestId} fulfillment`, req.user.id
             ]);
 
             unitsToFulfill -= moved;
@@ -4231,14 +4341,15 @@ app.put('/api/admin/stock-requests/:id/approve', authenticateToken, requireSuper
   }
 });
 
-app.put('/api/admin/stock-requests/:id/reject', authenticateToken, requireSuperAdmin, async (req, res) => {
+app.put(['/api/admin/stock-requests/:id/reject', '/api/admin/requisitions/:id/reject'], authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const requestId = Number(req.params.id);
     const { rejection_reason = '' } = req.body;
 
     const request = await getRecord(`SELECT * FROM stock_requests WHERE id = ?`, [requestId]);
     if (!request) return res.status(404).json({ error: 'Requisition not found.' });
-    if (['approved', 'completed', 'dispatched'].includes(request.status)) {
+    const currentStatus = String(request.status || '').toLowerCase().trim();
+    if (['approved', 'completed', 'dispatched'].includes(currentStatus)) {
       return res.status(400).json({ error: 'Cannot reject an already fulfilled requisition.' });
     }
 
@@ -4260,7 +4371,7 @@ app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (
   const status = String(req.body.status || '').toLowerCase();
   if (!allowed.has(status)) return res.status(400).json({ error: 'Choose a valid request status.' });
   await runQuery(
-    'UPDATE stock_requests SET status = ?, resolved_at = CASE WHEN ? IN ("completed", "closed", "cancelled", "rejected") THEN CURRENT_TIMESTAMP ELSE resolved_at END WHERE id = ?',
+    "UPDATE stock_requests SET status = ?, resolved_at = CASE WHEN ? IN ('completed', 'closed', 'cancelled', 'rejected') THEN CURRENT_TIMESTAMP ELSE resolved_at END WHERE id = ?",
     [status, status, req.params.id]
   );
   await audit(req, 'Updated stock request', 'stock_request', req.params.id, status);

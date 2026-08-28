@@ -129,6 +129,8 @@ export const runTransaction = async (callback) => {
   }
 };
 
+export const executeTransaction = runTransaction;
+
 const seedUser = async ({ username, password, role, name, contact = '', shopId = null, permissions = '{}' }) => {
   const existing = await getRecord('SELECT id FROM users WHERE username = ?', [username]);
   if (existing) return existing.id;

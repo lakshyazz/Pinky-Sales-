@@ -6238,6 +6238,10 @@ function App() {
                 currentShop={shopId}
                 shops={data.shops}
                 reference={data.reference}
+                onRequisitionSubmitted={() => {
+                  loadTab('requests', shopId);
+                  loadTab('dashboard', shopId);
+                }}
               />
             </PageWrapper>
           )}
@@ -6250,6 +6254,11 @@ function App() {
                   showToast={showToast}
                   shops={data.shops}
                   data={data}
+                  onRefresh={() => {
+                    loadTab('requests', shopId);
+                    loadTab('stock', shopId);
+                    loadTab('dashboard', shopId);
+                  }}
                 />
               ) : (
                 <BranchOrderStockPage
@@ -6258,6 +6267,10 @@ function App() {
                   currentShop={shopId}
                   shops={data.shops}
                   reference={data.reference}
+                  onRequisitionSubmitted={() => {
+                    loadTab('requests', shopId);
+                    loadTab('dashboard', shopId);
+                  }}
                 />
               )}
             </PageWrapper>
