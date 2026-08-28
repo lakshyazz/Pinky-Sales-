@@ -4780,6 +4780,13 @@ function App() {
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query));
   }) : productPageItems;
+  const priceItems = role === 'customer' ? data.catalog.filter((item) => {
+    const query = priceSearch.trim().toLowerCase();
+    if (!query) return true;
+    return [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query));
+  }) : productPageItems;
   const visibleSales = data.sales;
   const customerSalesGroups = useMemo(() => {
     const map = new Map();
