@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Smartphone, 
   LayoutGrid, 
+  Table,
   Send, 
   Filter, 
   Plus, 
@@ -24,7 +25,13 @@ import {
   Copy,
   CheckCircle2,
   AlertTriangle,
-  XCircle
+  XCircle,
+  TrendingUp,
+  Percent,
+  Layers,
+  Boxes,
+  SlidersHorizontal,
+  Sliders
 } from 'lucide-react';
 import ProductPagination from '../shared/ProductPagination';
 import SearchFilter from '../shared/SearchFilter';
@@ -78,6 +85,50 @@ export default function StockPage({
   setGlobalToast,
   loadCore,
 }) {
+  // Dual-view mode: 'table' (dense grid) or 'cards' (compact cards)
+  const [viewMode, setViewMode] = useState(() => {
+    try {
+      return localStorage.getItem('stock_view_mode') || 'table';
+    } catch {
+      return 'table';
+    }
+  });
+
+  const handleViewModeChange = (mode) => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('stock_view_mode', mode);
+    } catch {}
+  };
+
+  // Helper to format title case cleanly without destroying hardware acronyms
+  const formatTitleCase = (str) => {
+    if (!str) return '';
+    const acronyms = new Set(['IP', 'IPHONE', 'PRO', 'MAX', 'PLUS', 'MINI', 'OLED', 'LCD', 'IC', 'WS', '5G', '4G', 'SE', 'AS', 'OG', 'CC', 'AMOLED', 'TFT']);
+    return str.replace(/\b[A-Za-z0-9-]+\b/g, (word) => {
+      const upper = word.toUpperCase();
+      if (acronyms.has(upper)) return upper;
+      if (upper.startsWith('IP') && upper.length > 2 && /\d/.test(upper)) return upper; // e.g. IP11, IP6G
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    });
+  };
+
+  // Helper to calculate profit margin
+  const calculateMargin = (salePrice, purchasePrice) => {
+    const sale = Number(salePrice || 0);
+    const cost = Number(purchasePrice || 0);
+    if (sale <= 0 || cost <= 0) return null;
+    const profit = sale - cost;
+    const marginPct = ((profit / sale) * 100).toFixed(1);
+    return {
+      profit,
+      marginPct,
+      isProfit: profit > 0,
+      isNeutral: profit === 0,
+      isLoss: profit < 0,
+    };
+  };
+
   // Collapsible sections toggle states
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [isReferenceOpen, setIsReferenceOpen] = useState(false);
@@ -113,6 +164,22 @@ export default function StockPage({
   const [editingRefName, setEditingRefName] = useState('');
   const stockSummaryTotals = data?.stockSummary?.totals || {};
   const stockModelTotal = Number(stockSummaryTotals.products || 0);
+
+  // Computed summary metrics
+  const totalStockItemsQty = useMemo(() => {
+    return stockWithOwnership.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  }, [stockWithOwnership]);
+
+  const lowStockCount = useMemo(() => {
+    return stockWithOwnership.filter(item => {
+      const threshold = (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
+      return item.quantity > 0 && item.quantity <= threshold;
+    }).length;
+  }, [stockWithOwnership, data.shops]);
+
+  const outOfStockCount = useMemo(() => {
+    return stockWithOwnership.filter(item => Number(item.quantity || 0) === 0).length;
+  }, [stockWithOwnership]);
 
   // Quick Add Reference Modal state
   const [quickAddModal, setQuickAddModal] = useState({
@@ -1561,43 +1628,100 @@ export default function StockPage({
 
       </section>
 
-      {/* Daily-Use Action Bar: Search & Collapsible Filters toggle */}
-      <div className="stock-section-heading" style={{ marginBottom: '16px', display: 'flex', flexWrap: 'wrap', gap: '16px', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <span className="stock-eyebrow">Live Stock</span>
-          <h2>Current Stock Overview</h2>
-        </div>
-        {stockPager.loaded && (
-          <div className="models-summary">
-            <span className="status-badge stock-ok">{Number(stockPager.total || 0).toLocaleString('en-IN')} stock rows</span>
-            {stockModelTotal > 0 && (
-              <span className="status-badge due">{stockModelTotal.toLocaleString('en-IN')} models</span>
-            )}
+      {/* Modern High-Density SaaS Inventory Header & KPI Toolbar */}
+      <div className="mb-6 space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="p-1.5 rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400">
+                <Boxes className="w-4 h-4" />
+              </span>
+              <span className="text-xs font-black uppercase tracking-widest text-slate-400">Live Inventory Management</span>
+            </div>
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight text-slate-800 dark:text-white">Current Stock Overview</h2>
           </div>
-        )}
-        
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+
+          {/* View Mode Toggle Segmented Control & Action Tools */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="view-mode-toggle">
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'table' ? 'active' : ''}`}
+                onClick={() => handleViewModeChange('table')}
+                title="Dense Data Table View"
+              >
+                <Table size={15} />
+                <span className="hidden sm:inline">Table</span>
+              </button>
+              <button
+                type="button"
+                className={`view-mode-btn ${viewMode === 'cards' ? 'active' : ''}`}
+                onClick={() => handleViewModeChange('cards')}
+                title="Compact Card View"
+              >
+                <LayoutGrid size={15} />
+                <span className="hidden sm:inline">Cards</span>
+              </button>
+            </div>
+
+            <button 
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer border ${
+                isFiltersOpen ? 'bg-teal-50 text-teal-700 border-teal-200 shadow-xs' : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+              }`}
+              type="button" 
+              onClick={() => setIsFiltersOpen(!isFiltersOpen)}
+            >
+              <SlidersHorizontal size={14} /> Filters
+              {isFiltersOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          </div>
+        </div>
+
+        {/* Floating KPI Stat Chips Bar */}
+        <div className="kpi-chip-group">
+          <div className="kpi-chip">
+            <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse"></span>
+            <span className="value">{totalStockItemsQty.toLocaleString('en-IN')}</span>
+            <span className="label">Total Units</span>
+          </div>
+          <div className="kpi-chip">
+            <span className="value">{Number(stockPager.total || stockWithOwnership.length).toLocaleString('en-IN')}</span>
+            <span className="label">Stock Rows</span>
+          </div>
+          {stockModelTotal > 0 && (
+            <div className="kpi-chip">
+              <span className="value">{stockModelTotal.toLocaleString('en-IN')}</span>
+              <span className="label">Catalog Models</span>
+            </div>
+          )}
+          {lowStockCount > 0 && (
+            <div className="kpi-chip border-amber-200 bg-amber-50/60">
+              <span className="value text-amber-700">{lowStockCount}</span>
+              <span className="label text-amber-800">Low Stock</span>
+            </div>
+          )}
+          {outOfStockCount > 0 && (
+            <div className="kpi-chip border-rose-200 bg-rose-50/60">
+              <span className="value text-rose-700">{outOfStockCount}</span>
+              <span className="label text-rose-800">Out of Stock</span>
+            </div>
+          )}
+        </div>
+
+        {/* Live Search Bar with Instant Clear */}
+        <div className="w-full">
           <SearchFilter
-            placeholder="Search brand, category, model, description, colour, or notes..."
+            placeholder="Search brand, model, description, colour code, or supplier..."
             value={stockFilters.search}
             onChange={(val) => setStockFilters(prev => ({ ...prev, search: val }))}
           />
-          <button 
-            className="soft" 
-            type="button" 
-            onClick={() => setIsFiltersOpen(!isFiltersOpen)}
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            <Filter size={16} /> Filters
-            {isFiltersOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
         </div>
       </div>
 
       {/* Filters Accordion Panel */}
       {isFiltersOpen && (
-        <section className="panel" style={{ marginBottom: '20px', padding: '16px', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '12px', background: 'rgba(255,255,255,0.01)' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px' }}>
+        <section className="panel mb-6 p-4 border border-slate-200 rounded-2xl bg-white/80 backdrop-blur-md shadow-xs space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
             
             {/* Category filter */}
             <Select 
@@ -1639,81 +1763,288 @@ export default function StockPage({
 
           </div>
           
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '12px' }}>
+          <div className="flex justify-end pt-2 border-t border-slate-100">
             <button 
               type="button" 
               onClick={() => setStockFilters({ search: '', brand: '', category: '', colour: '', status: '', shopkeeperId: '', ownership: '' })}
-              style={{ padding: '6px 12px', fontSize: '12px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.7)', borderRadius: '6px', cursor: 'pointer' }}
+              className="px-3.5 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-all cursor-pointer"
             >
-              Reset Filters
+              Reset All Filters
             </button>
           </div>
         </section>
       )}
 
-      {/* Stock Grid Table */}
+      {/* DUAL VIEW MODE: Dense Table vs Compact Cards */}
       {stockWithOwnership.length ? (
-        <div className="table panel inventory-stock-table shadow-sm border border-slate-200/80 bg-white overflow-x-auto" style={{ borderRadius: '20px' }}>
-          {stockWithOwnership.map((item) => {
-            const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
-            const isOutOfStock = Number(item.quantity) === 0;
-            const isWarehouseRow = item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id);
+        viewMode === 'table' ? (
+          /* ==================== 1. DENSE DATA TABLE MODE (DEFAULT) ==================== */
+          <div className="saas-inventory-table overflow-x-auto shadow-sm">
+            <table className="w-full text-left border-collapse">
+              <thead className="saas-table-head">
+                <tr>
+                  <th style={{ width: '32%' }}>Product & Compatibility</th>
+                  <th style={{ width: '16%' }}>Category & Brand</th>
+                  <th style={{ width: '16%' }}>Variant & Colours</th>
+                  <th style={{ width: '16%' }}>Price & Margin</th>
+                  <th style={{ width: '12%' }}>Stock Status</th>
+                  <th style={{ width: '8%', textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stockWithOwnership.map((item) => {
+                  const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
+                  const isOutOfStock = Number(item.quantity) === 0;
+                  const isWarehouseRow = item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id);
 
-            const hasSalePrice = item.sale_price !== null && item.sale_price !== undefined && item.sale_price !== '';
-            const hasPurchasePrice = item.purchase_price !== null && item.purchase_price !== undefined && item.purchase_price !== '';
+                  const hasSalePrice = item.sale_price !== null && item.sale_price !== undefined && item.sale_price !== '';
+                  const hasPurchasePrice = item.purchase_price !== null && item.purchase_price !== undefined && item.purchase_price !== '';
+                  const marginInfo = calculateMargin(item.sale_price, item.purchase_price);
 
-            return (
-              <div 
-                className="row hover:bg-slate-50/60 transition-all duration-300 border-b border-slate-100/90 flex flex-col md:grid md:grid-cols-[3.4fr_1.3fr_1.3fr_1.3fr_1.8fr_2.1fr_1.8fr] gap-3 md:gap-0 md:items-center p-4 sm:px-5" 
-                key={item.id}
-              >
-                
-                {/* Product Name & Brand */}
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <ProductThumbnail
-                    src={item.image_url}
-                    alt={productName(item)}
-                    category={item.part_category || item.category || 'Display'}
-                    size={44}
-                    rounded="12px"
-                  />
-                  <div className="flex flex-col gap-0.5 min-w-0">
-                    <b className="text-[14.5px] text-slate-800 font-extrabold leading-snug break-words">{productName(item)}</b>
-                    {fullModelList(item) && fullModelList(item) !== productName(item) && (
-                      <ExpandableText
-                        className="stock-compatible-models text-slate-500 font-medium leading-relaxed text-xs"
-                        text={fullModelList(item)}
-                        limit={78}
-                      />
-                    )}
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                      <span className="px-2 py-0.5 bg-slate-50 text-slate-600 rounded-md text-[9px] font-extrabold uppercase tracking-wide border border-slate-200">{item.brand || 'No brand'}</span>
-                      {item.manufacturing_brand_name && (
-                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-md text-[9px] font-extrabold uppercase tracking-wide border border-emerald-200">Mfg: {item.manufacturing_brand_name}</span>
-                      )}
-                      {item.supplier_name && (
-                        <span className="px-2 py-0.5 bg-blue-50 text-blue-800 rounded-md text-[9px] font-extrabold uppercase tracking-wide border border-blue-200">Supplier: {item.supplier_name}</span>
-                      )}
-                      {!shopId && <span className="text-slate-400 text-[10.5px] font-medium">· {item.shop_name}</span>}
+                  return (
+                    <tr className="saas-table-row" key={item.id}>
+                      
+                      {/* Product Name & Brand */}
+                      <td>
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <ProductThumbnail
+                            src={item.image_url}
+                            alt={productName(item)}
+                            category={item.part_category || item.category || 'Display'}
+                            size={44}
+                            rounded="12px"
+                          />
+                          <div className="flex flex-col gap-0.5 min-w-0">
+                            <span className="text-sm text-slate-900 font-extrabold leading-snug break-words">
+                              {formatTitleCase(productName(item))}
+                            </span>
+                            {fullModelList(item) && fullModelList(item) !== productName(item) && (
+                              <ExpandableText
+                                className="stock-compatible-models text-slate-500 font-medium leading-relaxed text-xs"
+                                text={fullModelList(item)}
+                                limit={72}
+                              />
+                            )}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                              <span className="badge-subtle badge-subtle-slate">{item.brand || 'No brand'}</span>
+                              {item.model && <span className="text-[11px] font-bold text-slate-500">[{item.model}]</span>}
+                              {!shopId && <span className="text-slate-400 text-[10.5px] font-medium">· {item.shop_name}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Category & MFG Brand */}
+                      <td>
+                        <div className="flex flex-col gap-1.5 items-start">
+                          <span className="badge-subtle badge-subtle-teal">
+                            {item.category || 'Mobile'}
+                          </span>
+                          {item.manufacturing_brand_name && (
+                            <span className="badge-subtle badge-subtle-emerald">
+                              Mfg: {item.manufacturing_brand_name}
+                            </span>
+                          )}
+                          {item.supplier_name && (
+                            <span className="badge-subtle badge-subtle-blue">
+                              {item.supplier_name}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Colours & Variant Stock Breakdown */}
+                      <td>
+                        <div className="text-xs">
+                          {item.colour_stock && Object.keys(item.colour_stock).length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(item.colour_stock).map(([colName, colQty]) => (
+                                <span
+                                  key={colName}
+                                  className={`px-1.5 py-0.5 rounded-md text-[10px] font-extrabold border ${
+                                    Number(colQty) > 0 ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-rose-50 text-rose-700 border-rose-200'
+                                  }`}
+                                >
+                                  {colName}: {colQty}
+                                </span>
+                              ))}
+                            </div>
+                          ) : Array.isArray(item.colours) && item.colours.length > 0 ? (
+                            <div className="flex flex-wrap gap-1">
+                              {item.colours.map((col, idx) => (
+                                <span key={idx} className="px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-[9.5px] font-bold text-slate-600">{col}</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 text-[11px] italic">Standard</span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Price & Margin Pill */}
+                      <td>
+                        <div className="flex flex-col gap-1">
+                          {hasSalePrice ? (
+                            <strong className="text-sm font-black text-teal-700 tracking-tight">{priceLabel(item.sale_price)}</strong>
+                          ) : (
+                            <span className="text-[10px] text-slate-400 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded self-start font-bold uppercase">No Price</span>
+                          )}
+                          
+                          {role === 'superadmin' && (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {hasPurchasePrice ? (
+                                <small className="text-[10.5px] text-slate-500 font-medium">Cost: <b className="text-slate-700">{priceLabel(item.purchase_price)}</b></small>
+                              ) : (
+                                <small className="text-[9.5px] text-slate-400 italic">Cost not set</small>
+                              )}
+
+                              {marginInfo && (
+                                <span className={`margin-pill ${marginInfo.isProfit ? 'profit' : marginInfo.isLoss ? 'loss' : 'neutral'}`} title={`Gross Profit: ₹${marginInfo.profit}`}>
+                                  {marginInfo.isProfit ? `+${marginInfo.marginPct}%` : `${marginInfo.marginPct}%`}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Stock Level with Distribution */}
+                      <td>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center">
+                            {isOutOfStock ? (
+                              <span className="badge-subtle badge-subtle-rose">Out of Stock</span>
+                            ) : isLowStock ? (
+                              <span className="badge-subtle badge-subtle-amber">Low Stock ({item.quantity})</span>
+                            ) : (
+                              <span className="badge-subtle badge-subtle-teal font-black">
+                                {item.quantity} pcs
+                              </span>
+                            )}
+                          </div>
+                          <small className="text-[10px] text-slate-500 font-medium">
+                            {isWarehouseRow ? 'Warehouse' : role === 'shopkeeper' ? 'Branch stock' : 'Owner'}: <b className="text-slate-700">{item.owner_quantity}</b> · {role === 'shopkeeper' ? 'My assigned' : 'Assigned'}: <b className="text-slate-700">{role === 'shopkeeper' ? item.my_quantity : item.shopkeeper_quantity}</b>
+                          </small>
+                        </div>
+                      </td>
+
+                      {/* Actions */}
+                      <td className="text-right">
+                        <div className="flex gap-1.5 justify-end items-center">
+                          <button 
+                            type="button" 
+                            title="Set Stock Level"
+                            onClick={() => {
+                              setForms((prev) => ({
+                                ...prev,
+                                stock: { 
+                                  product_id: String(item.product_id), 
+                                  quantity: '',
+                                  colour: '' 
+                                }
+                              }));
+                              setColorSplitQuantities({});
+                              window.scrollTo({ top: 120, behavior: 'smooth' });
+                            }}
+                            className="px-2.5 py-1.5 min-h-[32px] text-xs bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white font-extrabold rounded-lg shadow-xs active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
+                          >
+                            <Plus size={13} /> Stock
+                          </button>
+                          <button 
+                            type="button" 
+                            title="Duplicate / Clone Product"
+                            onClick={() => {
+                              if (onCloneProduct) {
+                                onCloneProduct(item);
+                              } else if (onEditProduct) {
+                                onEditProduct(item);
+                                setEditingProductId('');
+                              }
+                              setIsAddProductOpen(true);
+                            }}
+                            className="p-2 min-h-[32px] text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                          >
+                            <Copy size={13} />
+                          </button>
+                          <button 
+                            type="button" 
+                            title={role === 'superadmin' ? 'Edit product price' : 'Edit product details'}
+                            onClick={() => {
+                              onEditProduct(item);
+                              setIsAddProductOpen(true);
+                            }}
+                            className="p-2 min-h-[32px] text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                          >
+                            <Edit3 size={13} />
+                          </button>
+                          {role === 'superadmin' && (
+                            <button 
+                              type="button" 
+                              title="Delete / Archive Product"
+                              onClick={() => handleDeleteProductConfirm(item)}
+                              className="p-2 min-h-[32px] text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          /* ==================== 2. COMPACT VISUAL CARD MODE ==================== */
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {stockWithOwnership.map((item) => {
+              const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
+              const isOutOfStock = Number(item.quantity) === 0;
+              const isWarehouseRow = item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id);
+
+              const hasSalePrice = item.sale_price !== null && item.sale_price !== undefined && item.sale_price !== '';
+              const hasPurchasePrice = item.purchase_price !== null && item.purchase_price !== undefined && item.purchase_price !== '';
+              const marginInfo = calculateMargin(item.sale_price, item.purchase_price);
+
+              return (
+                <div 
+                  key={item.id}
+                  className="bg-white border border-slate-200/90 rounded-2xl p-4.5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between gap-3.5"
+                >
+                  {/* Card Header: Thumbnail + Title + Category */}
+                  <div className="flex items-start gap-3">
+                    <ProductThumbnail
+                      src={item.image_url}
+                      alt={productName(item)}
+                      category={item.part_category || item.category || 'Display'}
+                      size={48}
+                      rounded="12px"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-sm font-black text-slate-900 leading-snug break-words">
+                        {formatTitleCase(productName(item))}
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                        <span className="badge-subtle badge-subtle-teal">{item.category || 'Mobile'}</span>
+                        <span className="badge-subtle badge-subtle-slate">{item.brand || 'No brand'}</span>
+                        {item.manufacturing_brand_name && (
+                          <span className="badge-subtle badge-subtle-emerald">Mfg: {item.manufacturing_brand_name}</span>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Category */}
-                <div className="flex items-center">
-                  <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 border border-teal-200/50 text-[10.5px] font-extrabold uppercase tracking-wider">
-                    {item.category || 'Mobile'}
-                  </span>
-                </div>
+                  {/* Compatible models */}
+                  {fullModelList(item) && fullModelList(item) !== productName(item) && (
+                    <div className="px-2.5 py-1.5 bg-slate-50 border border-slate-100 rounded-lg text-xs text-slate-500 font-medium">
+                      <ExpandableText text={fullModelList(item)} limit={60} />
+                    </div>
+                  )}
 
-                {/* Specific Model Code */}
-                <span className="text-xs text-slate-600 font-semibold">
-                  {item.model || <span className="text-slate-300 font-normal">—</span>}
-                </span>
-
-                {/* Colours & Variant Stock Breakdown */}
-                <div className="text-xs">
-                  {item.colour_stock && Object.keys(item.colour_stock).length > 0 ? (
+                  {/* Color split pills */}
+                  {item.colour_stock && Object.keys(item.colour_stock).length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {Object.entries(item.colour_stock).map(([colName, colQty]) => (
                         <span
@@ -1726,117 +2057,90 @@ export default function StockPage({
                         </span>
                       ))}
                     </div>
-                  ) : Array.isArray(item.colours) && item.colours.length > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {item.colours.map((col, idx) => (
-                        <span key={idx} className="px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-[9.5px] font-bold text-slate-600">{col}</span>
-                      ))}
+                  )}
+
+                  {/* Price Stack & Stock Metric Box */}
+                  <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-100 flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Price</span>
+                      <strong className="text-base font-black text-teal-700">{priceLabel(item.sale_price)}</strong>
+                      {role === 'superadmin' && marginInfo && (
+                        <div className="flex items-center gap-1 mt-0.5">
+                          <span className={`margin-pill ${marginInfo.isProfit ? 'profit' : marginInfo.isLoss ? 'loss' : 'neutral'}`}>
+                            {marginInfo.isProfit ? `+${marginInfo.marginPct}%` : `${marginInfo.marginPct}%`}
+                          </span>
+                        </div>
+                      )}
                     </div>
-                  ) : (
-                    <span className="text-slate-400 text-[11px] italic">Standard</span>
-                  )}
-                </div>
 
-                {/* Price (Sale / Purchase Cost) */}
-                <div className="flex flex-col gap-0.5">
-                  {hasSalePrice ? (
-                    <strong className="text-sm font-extrabold text-teal-700">{priceLabel(item.sale_price)}</strong>
-                  ) : (
-                    <span className="text-[9.5px] text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded self-start font-extrabold uppercase tracking-wider">No Price</span>
-                  )}
-                  {role === 'superadmin' && (
-                    hasPurchasePrice ? (
-                      <small className="text-[10px] text-slate-500 font-medium">Cost: <span className="text-slate-700 font-bold">{priceLabel(item.purchase_price)}</span></small>
-                    ) : (
-                      <small className="text-[9px] text-slate-400 italic">Cost not set</small>
-                    )
-                  )}
-                </div>
-
-                {/* Stock Level with Warehousing breakdown */}
-                <div className="flex flex-col gap-1">
-                  <div className="flex items-center">
-                    {isOutOfStock ? (
-                      <span className="px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-extrabold">No Stock</span>
-                    ) : isLowStock ? (
-                      <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-extrabold">Low Stock ({item.quantity})</span>
-                    ) : (
-                      <span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-lg text-xs font-extrabold shadow-2xs">
-                        {item.quantity} pcs
-                      </span>
-                    )}
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Stock</span>
+                      {isOutOfStock ? (
+                        <span className="badge-subtle badge-subtle-rose">Out of Stock</span>
+                      ) : isLowStock ? (
+                        <span className="badge-subtle badge-subtle-amber">{item.quantity} pcs</span>
+                      ) : (
+                        <span className="badge-subtle badge-subtle-teal font-black">{item.quantity} pcs</span>
+                      )}
+                    </div>
                   </div>
-                  <small className="text-[10px] text-slate-500 font-medium">
-                    {isWarehouseRow ? 'Warehouse' : role === 'shopkeeper' ? 'Branch stock' : 'Owner'}: <b className="text-slate-700">{item.owner_quantity}</b> · {role === 'shopkeeper' ? 'My assigned' : 'Assigned'}: <b className="text-slate-700">{role === 'shopkeeper' ? item.my_quantity : item.shopkeeper_quantity}</b>
-                  </small>
-                </div>
 
-                {/* Actions */}
-                <div className="flex gap-1.5 justify-start md:justify-end items-center flex-wrap pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
-                  <button 
-                    type="button" 
-                    title="Set Stock Level"
-                    onClick={() => {
-                      setForms((prev) => ({
-                        ...prev,
-                        stock: { 
-                          product_id: String(item.product_id), 
-                          quantity: '',
-                          colour: '' 
-                        }
-                      }));
-                      setColorSplitQuantities({});
-                      window.scrollTo({ top: 120, behavior: 'smooth' });
-                    }}
-                    className="px-3 py-1.5 min-h-[36px] text-xs bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white font-extrabold rounded-lg shadow-xs active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
-                  >
-                    Stock
-                  </button>
-                  <button 
-                    type="button" 
-                    title="Duplicate / Clone Product"
-                    onClick={() => {
-                      if (onCloneProduct) {
-                        onCloneProduct(item);
-                      } else if (onEditProduct) {
-                        onEditProduct(item);
-                        setEditingProductId('');
-                      }
-                      setIsAddProductOpen(true);
-                    }}
-                    className="px-2.5 py-1.5 min-h-[36px] text-xs bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg font-bold inline-flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
-                  >
-                    <Copy size={12} />
-                    Clone
-                  </button>
-                  <button 
-                    type="button" 
-                    title={role === 'superadmin' ? 'Edit product price' : 'Edit product details'}
-                    onClick={() => {
-                      onEditProduct(item);
-                      setIsAddProductOpen(true);
-                    }}
-                    className="px-2.5 py-1.5 min-h-[36px] text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg font-bold inline-flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
-                  >
-                    <Edit3 size={12} />
-                    Edit
-                  </button>
-                  {role === 'superadmin' && (
+                  {/* Card Actions Footer */}
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
                     <button 
                       type="button" 
-                      title="Delete / Archive Product"
-                      onClick={() => handleDeleteProductConfirm(item)}
-                      className="px-2 py-1.5 min-h-[36px] bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                      onClick={() => {
+                        setForms((prev) => ({
+                          ...prev,
+                          stock: { 
+                            product_id: String(item.product_id), 
+                            quantity: '',
+                            colour: '' 
+                          }
+                        }));
+                        setColorSplitQuantities({});
+                        window.scrollTo({ top: 120, behavior: 'smooth' });
+                      }}
+                      className="flex-1 py-1.5 text-xs bg-teal-600 hover:bg-teal-700 text-white font-extrabold rounded-lg shadow-xs active:scale-95 transition-all flex items-center justify-center gap-1 cursor-pointer"
                     >
-                      <Trash2 size={12} />
+                      <Plus size={13} /> Add Stock
                     </button>
-                  )}
+                    <button 
+                      type="button" 
+                      title="Clone"
+                      onClick={() => {
+                        if (onCloneProduct) onCloneProduct(item);
+                        else if (onEditProduct) { onEditProduct(item); setEditingProductId(''); }
+                        setIsAddProductOpen(true);
+                      }}
+                      className="p-1.5 text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Copy size={13} />
+                    </button>
+                    <button 
+                      type="button" 
+                      title="Edit"
+                      onClick={() => { onEditProduct(item); setIsAddProductOpen(true); }}
+                      className="p-1.5 text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                    >
+                      <Edit3 size={13} />
+                    </button>
+                    {role === 'superadmin' && (
+                      <button 
+                        type="button" 
+                        title="Delete"
+                        onClick={() => handleDeleteProductConfirm(item)}
+                        className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg active:scale-95 transition-all cursor-pointer"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
-
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )
       ) : (
         <Empty title="No stock matching your criteria found" />
       )}
