@@ -5448,64 +5448,101 @@ function App() {
     : productPager.loaded
       ? data.productResults
       : data.products;
-  const modelItems = role === 'customer' ? data.catalog.filter((item) => {
-    const query = modelSearch.trim().toLowerCase();
-    if (!query) return true;
-    return [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description]
+
+  const normalizeSearchString = (str) => {
+    if (!str) return '';
+    return String(str).toLowerCase().replace(/[\s\-_/\\+]/g, '');
+  };
+
+  const matchesProductSearch = (product, searchQuery) => {
+    if (!searchQuery || !searchQuery.trim()) return true;
+    const rawQuery = searchQuery.trim().toLowerCase();
+    const normalizedQuery = normalizeSearchString(searchQuery);
+
+    // 1. Text match (Name, Short Name, Brand, Manufacturer, Category, Compatible Models, Description, Colours)
+    const productTextData = [
+      product.name,
+      product.short_name,
+      product.product_name,
+      product.model,
+      product.brand,
+      product.company_brand_name,
+      product.manufacturing_brand_name,
+      product.mfg_brand_name,
+      product.manufacturing_brand,
+      product.manufacturer,
+      product.category,
+      product.part_category,
+      product.quality_variant,
+      product.compatible_models,
+      product.full_model_list,
+      product.description,
+      Array.isArray(product.colours) ? product.colours.join(' ') : product.colours,
+    ]
       .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-  }) : productPageItems;
-  const priceItems = role === 'customer' ? data.catalog.filter((item) => {
-    const query = priceSearch.trim().toLowerCase();
-    if (!query) return true;
-    return [item.short_name, item.full_model_list, item.name, item.brand, item.category, item.description]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-  }) : productPageItems;
+      .join(' ');
+
+    const textMatches =
+      productTextData.toLowerCase().includes(rawQuery) ||
+      (normalizedQuery.length > 0 && normalizeSearchString(productTextData).includes(normalizedQuery));
+
+    // 2. Exact or partial price match across all tiers
+    const priceValues = [
+      product.retail_price,
+      product.wholesale_price,
+      product.purchase_price,
+      product.sale_price,
+      product.official_price,
+      product.avg_cost_price,
+      product.price,
+    ]
+      .filter((p) => p !== undefined && p !== null && p !== '')
+      .map((p) => String(Number(p)));
+
+    const priceMatches = priceValues.some(
+      (priceStr) =>
+        priceStr === rawQuery ||
+        priceStr.startsWith(rawQuery) ||
+        priceStr.includes(rawQuery)
+    );
+
+    return textMatches || priceMatches;
+  };
+
+  const modelItems = role === 'customer' 
+    ? data.catalog.filter((item) => matchesProductSearch(item, modelSearch)) 
+    : productPageItems;
+  const priceItems = role === 'customer' 
+    ? data.catalog.filter((item) => matchesProductSearch(item, priceSearch)) 
+    : productPageItems;
 
   const allCategoryPool = role === 'customer' ? data.catalog : (data.products || []);
 
   const toolsItems = useMemo(() => {
     return allCategoryPool.filter((item) => {
       if (!isToolsCategory(item)) return false;
-      const query = toolsSearch.trim().toLowerCase();
-      if (!query) return true;
-      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
+      return matchesProductSearch(item, toolsSearch);
     });
   }, [allCategoryPool, toolsSearch]);
 
   const sparesItems = useMemo(() => {
     return allCategoryPool.filter((item) => {
       if (!isSparesCategory(item)) return false;
-      const query = sparesSearch.trim().toLowerCase();
-      if (!query) return true;
-      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
+      return matchesProductSearch(item, sparesSearch);
     });
   }, [allCategoryPool, sparesSearch]);
 
   const ocaGlassItems = useMemo(() => {
     return allCategoryPool.filter((item) => {
       if (!isOcaGlassCategory(item)) return false;
-      const query = ocaSearch.trim().toLowerCase();
-      if (!query) return true;
-      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
+      return matchesProductSearch(item, ocaSearch);
     });
   }, [allCategoryPool, ocaSearch]);
 
   const otherCategoryItems = useMemo(() => {
     return allCategoryPool.filter((item) => {
       if (!isOtherCategory(item)) return false;
-      const query = otherCategorySearch.trim().toLowerCase();
-      if (!query) return true;
-      return [item.short_name, item.full_model_list, item.name, item.brand, item.part_category, item.category, item.description]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(query));
+      return matchesProductSearch(item, otherCategorySearch);
     });
   }, [allCategoryPool, otherCategorySearch]);
   const visibleSales = data.sales;

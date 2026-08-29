@@ -81,6 +81,11 @@ export default function PricesPage({
 }) {
   const [activeMenuId, setActiveMenuId] = useState(null);
 
+  const normalizeString = (str) => {
+    if (!str) return '';
+    return String(str).toLowerCase().replace(/[\s\-_/\\+]/g, '');
+  };
+
   // Consolidate identical products from different suppliers into unified entries and blend live stock
   const consolidatedItems = useMemo(() => {
     const stockMap = new Map();
@@ -111,8 +116,65 @@ export default function PricesPage({
       return item;
     });
 
-    return consolidateProductList(enhancedItems);
-  }, [items, stock]);
+    const consolidated = consolidateProductList(enhancedItems);
+
+    const query = String(search || '').trim();
+    if (!query) return consolidated;
+
+    const rawQuery = query.toLowerCase();
+    const normalizedQuery = normalizeString(query);
+
+    return consolidated.filter((product) => {
+      // 1. Text match (Name, Brand, Manufacturer, Category, Compatible Models, Description, Colours)
+      const productTextData = [
+        product.name,
+        product.short_name,
+        product.product_name,
+        product.model,
+        product.brand,
+        product.company_brand_name,
+        product.manufacturing_brand_name,
+        product.mfg_brand_name,
+        product.manufacturing_brand,
+        product.manufacturer,
+        product.category,
+        product.part_category,
+        product.quality_variant,
+        product.compatible_models,
+        product.full_model_list,
+        product.description,
+        Array.isArray(product.colours) ? product.colours.join(' ') : product.colours,
+      ]
+        .filter(Boolean)
+        .join(' ');
+
+      const textMatches =
+        productTextData.toLowerCase().includes(rawQuery) ||
+        (normalizedQuery.length > 0 && normalizeString(productTextData).includes(normalizedQuery));
+
+      // 2. Exact or partial price match across all tiers
+      const priceValues = [
+        product.retail_price,
+        product.wholesale_price,
+        product.purchase_price,
+        product.sale_price,
+        product.official_price,
+        product.avg_cost_price,
+        product.price,
+      ]
+        .filter((p) => p !== undefined && p !== null && p !== '')
+        .map((p) => String(Number(p)));
+
+      const priceMatches = priceValues.some(
+        (priceStr) =>
+          priceStr === rawQuery ||
+          priceStr.startsWith(rawQuery) ||
+          priceStr.includes(rawQuery)
+      );
+
+      return textMatches || priceMatches;
+    });
+  }, [items, stock, search]);
 
   // Quick Stock Modal State
   const [stockProduct, setStockProduct] = useState(null);

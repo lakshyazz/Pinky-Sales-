@@ -202,9 +202,19 @@ const appendSearchFilter = (where, params, search, columns) => {
   if (!query) return;
   const terms = query.split(/\s+/).filter(Boolean);
   if (terms.length === 0) return;
+
   terms.forEach((term) => {
-    where.push(`(${columns.map((column) => `${column} ILIKE ?`).join(' OR ')})`);
-    columns.forEach(() => params.push(`%${term}%`));
+    const termClean = term.replace(/[\s\-_/\\+]/g, '').toLowerCase();
+    const clauses = [];
+    columns.forEach((column) => {
+      clauses.push(`${column} ILIKE ?`);
+      params.push(`%${term}%`);
+      if (termClean && termClean !== term.toLowerCase() && termClean.length >= 2) {
+        clauses.push(`REGEXP_REPLACE(LOWER(${column}), '[\\s\\-_/\\\\+]', '', 'g') LIKE ?`);
+        params.push(`%${termClean}%`);
+      }
+    });
+    where.push(`(${clauses.join(' OR ')})`);
   });
 };
 const appendExactFilter = (where, params, value, sql) => {
@@ -520,6 +530,11 @@ const getProductsForRole = async (role, query = {}, user = null) => {
     "COALESCE(mb.name, '')",
     "COALESCE(b.name, '')",
     "COALESCE(s.name, '')",
+    "CAST(COALESCE(p.retail_price, p.sale_price, 0) AS TEXT)",
+    "CAST(COALESCE(p.sale_price, 0) AS TEXT)",
+    "CAST(COALESCE(p.wholesale_price, 0) AS TEXT)",
+    "CAST(COALESCE(p.purchase_price, 0) AS TEXT)",
+    "CAST(COALESCE(p.official_price, 0) AS TEXT)",
   ]);
   
   if (hasQueryValue(query.brand)) {
