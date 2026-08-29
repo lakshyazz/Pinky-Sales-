@@ -106,12 +106,12 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
     const lineTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
     const unitPrice = qty > 0 ? (rate || (lineTotal / qty)) : lineTotal;
 
-    // Short name only - no compatible model lists
-    const rawShort = it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
+    // Short name only - check custom_product_name first
+    const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
     const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
 
-    // Manufacturing brand - render directly without "Mfg:" prefix
-    const rawMfg = it.manufacturing_brand_name || it.mfg_brand_name || it.manufacturing_brand || sale?.manufacturing_brand_name || '';
+    // Manufacturing brand - check custom_brand_name first
+    const rawMfg = it.custom_brand_name || it.manufacturing_brand_name || it.mfg_brand_name || it.manufacturing_brand || sale?.manufacturing_brand_name || '';
     const mfgBrand = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
     const brandStr = mfgBrand ? `\n${mfgBrand}` : '';
     const colourStr = it.colour ? ` [${it.colour}]` : '';

@@ -3258,13 +3258,15 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
         'total_price', si.total_price,
         'price_type', si.price_type,
         'colour', si.colour,
-        'name', COALESCE(p_item.short_name, p_item.name),
-        'product_name', COALESCE(p_item.short_name, p_item.name),
-        'short_name', p_item.short_name,
-        'product_short_name', p_item.short_name,
+        'custom_product_name', si.custom_product_name,
+        'custom_brand_name', si.custom_brand_name,
+        'name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+        'product_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+        'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+        'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
         'brand', p_item.brand,
         'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
-        'manufacturing_brand_name', mb_item.name,
+        'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name),
         'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
         'quality_variant', p_item.quality_variant,
         'model', p_item.model,
@@ -3411,13 +3413,15 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
           'total_price', si.total_price,
           'price_type', si.price_type,
           'colour', si.colour,
-          'name', COALESCE(p_item.short_name, p_item.name),
-          'product_name', COALESCE(p_item.short_name, p_item.name),
-          'short_name', p_item.short_name,
-          'product_short_name', p_item.short_name,
+          'custom_product_name', si.custom_product_name,
+          'custom_brand_name', si.custom_brand_name,
+          'name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
           'brand', p_item.brand,
           'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
-          'manufacturing_brand_name', mb_item.name,
+          'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name),
           'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
           'quality_variant', p_item.quality_variant,
           'model', p_item.model,
@@ -3495,13 +3499,15 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
           'total_price', si.total_price,
           'price_type', si.price_type,
           'colour', si.colour,
-          'name', COALESCE(p_item.short_name, p_item.name),
-          'product_name', COALESCE(p_item.short_name, p_item.name),
-          'short_name', p_item.short_name,
-          'product_short_name', p_item.short_name,
+          'custom_product_name', si.custom_product_name,
+          'custom_brand_name', si.custom_brand_name,
+          'name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
           'brand', p_item.brand,
           'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
-          'manufacturing_brand_name', mb_item.name,
+          'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name),
           'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
           'quality_variant', p_item.quality_variant,
           'model', p_item.model,
@@ -4147,9 +4153,17 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           itemColourStr = item.productColours[0];
         }
 
+        const customProductName = item.custom_product_name !== undefined && item.custom_product_name !== null
+          ? (String(item.custom_product_name).trim() || null)
+          : (item.product_name !== undefined ? (String(item.product_name).trim() || null) : null);
+
+        const customBrandName = item.custom_brand_name !== undefined && item.custom_brand_name !== null
+          ? (String(item.custom_brand_name).trim() || null)
+          : (item.manufacturing_brand_name !== undefined ? (String(item.manufacturing_brand_name).trim() || null) : null);
+
         await tx.runQuery(
-          `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             saleId,
             item.product_id,
@@ -4157,7 +4171,9 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
             item.unitPrice,
             item.saleTotal,
             item.price_type || 'retail',
-            itemColourStr
+            itemColourStr,
+            customProductName,
+            customBrandName
           ]
         );
 

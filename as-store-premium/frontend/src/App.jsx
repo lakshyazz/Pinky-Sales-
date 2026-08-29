@@ -993,6 +993,8 @@ function SalesCreationWorkspace({
   salesProductOptions,
   sellingPriceOptions,
   updateSaleItemProduct,
+  updateSaleItemCustomName,
+  updateSaleItemCustomBrand,
   updateSaleItemPriceType,
   updateSaleItemSellingPrice,
   updateSaleItemQuantity,
@@ -1296,6 +1298,49 @@ function SalesCreationWorkspace({
                         </button>
                       )}
                     </div>
+
+                    {/* Invoice Model Name & Manufacturing Brand Customization */}
+                    {Boolean(item.product_id) && (
+                      <div className="pt-2.5 border-t border-slate-200/70 space-y-1.5 bg-slate-100/50 p-2.5 rounded-xl">
+                        <div className="flex flex-wrap items-center justify-between gap-1.5">
+                          <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-1">
+                            <Edit3 size={12} className="text-sky-600" />
+                            Invoice Display Model &amp; Brand
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            Stock deducts from selected model ({selectedProd?.short_name || selectedProd?.name || 'Selected Item'})
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                              Model Name on Invoice (Editable)
+                            </label>
+                            <input
+                              type="text"
+                              value={item.custom_product_name !== undefined ? item.custom_product_name : (selectedProd?.short_name || selectedProd?.name || '')}
+                              onChange={(e) => updateSaleItemCustomName && updateSaleItemCustomName(idx, e.target.value)}
+                              placeholder="e.g. V40E (without WF)"
+                              className="w-full h-8 px-2.5 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg focus:border-sky-500 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                              Manufacturing Brand on Invoice (Editable)
+                            </label>
+                            <input
+                              type="text"
+                              value={item.custom_brand_name !== undefined ? item.custom_brand_name : (selectedProd?.manufacturing_brand_name || selectedProd?.brand || '')}
+                              onChange={(e) => updateSaleItemCustomBrand && updateSaleItemCustomBrand(idx, e.target.value)}
+                              placeholder="e.g. AS CARE / FRESH NEW CARE"
+                              className="w-full h-8 px-2.5 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg focus:border-sky-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Smart Colour Selection System: CONDITIONAL VISIBILITY */}
                     {Boolean(item.product_id) && hasMultipleColours && (
@@ -3643,6 +3688,14 @@ function App() {
       ? [{ color: availableColors[0], qty: qty }] 
       : [];
 
+    const cleanShortName = selectedProd
+      ? (selectedProd.short_name || selectedProd.product_short_name || selectedProd.name || '')
+      : '';
+    const rawMfg = selectedProd
+      ? (selectedProd.manufacturing_brand_name || selectedProd.mfg_brand_name || selectedProd.manufacturing_brand || selectedProd.brand || '')
+      : '';
+    const cleanBrandName = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
+
     currentItems[index] = {
       product_id: productId,
       selling_price: defaultPrice,
@@ -3650,6 +3703,8 @@ function App() {
       quantity: qty,
       total_amount: total,
       color_breakdown: initialBreakdown,
+      custom_product_name: cleanShortName,
+      custom_brand_name: cleanBrandName,
     };
 
     const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
@@ -3825,8 +3880,8 @@ function App() {
   };
 
   const addSaleItem = () => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
-    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] });
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' }])];
+    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' });
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -3834,6 +3889,26 @@ function App() {
         items: currentItems,
       },
     }));
+  };
+
+  const updateSaleItemCustomName = (index, nameVal) => {
+    const currentItems = [...(forms.sale.items || [])];
+    if (!currentItems[index]) return;
+    currentItems[index] = {
+      ...currentItems[index],
+      custom_product_name: nameVal,
+    };
+    setForms((prev) => ({ ...prev, sale: { ...prev.sale, items: currentItems } }));
+  };
+
+  const updateSaleItemCustomBrand = (index, brandVal) => {
+    const currentItems = [...(forms.sale.items || [])];
+    if (!currentItems[index]) return;
+    currentItems[index] = {
+      ...currentItems[index],
+      custom_brand_name: brandVal,
+    };
+    setForms((prev) => ({ ...prev, sale: { ...prev.sale, items: currentItems } }));
   };
 
   const removeSaleItem = (index) => {
@@ -4031,6 +4106,12 @@ function App() {
               color_breakdown: Array.isArray(item.color_breakdown) 
                 ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
                 : [],
+              custom_product_name: item.custom_product_name !== undefined && item.custom_product_name !== null
+                ? String(item.custom_product_name).trim()
+                : undefined,
+              custom_brand_name: item.custom_brand_name !== undefined && item.custom_brand_name !== null
+                ? String(item.custom_brand_name).trim()
+                : undefined,
             };
           }),
         }),
@@ -4935,9 +5016,9 @@ function App() {
                   const itemTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
                   const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
 
-                  const rawShort = it.short_name || it.product_short_name || it.product_name || it.name || '';
+                  const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || '';
                   const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
-                  const rawMfg = it.manufacturing_brand_name || it.mfg_brand_name || it.manufacturing_brand || sale.manufacturing_brand_name || '';
+                  const rawMfg = it.custom_brand_name || it.manufacturing_brand_name || it.mfg_brand_name || it.manufacturing_brand || sale.manufacturing_brand_name || '';
                   const mfgBrand = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
                   return `
                   <tr>
@@ -6293,6 +6374,8 @@ function App() {
                     salesProductOptions={salesProductOptions}
                     sellingPriceOptions={sellingPriceOptions}
                     updateSaleItemProduct={updateSaleItemProduct}
+                    updateSaleItemCustomName={updateSaleItemCustomName}
+                    updateSaleItemCustomBrand={updateSaleItemCustomBrand}
                     updateSaleItemPriceType={updateSaleItemPriceType}
                     updateSaleItemSellingPrice={updateSaleItemSellingPrice}
                     updateSaleItemQuantity={updateSaleItemQuantity}
@@ -6438,6 +6521,8 @@ function App() {
                     salesProductOptions={salesProductOptions}
                     sellingPriceOptions={sellingPriceOptions}
                     updateSaleItemProduct={updateSaleItemProduct}
+                    updateSaleItemCustomName={updateSaleItemCustomName}
+                    updateSaleItemCustomBrand={updateSaleItemCustomBrand}
                     updateSaleItemPriceType={updateSaleItemPriceType}
                     updateSaleItemSellingPrice={updateSaleItemSellingPrice}
                     updateSaleItemQuantity={updateSaleItemQuantity}
