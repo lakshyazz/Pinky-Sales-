@@ -54,11 +54,11 @@ import {
   RotateCcw,
   Pencil,
 } from 'lucide-react';
-import SalesReturnModal from './components/modals/SalesReturnModal';
-import EditSaleModal from './components/modals/EditSaleModal';
+const SalesReturnModal = React.lazy(() => import('./components/modals/SalesReturnModal'));
+const EditSaleModal = React.lazy(() => import('./components/modals/EditSaleModal'));
+const ProductDetailModal = React.lazy(() => import('./components/models/ProductDetailModal'));
+const ProductDetailPage = React.lazy(() => import('./components/models/ProductDetailPage'));
 import ModelsPage from './components/models/ModelsPage';
-import ProductDetailModal from './components/models/ProductDetailModal';
-import ProductDetailPage from './components/models/ProductDetailPage';
 import PricesPage from './components/prices/PricesPage';
 import StockPage from './components/stock/StockPage';
 import LowStockPage from './components/stock/LowStockPage';
@@ -73,7 +73,7 @@ import SearchInput from './components/ui/SearchInput';
 import SearchableCombobox from './components/ui/SearchableCombobox';
 import { CategoriesPage } from './components/other-products/CategoriesPage';
 import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
-import SupplierImportWorkspace from './components/operations/SupplierImportWorkspace';
+const SupplierImportWorkspace = React.lazy(() => import('./components/operations/SupplierImportWorkspace'));
 import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
 import { consolidateProductList } from './utils/productConsolidation';
 import { 
@@ -2181,11 +2181,11 @@ function App() {
   const deferredPendingFilters = useDeferredValue(pendingFilters);
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
-  const [productPager, setProductPager] = useState(() => createPager(5000));
-  const [stockPager, setStockPager] = useState(() => createPager(5000));
-  const [customerPager, setCustomerPager] = useState(() => createPager(5000));
-  const [salesPager, setSalesPager] = useState(() => createPager(5000));
-  const [pendingPager, setPendingPager] = useState(() => createPager(5000));
+  const [productPager, setProductPager] = useState(() => createPager(50));
+  const [stockPager, setStockPager] = useState(() => createPager(50));
+  const [customerPager, setCustomerPager] = useState(() => createPager(50));
+  const [salesPager, setSalesPager] = useState(() => createPager(50));
+  const [pendingPager, setPendingPager] = useState(() => createPager(50));
   const [productPageLoading, setProductPageLoading] = useState(false);
   const [pageLoading, setPageLoading] = useState({
     brands: false,
@@ -3566,11 +3566,23 @@ function App() {
 
   const salesProductOptions = useMemo(() => {
     const list = [...(data.products || []), ...(data.catalog || []), ...(data.stock || [])];
+    if (!list.length) return [];
+
+    // O(1) indexed stock map to eliminate O(N*M) quadratic loop
+    const stockMap = new Map();
+    (data.stock || []).forEach((s) => {
+      const sId = String(s.product_id || s.id || '');
+      if (sId && !stockMap.has(sId)) {
+        stockMap.set(sId, s);
+      }
+    });
+
     const map = new Map();
     list.forEach((p) => {
       const id = p.product_id || p.id;
       if (!id) return;
-      if (!map.has(String(id))) {
+      const strId = String(id);
+      if (!map.has(strId)) {
         const title = p.short_name || p.name || p.product_name || p.display_name || 'Product';
         const brand = p.brand || p.company_brand_name || '';
         const mfg = p.manufacturing_brand_name || p.manufacturing_brand || '';
@@ -3581,8 +3593,8 @@ function App() {
         const wholesalePrice = Number(p.wholesale_price || 0);
         const imageUrl = p.image_url || p.imageUrl || (Array.isArray(p.image_urls) ? p.image_urls[0] : '');
 
-        // Find available stock for current shop
-        const stockItem = (data.stock || []).find((s) => String(s.product_id || s.id) === String(id));
+        // Fast O(1) stock lookup
+        const stockItem = stockMap.get(strId);
         const stockQty = stockItem ? Number(stockItem.quantity || stockItem.stock_quantity || 0) : Number(p.quantity || p.stock || 0);
 
         // Available colors count
@@ -3625,8 +3637,8 @@ function App() {
           p.description,
         ].filter(Boolean).join(' ').toLowerCase();
 
-        map.set(String(id), {
-          id: String(id),
+        map.set(strId, {
+          id: strId,
           name: visibleName,
           keywords,
           brand,
@@ -5639,8 +5651,8 @@ function App() {
     return matchesSearch && matchesShop && matchesBrand && matchesCategory && matchesColour;
   });
 
-  const combinedStock = combineStockRows(data.stock);
-  const stockWithOwnership = combinedStock.map((item) => ({
+  const combinedStock = useMemo(() => combineStockRows(data.stock), [data.stock]);
+  const stockWithOwnership = useMemo(() => combinedStock.map((item) => ({
     ...item,
     owner_quantity: Number(item.owner_quantity || 0),
     shopkeeper_quantity: Number(item.shopkeeper_quantity || 0),
@@ -5648,16 +5660,18 @@ function App() {
     owner_batch_count: Number(item.owner_batch_count || 0),
     shopkeeper_batch_count: Number(item.shopkeeper_batch_count || 0),
     my_batch_count: Number(item.my_batch_count || 0),
-  }));
+  })), [combinedStock]);
+
   const shopkeeperStockItems = stockWithOwnership;
   const visibleStock = stockWithOwnership;
   const stockSummaryLoaded = Boolean(data.stockSummary?.loaded);
   const stockSummaryTotals = data.stockSummary?.totals || {};
-  const stockCategorySummaryMap = new Map((data.stockSummary?.categories || []).map((category) => [
+  const stockCategorySummaryMap = useMemo(() => new Map((data.stockSummary?.categories || []).map((category) => [
     normalizedText(category.category),
     category,
-  ]));
-  const categoryStats = [
+  ])), [data.stockSummary?.categories]);
+
+  const categoryStats = useMemo(() => [
     {
       name: '',
       label: 'All categories',
@@ -5674,29 +5688,45 @@ function App() {
         quantity: stockSummaryLoaded ? Number(summary?.quantity || 0) : categoryStock.reduce((sum, item) => sum + Number(item.quantity || 0), 0),
       };
     }),
-  ];
-  const visibleCategoryStats = categoryStats.filter((category) => (
+  ], [stockSummaryLoaded, stockSummaryTotals, combinedStock, data.reference.categories, stockCategorySummaryMap]);
+
+  const visibleCategoryStats = useMemo(() => categoryStats.filter((category) => (
     !categorySearch.trim() || category.label.toLowerCase().includes(categorySearch.trim().toLowerCase())
-  ));
+  )), [categoryStats, categorySearch]);
+
   const selectedCategoryStat = stockCategoryPage
     ? categoryStats.find((category) => stockCategoryPage === '__all__' ? !category.name : sameText(category.name, stockCategoryPage))
     : null;
   const activeCategoryFilterCount = ['search', 'brand', 'colour', 'status', 'ownership'].filter((key) => Boolean(stockFilters[key])).length;
-  const ownerInventoryQuantity = stockSummaryLoaded ? Number(stockSummaryTotals.owner_quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.owner_quantity || 0), 0);
-  const assignedInventoryQuantity = stockSummaryLoaded ? Number(stockSummaryTotals.shopkeeper_quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.shopkeeper_quantity || 0), 0);
-  const myInventoryQuantity = stockSummaryLoaded ? Number(stockSummaryTotals.my_quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.my_quantity || 0), 0);
-  const warehouseInventoryQuantity = stockWithOwnership
+  
+  const ownerInventoryQuantity = useMemo(() => (
+    stockSummaryLoaded ? Number(stockSummaryTotals.owner_quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.owner_quantity || 0), 0)
+  ), [stockSummaryLoaded, stockSummaryTotals.owner_quantity, stockWithOwnership]);
+
+  const assignedInventoryQuantity = useMemo(() => (
+    stockSummaryLoaded ? Number(stockSummaryTotals.shopkeeper_quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.shopkeeper_quantity || 0), 0)
+  ), [stockSummaryLoaded, stockSummaryTotals.shopkeeper_quantity, stockWithOwnership]);
+
+  const myInventoryQuantity = useMemo(() => (
+    stockSummaryLoaded ? Number(stockSummaryTotals.my_quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.my_quantity || 0), 0)
+  ), [stockSummaryLoaded, stockSummaryTotals.my_quantity, stockWithOwnership]);
+
+  const warehouseInventoryQuantity = useMemo(() => stockWithOwnership
     .filter((item) => item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id))
-    .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+    .reduce((sum, item) => sum + Number(item.quantity || 0), 0),
+    [stockWithOwnership, data.warehouse?.id]
+  );
+
   const stableWarehouseInventoryQuantity = stockSummaryLoaded ? Number(stockSummaryTotals.warehouse_quantity || 0) : warehouseInventoryQuantity;
   const accessibleInventoryQuantity = stockSummaryLoaded ? Number(stockSummaryTotals.quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-  const lowStockAlerts = combineLowStockAlerts(data.dashboard?.lowStock);
+  const lowStockAlerts = useMemo(() => combineLowStockAlerts(data.dashboard?.lowStock), [data.dashboard?.lowStock]);
   const dashboardAvailability = data.dashboard?.modelAvailability || [];
-  const dashboardWarehouseStock = dashboardAvailability.reduce((sum, item) => sum + Number(item.warehouse_stock || 0), 0);
+  const dashboardWarehouseStock = useMemo(() => dashboardAvailability.reduce((sum, item) => sum + Number(item.warehouse_stock || 0), 0), [dashboardAvailability]);
   const dashboardBranchPerformance = data.dashboard?.shopWise?.filter((shop) => shop.location_type !== 'warehouse') || [];
   const dashboardShopCount = dashboardBranchPerformance.length || data.dashboard?.totals?.total_shops || 0;
   const globalQuery = globalSearch.trim().toLowerCase();
-  const globalSearchResults = (() => {
+
+  const globalSearchResults = useMemo(() => {
     if (!globalQuery) return [];
     const results = [];
     const matches = (values) => values
@@ -5757,7 +5787,7 @@ function App() {
       item: shop,
     }, [shop.name, shop.area, shop.address, shop.phone, shop.location_type]));
     return results;
-  })();
+  }, [globalQuery, dashboardAvailability, role, data.catalog, data.products, data.reference.brands, data.customers, data.sales, data.shops]);
 
   if (!authReady) return <SkeletonPage type="dashboard" />;
   if (!session) return <Login onLogin={login} />;
@@ -6067,12 +6097,14 @@ function App() {
 
           {active === 'import' && (
             <PageWrapper activeKey="import" key="import">
-              <SupplierImportWorkspace
-                data={data}
-                api={authedFetch}
-                setGlobalToast={showToast}
-                onImportComplete={loadCore}
-              />
+              <React.Suspense fallback={<div className="p-8"><SmartSkeletonWrapper type="card" count={3} /></div>}>
+                <SupplierImportWorkspace
+                  data={data}
+                  api={authedFetch}
+                  setGlobalToast={showToast}
+                  onImportComplete={loadCore}
+                />
+              </React.Suspense>
             </PageWrapper>
           )}
 
@@ -8302,75 +8334,81 @@ function App() {
         {selectedProductDetails && (
           <div className="fixed inset-0 z-50 bg-slate-50 dark:bg-slate-950 overflow-y-auto p-4 sm:p-6 lg:p-8 animate-fadeIn">
             <div className="max-w-6xl mx-auto">
-              <ProductDetailPage
-                product={selectedProductDetails}
-                onBack={() => {
-                  setSelectedProductDetails(null);
-                  setModelSearch('');
-                }}
-                onEdit={(prod) => {
-                  setSelectedProductDetails(null);
-                  if (editProduct) editProduct(prod);
-                }}
-                role={role}
-                priceVisibility={data.priceVisibility}
-                productName={productName}
-                fullModelList={fullModelList}
-                priceLabel={priceLabel}
-              />
+              <React.Suspense fallback={<div className="p-8"><SmartSkeletonWrapper type="card" count={2} /></div>}>
+                <ProductDetailPage
+                  product={selectedProductDetails}
+                  onBack={() => {
+                    setSelectedProductDetails(null);
+                    setModelSearch('');
+                  }}
+                  onEdit={(prod) => {
+                    setSelectedProductDetails(null);
+                    if (editProduct) editProduct(prod);
+                  }}
+                  role={role}
+                  priceVisibility={data.priceVisibility}
+                  productName={productName}
+                  fullModelList={fullModelList}
+                  priceLabel={priceLabel}
+                />
+              </React.Suspense>
             </div>
           </div>
         )}
-        <SalesReturnModal
-          isOpen={salesReturnModalOpen}
-          onClose={() => setSalesReturnModalOpen(false)}
-          customers={data.customers || []}
-          products={data.products || data.productResults || []}
-          initialCustomer={salesReturnTargetCustomer}
-          initialSale={salesReturnTargetSale}
-          shopId={shopId}
-          authedFetch={authedFetch}
-          showToast={showToast}
-          currency={currency}
-          formatDateDMY={formatDateDMY}
-          onSuccess={async () => {
-            await loadTab(active, shopId);
-            if (selectedPaymentCustomer) {
-              const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
-              if (updatedCust) {
-                openCustomerLedgerDrawer(updatedCust);
+        <React.Suspense fallback={null}>
+          <SalesReturnModal
+            isOpen={salesReturnModalOpen}
+            onClose={() => setSalesReturnModalOpen(false)}
+            customers={data.customers || []}
+            products={data.products || data.productResults || []}
+            initialCustomer={salesReturnTargetCustomer}
+            initialSale={salesReturnTargetSale}
+            shopId={shopId}
+            authedFetch={authedFetch}
+            showToast={showToast}
+            currency={currency}
+            formatDateDMY={formatDateDMY}
+            onSuccess={async () => {
+              await loadTab(active, shopId);
+              if (selectedPaymentCustomer) {
+                const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
+                if (updatedCust) {
+                  openCustomerLedgerDrawer(updatedCust);
+                }
               }
-            }
-          }}
-        />
-        <EditSaleModal
-          isOpen={editSaleModalOpen}
-          onClose={() => {
-            setEditSaleModalOpen(false);
-            setSaleToEdit(null);
-          }}
-          sale={saleToEdit}
-          shopId={shopId}
-          authedFetch={authedFetch}
-          showToast={showToast}
-          currency={currency}
-          formatDateDMY={formatDateDMY}
-          onSuccess={async (updatedSale) => {
-            await loadTab(active, shopId);
-            if (selectedPaymentCustomer) {
-              const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
-              if (updatedCust) {
-                openCustomerLedgerDrawer(updatedCust);
+            }}
+          />
+        </React.Suspense>
+        <React.Suspense fallback={null}>
+          <EditSaleModal
+            isOpen={editSaleModalOpen}
+            onClose={() => {
+              setEditSaleModalOpen(false);
+              setSaleToEdit(null);
+            }}
+            sale={saleToEdit}
+            shopId={shopId}
+            authedFetch={authedFetch}
+            showToast={showToast}
+            currency={currency}
+            formatDateDMY={formatDateDMY}
+            onSuccess={async (updatedSale) => {
+              await loadTab(active, shopId);
+              if (selectedPaymentCustomer) {
+                const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
+                if (updatedCust) {
+                  openCustomerLedgerDrawer(updatedCust);
+                }
               }
-            }
-            if (updatedSale && detailedShopData?.sales) {
-              setDetailedShopData((prev) => ({
-                ...prev,
-                sales: (prev.sales || []).map((s) => Number(s.id) === Number(updatedSale.id) ? { ...s, ...updatedSale } : s),
-              }));
-            }
-          }}
-        />
+              if (updatedSale && detailedShopData?.sales) {
+                setDetailedShopData((prev) => ({
+                  ...prev,
+                  sales: (prev.sales || []).map((s) => Number(s.id) === Number(updatedSale.id) ? { ...s, ...updatedSale } : s),
+                }));
+              }
+            }}
+          />
+        </React.Suspense>
         <ConfirmationDialog
           dialog={confirmDialog}
           saving={saving}

@@ -6,8 +6,8 @@ import ExpandableText from '../shared/ExpandableText';
 import SearchInput from '../ui/SearchInput';
 import ProductThumbnail from '../ui/ProductThumbnail';
 import ProductImageUpload from '../ui/ProductImageUpload';
-import ProductDetailModal from './ProductDetailModal';
-import ProductDetailPage from './ProductDetailPage';
+const ProductDetailModal = React.lazy(() => import('./ProductDetailModal'));
+const ProductDetailPage = React.lazy(() => import('./ProductDetailPage'));
 import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
 
 export default function ModelsPage({
@@ -321,17 +321,19 @@ export default function ModelsPage({
   if (inspectProduct) {
     return (
       <div className="space-y-6">
-        <ProductDetailPage
-          product={inspectProduct}
-          onBack={() => setInspectProduct(null)}
-          onEdit={(prod) => handleOpenEdit(prod)}
-          onAddStock={(prod) => handleOpenAddStock(prod)}
-          role={role}
-          priceVisibility={reference?.priceVisibility}
-          productName={productName}
-          fullModelList={fullModelList}
-          priceLabel={priceLabel}
-        />
+        <React.Suspense fallback={<div className="p-8 text-center text-slate-400">Loading details...</div>}>
+          <ProductDetailPage
+            product={inspectProduct}
+            onBack={() => setInspectProduct(null)}
+            onEdit={(prod) => handleOpenEdit(prod)}
+            onAddStock={(prod) => handleOpenAddStock(prod)}
+            role={role}
+            priceVisibility={reference?.priceVisibility}
+            productName={productName}
+            fullModelList={fullModelList}
+            priceLabel={priceLabel}
+          />
+        </React.Suspense>
 
         {/* Add Stock to Model Modal */}
         <AnimatePresence>

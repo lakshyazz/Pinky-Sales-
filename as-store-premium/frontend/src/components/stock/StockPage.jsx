@@ -1653,7 +1653,7 @@ export default function StockPage({
 
       {/* Stock Grid Table */}
       {stockWithOwnership.length ? (
-        <div className="table panel inventory-stock-table shadow-sm border border-slate-200/80 bg-white" style={{ borderRadius: '20px', overflow: 'hidden' }}>
+        <div className="table panel inventory-stock-table shadow-sm border border-slate-200/80 bg-white overflow-x-auto" style={{ borderRadius: '20px' }}>
           {stockWithOwnership.map((item) => {
             const isLowStock = item.quantity > 0 && item.quantity <= (data.shops.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
             const isOutOfStock = Number(item.quantity) === 0;
@@ -1664,18 +1664,12 @@ export default function StockPage({
 
             return (
               <div 
-                className="row hover:bg-slate-50/60 transition-all duration-300 border-b border-slate-100/90" 
-                key={item.id} 
-                style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: '3.4fr 1.3fr 1.3fr 1.3fr 1.8fr 2.1fr 1.8fr', 
-                  alignItems: 'center', 
-                  padding: '16px 20px', 
-                }}
+                className="row hover:bg-slate-50/60 transition-all duration-300 border-b border-slate-100/90 flex flex-col md:grid md:grid-cols-[3.4fr_1.3fr_1.3fr_1.3fr_1.8fr_2.1fr_1.8fr] gap-3 md:gap-0 md:items-center p-4 sm:px-5" 
+                key={item.id}
               >
                 
                 {/* Product Name & Brand */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                <div className="flex items-center gap-3.5 min-w-0">
                   <ProductThumbnail
                     src={item.image_url}
                     alt={productName(item)}
@@ -1683,108 +1677,102 @@ export default function StockPage({
                     size={44}
                     rounded="12px"
                   />
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                    <b style={{ fontSize: '14.5px', color: '#1e293b', fontWeight: '800', lineHeight: 1.3, overflowWrap: 'anywhere' }}>{productName(item)}</b>
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <b className="text-[14.5px] text-slate-800 font-extrabold leading-snug break-words">{productName(item)}</b>
                     {fullModelList(item) && fullModelList(item) !== productName(item) && (
                       <ExpandableText
-                        className="stock-compatible-models text-slate-500 font-medium leading-relaxed"
+                        className="stock-compatible-models text-slate-500 font-medium leading-relaxed text-xs"
                         text={fullModelList(item)}
                         limit={78}
                       />
                     )}
-                    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
-                      <span style={{ padding: '2px 8px', background: '#f8fafc', color: '#475569', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #e2e8f0' }}>{item.brand || 'No brand'}</span>
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                      <span className="px-2 py-0.5 bg-slate-50 text-slate-600 rounded-md text-[9px] font-extrabold uppercase tracking-wide border border-slate-200">{item.brand || 'No brand'}</span>
                       {item.manufacturing_brand_name && (
-                        <span style={{ padding: '2px 8px', background: '#f0fdf4', color: '#166534', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #bbf7d0' }}>Mfg: {item.manufacturing_brand_name}</span>
+                        <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 rounded-md text-[9px] font-extrabold uppercase tracking-wide border border-emerald-200">Mfg: {item.manufacturing_brand_name}</span>
                       )}
                       {item.supplier_name && (
-                        <span style={{ padding: '2px 8px', background: '#eff6ff', color: '#1e40af', borderRadius: '6px', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.02em', border: '1px solid #bfdbfe' }}>Supplier: {item.supplier_name}</span>
+                        <span className="px-2 py-0.5 bg-blue-50 text-blue-800 rounded-md text-[9px] font-extrabold uppercase tracking-wide border border-blue-200">Supplier: {item.supplier_name}</span>
                       )}
-                      {!shopId && <span style={{ color: '#94a3b8', fontSize: '10.5px', fontWeight: '500' }}>· {item.shop_name}</span>}
+                      {!shopId && <span className="text-slate-400 text-[10.5px] font-medium">· {item.shop_name}</span>}
                     </div>
                   </div>
                 </div>
 
                 {/* Category */}
-                <div style={{ display: 'flex', alignItems: 'center' }}>
+                <div className="flex items-center">
                   <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-teal-50 text-teal-700 border border-teal-200/50 text-[10.5px] font-extrabold uppercase tracking-wider">
                     {item.category || 'Mobile'}
                   </span>
                 </div>
 
                 {/* Specific Model Code */}
-                <span style={{ fontSize: '13px', color: '#475569', fontWeight: '600' }}>
-                  {item.model || <span style={{ color: '#cbd5e1', fontWeight: '400' }}>—</span>}
+                <span className="text-xs text-slate-600 font-semibold">
+                  {item.model || <span className="text-slate-300 font-normal">—</span>}
                 </span>
 
                 {/* Colours & Variant Stock Breakdown */}
-                <div style={{ fontSize: '12px' }}>
+                <div className="text-xs">
                   {item.colour_stock && Object.keys(item.colour_stock).length > 0 ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                    <div className="flex flex-wrap gap-1">
                       {Object.entries(item.colour_stock).map(([colName, colQty]) => (
                         <span
                           key={colName}
-                          style={{
-                            padding: '2px 6px',
-                            background: Number(colQty) > 0 ? 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)' : '#fef2f2',
-                            border: Number(colQty) > 0 ? '1px solid #99f6e4' : '1px solid #fecaca',
-                            borderRadius: '6px',
-                            fontSize: '9.5px',
-                            fontWeight: '800',
-                            color: Number(colQty) > 0 ? '#0d9488' : '#dc2626',
-                          }}
+                          className={`px-1.5 py-0.5 rounded-md text-[9.5px] font-extrabold border ${
+                            Number(colQty) > 0 ? 'bg-teal-50 text-teal-700 border-teal-200' : 'bg-rose-50 text-rose-700 border-rose-200'
+                          }`}
                         >
                           {colName}: {colQty}
                         </span>
                       ))}
                     </div>
                   ) : Array.isArray(item.colours) && item.colours.length > 0 ? (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                    <div className="flex flex-wrap gap-1">
                       {item.colours.map((col, idx) => (
-                        <span key={idx} style={{ padding: '2px 6px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '9.5px', fontWeight: '700', color: '#64748b' }}>{col}</span>
+                        <span key={idx} className="px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded-md text-[9.5px] font-bold text-slate-600">{col}</span>
                       ))}
                     </div>
                   ) : (
-                    <span style={{ color: '#94a3b8', fontSize: '11px', fontStyle: 'italic' }}>Standard</span>
+                    <span className="text-slate-400 text-[11px] italic">Standard</span>
                   )}
                 </div>
 
                 {/* Price (Sale / Purchase Cost) */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <div className="flex flex-col gap-0.5">
                   {hasSalePrice ? (
-                    <strong style={{ fontSize: '14px', color: '#0f766e', fontWeight: '800' }}>{priceLabel(item.sale_price)}</strong>
+                    <strong className="text-sm font-extrabold text-teal-700">{priceLabel(item.sale_price)}</strong>
                   ) : (
-                    <span style={{ fontSize: '9.5px', color: '#64748b', background: '#f1f5f9', border: '1px solid #e2e8f0', padding: '2px 6px', borderRadius: '4px', alignSelf: 'flex-start', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '0.05em' }}>No Price</span>
+                    <span className="text-[9.5px] text-slate-500 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded self-start font-extrabold uppercase tracking-wider">No Price</span>
                   )}
                   {role === 'superadmin' && (
                     hasPurchasePrice ? (
-                      <small style={{ fontSize: '10px', color: '#64748b', fontWeight: '500' }}>Cost: <span style={{ color: '#334155', fontWeight: '700' }}>{priceLabel(item.purchase_price)}</span></small>
+                      <small className="text-[10px] text-slate-500 font-medium">Cost: <span className="text-slate-700 font-bold">{priceLabel(item.purchase_price)}</span></small>
                     ) : (
-                      <small style={{ fontSize: '9px', color: '#94a3b8', fontStyle: 'italic' }}>Cost not set</small>
+                      <small className="text-[9px] text-slate-400 italic">Cost not set</small>
                     )
                   )}
                 </div>
 
                 {/* Stock Level with Warehousing breakdown */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center">
                     {isOutOfStock ? (
-                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%)', color: '#dc2626', border: '1px solid #fecaca', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>No Stock</span>
+                      <span className="px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg text-xs font-extrabold">No Stock</span>
                     ) : isLowStock ? (
-                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%)', color: '#d97706', border: '1px solid #fde68a', borderRadius: '8px', fontSize: '11px', fontWeight: '800' }}>Low Stock ({item.quantity})</span>
+                      <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-extrabold">Low Stock ({item.quantity})</span>
                     ) : (
-                      <span style={{ padding: '3px 8px', background: 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)', color: '#0d9488', border: '1px solid #99f6e4', borderRadius: '8px', fontSize: '11px', fontWeight: '800', boxShadow: '0 2px 4px rgba(13,148,136,0.04)' }}>
+                      <span className="px-2 py-0.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-lg text-xs font-extrabold shadow-2xs">
                         {item.quantity} pcs
                       </span>
                     )}
                   </div>
-                  <small style={{ fontSize: '10px', color: '#64748b', marginTop: '2px', fontWeight: '500' }}>
-                    {isWarehouseRow ? 'Warehouse' : role === 'shopkeeper' ? 'Branch stock' : 'Owner'}: <b style={{ color: '#334155' }}>{item.owner_quantity}</b> · {role === 'shopkeeper' ? 'My assigned' : 'Assigned'}: <b style={{ color: '#334155' }}>{role === 'shopkeeper' ? item.my_quantity : item.shopkeeper_quantity}</b>
+                  <small className="text-[10px] text-slate-500 font-medium">
+                    {isWarehouseRow ? 'Warehouse' : role === 'shopkeeper' ? 'Branch stock' : 'Owner'}: <b className="text-slate-700">{item.owner_quantity}</b> · {role === 'shopkeeper' ? 'My assigned' : 'Assigned'}: <b className="text-slate-700">{role === 'shopkeeper' ? item.my_quantity : item.shopkeeper_quantity}</b>
                   </small>
                 </div>
 
                 {/* Actions */}
-                <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                <div className="flex gap-1.5 justify-start md:justify-end items-center flex-wrap pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
                   <button 
                     type="button" 
                     title="Set Stock Level"
@@ -1800,8 +1788,7 @@ export default function StockPage({
                       setColorSplitQuantities({});
                       window.scrollTo({ top: 120, behavior: 'smooth' });
                     }}
-                    className="hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    style={{ padding: '6px 10px', fontSize: '11px', background: 'linear-gradient(to right, #0d9488, #0f766e)', border: 'none', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', color: '#ffffff', fontWeight: '800', boxShadow: '0 2px 6px rgba(13,148,136,0.15)' }}
+                    className="px-3 py-1.5 min-h-[36px] text-xs bg-gradient-to-r from-teal-600 to-teal-700 hover:from-teal-700 hover:to-teal-800 text-white font-extrabold rounded-lg shadow-xs active:scale-95 transition-all flex items-center gap-1 cursor-pointer"
                   >
                     Stock
                   </button>
@@ -1817,8 +1804,7 @@ export default function StockPage({
                       }
                       setIsAddProductOpen(true);
                     }}
-                    className="hover:bg-sky-50 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    style={{ padding: '6px 10px', background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', cursor: 'pointer', color: '#0284c7', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
+                    className="px-2.5 py-1.5 min-h-[36px] text-xs bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 rounded-lg font-bold inline-flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
                   >
                     <Copy size={12} />
                     Clone
@@ -1830,8 +1816,7 @@ export default function StockPage({
                       onEditProduct(item);
                       setIsAddProductOpen(true);
                     }}
-                    className="hover:bg-slate-100 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                    style={{ padding: '6px 10px', background: '#f8fafc', border: '1px solid #cbd5e1', borderRadius: '8px', cursor: 'pointer', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: '800' }}
+                    className="px-2.5 py-1.5 min-h-[36px] text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 rounded-lg font-bold inline-flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
                   >
                     <Edit3 size={12} />
                     Edit
@@ -1841,8 +1826,7 @@ export default function StockPage({
                       type="button" 
                       title="Delete / Archive Product"
                       onClick={() => handleDeleteProductConfirm(item)}
-                      className="hover:bg-rose-50 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                      style={{ padding: '6px 8px', background: '#fff1f2', border: '1px solid #fecaca', borderRadius: '8px', cursor: 'pointer', color: '#e11d48' }}
+                      className="px-2 py-1.5 min-h-[36px] bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-200 rounded-lg active:scale-95 transition-all cursor-pointer"
                     >
                       <Trash2 size={12} />
                     </button>

@@ -45,7 +45,7 @@ import {
 } from 'lucide-react';
 
 // Animated Number Counter Helper
-function AnimatedCounter({ value, prefix = '', suffix = '', decimals = 0 }) {
+const AnimatedCounter = React.memo(function AnimatedCounter({ value, prefix = '', suffix = '', decimals = 0 }) {
   const [displayValue, setDisplayValue] = useState(0);
   const targetValue = typeof value === 'number' ? value : parseFloat(String(value).replace(/[^0-9.-]+/g, '')) || 0;
 
@@ -86,10 +86,10 @@ function AnimatedCounter({ value, prefix = '', suffix = '', decimals = 0 }) {
       {suffix}
     </span>
   );
-}
+});
 
 // Mini Sparkline SVG Generator
-function SparklineChart({ data = [], color = '#00c853', height = 36, width = 110 }) {
+const SparklineChart = React.memo(function SparklineChart({ data = [], color = '#00c853', height = 36, width = 110 }) {
   if (!data || data.length < 2) {
     // Default fallback curve
     data = [20, 35, 25, 45, 30, 55, 40, 65, 50, 75, 70, 90];
@@ -126,10 +126,10 @@ function SparklineChart({ data = [], color = '#00c853', height = 36, width = 110
       />
     </svg>
   );
-}
+});
 
 // Interactive Area Chart for Sales Overview
-function SalesOverviewChart({ timeframe, setTimeframe, currency, totals }) {
+const SalesOverviewChart = React.memo(function SalesOverviewChart({ timeframe, setTimeframe, currency, totals }) {
   const chartDataMap = useMemo(() => {
     return {
       Today: [
@@ -186,7 +186,7 @@ function SalesOverviewChart({ timeframe, setTimeframe, currency, totals }) {
   const areaPoints = `0,${chartHeight} ${points} ${chartWidth},${chartHeight}`;
 
   return (
-    <div className="bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xl shadow-slate-900/5 relative overflow-hidden backdrop-blur-xl">
+    <div className="bg-white dark:bg-slate-900/95 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 sm:p-6 shadow-md relative overflow-hidden">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -343,10 +343,10 @@ function SalesOverviewChart({ timeframe, setTimeframe, currency, totals }) {
       </div>
     </div>
   );
-}
+});
 
 // Manufacturing Brand Performance Hub (Donut + Ranking + Metrics)
-function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
+const ManufacturingBrandAnalyticsHub = React.memo(function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
   const stockValuation = mfgStats.stockAndValue || [];
   const catalogModels = mfgStats.products || [];
   const mostSold = mfgStats.mostSold || [];
@@ -361,7 +361,7 @@ function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
   const donutColors = ['#0d9488', '#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#64748b'];
 
   return (
-    <div className="bg-white dark:bg-slate-900/90 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-6 shadow-xl shadow-slate-900/5 backdrop-blur-xl space-y-6">
+    <div className="bg-white dark:bg-slate-900/95 border border-slate-200/80 dark:border-slate-800 rounded-3xl p-4 sm:p-6 shadow-md space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
         <div>
@@ -497,10 +497,10 @@ function ManufacturingBrandAnalyticsHub({ mfgStats = {}, currency }) {
       </div>
     </div>
   );
-}
+});
 
 // Main Component export
-export default function RedesignedDashboard({
+const RedesignedDashboard = React.memo(function RedesignedDashboard({
   session,
   role,
   data = {},
@@ -579,9 +579,9 @@ export default function RedesignedDashboard({
   const lowStockSparkline = [15, 12, 18, 10, 8, 5, 3, 2];
 
   return (
-    <div className="min-h-screen space-y-8 pb-12 transition-all">
+    <div className="min-h-[100dvh] space-y-8 pb-12 transition-all">
       {/* HEADER BAR (Relative with proper spacing, not fighting for sticky top spot) */}
-      <header className="relative z-20 bg-white/70 dark:bg-slate-900/70 border-b border-slate-200/80 dark:border-slate-800 -mx-4 sm:-mx-8 px-4 sm:px-8 py-4 transition-all">
+      <header className="relative z-20 bg-white/95 dark:bg-slate-900/95 border-b border-slate-200/80 dark:border-slate-800 -mx-4 sm:-mx-8 px-4 sm:px-8 py-4 transition-all safe-area-pt">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           
           {/* Greeting & Date */}
@@ -1064,4 +1064,6 @@ export default function RedesignedDashboard({
 
     </div>
   );
-}
+});
+
+export default RedesignedDashboard;

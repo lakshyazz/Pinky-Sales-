@@ -895,11 +895,12 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
         COALESCE(SUM(ib.quantity_remaining) FILTER (WHERE sh.location_type = 'warehouse'), 0) AS warehouse_stock,
         STRING_AGG(DISTINCT CASE WHEN ib.quantity_remaining > 0 THEN sh.name END, ', ') AS available_locations
       FROM products p
-      LEFT JOIN inventory_batches ib ON ib.product_id = p.id ${shopId ? 'AND ib.shop_id = ?' : ''}
+      LEFT JOIN inventory_batches ib ON ib.product_id = p.id AND ib.quantity_remaining > 0 ${shopId ? 'AND ib.shop_id = ?' : ''}
       LEFT JOIN shops sh ON sh.id = ib.shop_id
       WHERE p.is_active = 1
       GROUP BY p.id
       ORDER BY COALESCE(p.short_name, p.name)
+      LIMIT 500
     `, shopId ? [shopId] : []),
   ]);
 
