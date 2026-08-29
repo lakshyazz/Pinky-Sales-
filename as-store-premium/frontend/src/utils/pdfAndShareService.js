@@ -10,9 +10,16 @@ const formatMoney = (val) => Number(val || 0).toLocaleString('en-IN', {
 // Helper for date formatting
 const formatDMY = (dateStr) => {
   if (!dateStr) return 'Not set';
-  const raw = String(dateStr).split('T')[0];
-  const parts = raw.split('-');
-  if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  const str = String(dateStr).trim();
+  const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+  const d = new Date(dateStr);
+  if (!isNaN(d.getTime())) {
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    return `${dd}/${mm}/${yyyy}`;
+  }
   return dateStr;
 };
 

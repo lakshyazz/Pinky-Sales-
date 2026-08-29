@@ -5032,8 +5032,20 @@ function App() {
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
     }[character]));
     const formatDate = (value) => {
-      const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
-      return match ? `${match[3]}/${match[2]}/${match[1]}` : safe(value || new Date().toLocaleDateString('en-GB'));
+      if (!value) return '';
+      const str = String(value).trim();
+      const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (match) {
+        return `${match[3]}/${match[2]}/${match[1]}`;
+      }
+      const d = new Date(value);
+      if (!isNaN(d.getTime())) {
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const yyyy = d.getFullYear();
+        return `${dd}/${mm}/${yyyy}`;
+      }
+      return safe(value);
     };
     const formatAmount = (value) => Number(value || 0).toLocaleString('en-IN', {
       minimumFractionDigits: 2,
@@ -5056,9 +5068,27 @@ function App() {
 
     const invoiceItems = Array.isArray(sale.items) && sale.items.length ? sale.items : [sale];
     const isConsolidated = Boolean(sale.consolidated);
-    const purchaseDates = invoiceItems.map((item) => item.sale_date).filter(Boolean).sort();
-    const firstPurchaseDate = purchaseDates[0] || sale.sale_date;
-    const latestPurchaseDate = purchaseDates[purchaseDates.length - 1] || sale.sale_date;
+    const invoiceDateVal = sale.invoice_date || sale.sale_date || (isConsolidated ? new Date().toISOString().slice(0, 10) : sale.sale_date);
+
+    const expandedItems = invoiceItems.flatMap((item) => {
+      const parentDate = item.invoice_date || item.sale_date || sale.invoice_date || sale.sale_date || invoiceDateVal;
+      if (Array.isArray(item.items) && item.items.length > 0) {
+        return item.items.map((sub) => ({
+          ...sub,
+          sale_date: sub.invoice_date || sub.sale_date || parentDate,
+          invoice_date: sub.invoice_date || sub.sale_date || parentDate,
+        }));
+      }
+      return [{
+        ...item,
+        sale_date: item.invoice_date || item.sale_date || parentDate,
+        invoice_date: item.invoice_date || item.sale_date || parentDate,
+      }];
+    });
+
+    const purchaseDates = expandedItems.map((item) => item.invoice_date || item.sale_date).filter(Boolean).sort();
+    const firstPurchaseDate = purchaseDates[0] || invoiceDateVal;
+    const latestPurchaseDate = purchaseDates[purchaseDates.length - 1] || invoiceDateVal;
     const hasOutstandingBalance = invoiceItems.some((item) => Number(item.pending_amount || 0) > 0);
     const outstandingDueDates = invoiceItems.filter((item) => Number(item.pending_amount || 0) > 0).map((item) => item.due_date).filter(Boolean).sort();
     const invoiceNo = isConsolidated
@@ -5082,7 +5112,6 @@ function App() {
       allExpenses.reduce((s, e) => s + Number(e.amount || 0), 0)
     ) ?? 0);
 
-    const invoiceDateVal = sale.invoice_date || (isConsolidated ? new Date().toISOString().slice(0, 10) : sale.sale_date);
     const termsLabel = sale.payment_terms_days ? `${sale.payment_terms_days} Days` : '15 Days';
     const dueDateVal = sale.due_date || (outstandingDueDates.length ? outstandingDueDates[0] : (hasOutstandingBalance ? 'Not set' : 'Paid'));
 
@@ -5090,22 +5119,15 @@ function App() {
       ? formatDate(firstPurchaseDate)
       : `${formatDate(firstPurchaseDate)} to ${formatDate(latestPurchaseDate)}`;
 
-    const expandedItems = invoiceItems.flatMap((item) => {
-      if (Array.isArray(item.items) && item.items.length > 0) {
-        return item.items.map((sub) => ({
-          ...sub,
-          sale_date: item.sale_date || sub.sale_date,
-        }));
-      }
-      return [item];
-    });
-
     const itemRows = expandedItems.map((item, index) => {
       // 1. Correct key lookups for item rates and row totals
       const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? (item.total_amount && item.quantity ? Number(item.total_amount) / Number(item.quantity) : (item.amount && item.quantity ? Number(item.amount) / Number(item.quantity) : 0)));
       const qty = Number(item.quantity ?? item.qty ?? 1);
       const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
       const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
+
+      // Priority: item-specific sale date -> parent invoice date -> fallback
+      const itemDisplayDate = item.invoice_date || item.sale_date || sale.invoice_date || sale.sale_date || invoiceDateVal;
 
       // Only show Short Name - never show concatenated compatible models
       const rawShort = item.short_name || item.product_short_name || item.product_name || item.name || '';
@@ -5133,7 +5155,7 @@ function App() {
       return `
         <tr>
           <td class="number">${index + 1}</td>
-          <td class="date">${formatDate(item.sale_date)}</td>
+          <td class="date">${formatDate(itemDisplayDate)}</td>
           <td class="item">
             <strong style="font-size: 12.5px; color: #0f172a; display: block;">${safe(shortName)}</strong>
             ${item.colour ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(item.colour)}</span>` : ''}
