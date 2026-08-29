@@ -3248,7 +3248,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     LEFT JOIN products p ON p.id = sa.product_id
     LEFT JOIN customers c ON c.id = sa.customer_id
     LEFT JOIN brands b ON b.id = p.company_brand_id
-    LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
+    LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
     LEFT JOIN (
       SELECT si.sale_id, json_agg(json_build_object(
         'id', si.id,
@@ -3258,11 +3258,13 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
         'total_price', si.total_price,
         'price_type', si.price_type,
         'colour', si.colour,
-        'name', p_item.name,
-        'product_name', p_item.name,
+        'name', COALESCE(p_item.short_name, p_item.name),
+        'product_name', COALESCE(p_item.short_name, p_item.name),
         'short_name', p_item.short_name,
         'product_short_name', p_item.short_name,
         'brand', p_item.brand,
+        'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
+        'manufacturing_brand_name', mb_item.name,
         'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
         'quality_variant', p_item.quality_variant,
         'model', p_item.model,
@@ -3271,6 +3273,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
       ) ORDER BY si.id ASC) AS items
       FROM sale_items si
       JOIN products p_item ON p_item.id = si.product_id
+      LEFT JOIN manufacturing_brands mb_item ON mb_item.id = p_item.manufacturing_brand_id
       GROUP BY si.sale_id
     ) si_agg ON si_agg.sale_id = sa.id
     LEFT JOIN (
@@ -3390,11 +3393,15 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
       SELECT sa.*, 
         COALESCE(si_agg.items, '[]'::json) AS items,
         COALESCE(se.expenses, '[]'::json) AS expenses,
+        COALESCE(cnr_agg.credit_redemptions, '[]'::json) AS credit_redemptions,
         p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
-        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
+        p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name
       FROM sales sa
       JOIN shops sh ON sh.id = sa.shop_id
       LEFT JOIN products p ON p.id = sa.product_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
       LEFT JOIN (
         SELECT si.sale_id, json_agg(json_build_object(
           'id', si.id,
@@ -3404,11 +3411,13 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
           'total_price', si.total_price,
           'price_type', si.price_type,
           'colour', si.colour,
-          'name', p_item.name,
-          'product_name', p_item.name,
+          'name', COALESCE(p_item.short_name, p_item.name),
+          'product_name', COALESCE(p_item.short_name, p_item.name),
           'short_name', p_item.short_name,
           'product_short_name', p_item.short_name,
           'brand', p_item.brand,
+          'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
+          'manufacturing_brand_name', mb_item.name,
           'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
           'quality_variant', p_item.quality_variant,
           'model', p_item.model,
@@ -3417,6 +3426,7 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
         ) ORDER BY si.id ASC) AS items
         FROM sale_items si
         JOIN products p_item ON p_item.id = si.product_id
+        LEFT JOIN manufacturing_brands mb_item ON mb_item.id = p_item.manufacturing_brand_id
         GROUP BY si.sale_id
       ) si_agg ON si_agg.sale_id = sa.id
       LEFT JOIN (
@@ -3424,6 +3434,12 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
         FROM sale_expenses
         GROUP BY sale_id
       ) se ON se.sale_id = sa.id
+      LEFT JOIN (
+        SELECT cnr.sale_id, json_agg(json_build_object('id', cnr.id, 'credit_note_id', cnr.credit_note_id, 'credit_note_number', cn.credit_note_number, 'amount', cnr.amount)) AS credit_redemptions
+        FROM credit_note_redemptions cnr
+        JOIN credit_notes cn ON cn.id = cnr.credit_note_id
+        GROUP BY cnr.sale_id
+      ) cnr_agg ON cnr_agg.sale_id = sa.id
       WHERE sa.customer_id = ? ${whereShop}
       ORDER BY sa.id DESC
     `, params);
@@ -3459,6 +3475,7 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
       SELECT sa.*, 
         COALESCE(si_agg.items, '[]'::json) AS items,
         COALESCE(se.expenses, '[]'::json) AS expenses,
+        COALESCE(cnr_agg.credit_redemptions, '[]'::json) AS credit_redemptions,
         p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
         c.name AS customer_name, c.mobile, c.address,
         sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
@@ -3468,7 +3485,7 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
       JOIN customers c ON c.id = sa.customer_id
       JOIN shops sh ON sh.id = sa.shop_id
       LEFT JOIN brands b ON b.id = p.company_brand_id
-      LEFT JOIN manufacturing_brands mb ON mb.id = sa.manufacturing_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
       LEFT JOIN (
         SELECT si.sale_id, json_agg(json_build_object(
           'id', si.id,
@@ -3478,11 +3495,13 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
           'total_price', si.total_price,
           'price_type', si.price_type,
           'colour', si.colour,
-          'name', p_item.name,
-          'product_name', p_item.name,
+          'name', COALESCE(p_item.short_name, p_item.name),
+          'product_name', COALESCE(p_item.short_name, p_item.name),
           'short_name', p_item.short_name,
           'product_short_name', p_item.short_name,
           'brand', p_item.brand,
+          'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
+          'manufacturing_brand_name', mb_item.name,
           'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
           'quality_variant', p_item.quality_variant,
           'model', p_item.model,
@@ -3491,6 +3510,7 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         ) ORDER BY si.id ASC) AS items
         FROM sale_items si
         JOIN products p_item ON p_item.id = si.product_id
+        LEFT JOIN manufacturing_brands mb_item ON mb_item.id = p_item.manufacturing_brand_id
         GROUP BY si.sale_id
       ) si_agg ON si_agg.sale_id = sa.id
       LEFT JOIN (
@@ -3498,6 +3518,12 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         FROM sale_expenses
         GROUP BY sale_id
       ) se ON se.sale_id = sa.id
+      LEFT JOIN (
+        SELECT cnr.sale_id, json_agg(json_build_object('id', cnr.id, 'credit_note_id', cnr.credit_note_id, 'credit_note_number', cn.credit_note_number, 'amount', cnr.amount)) AS credit_redemptions
+        FROM credit_note_redemptions cnr
+        JOIN credit_notes cn ON cn.id = cnr.credit_note_id
+        GROUP BY cnr.sale_id
+      ) cnr_agg ON cnr_agg.sale_id = sa.id
       WHERE sa.shop_id = ? AND c.mobile = ?
     `;
     if (isShopStaffRole(req.user.role)) {
@@ -3536,10 +3562,270 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
   }
 });
 
+// Customer Balance and Available Credits endpoint
+app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const customerId = Number(req.params.id);
+    if (!Number.isInteger(customerId) || customerId <= 0) {
+      return res.status(400).json({ error: 'Valid customer ID is required.' });
+    }
+    const customer = await getRecord('SELECT id, name, mobile, address, shop_id FROM customers WHERE id = ?', [customerId]);
+    if (!customer) return res.status(404).json({ error: 'Customer not found.' });
+
+    // Outstanding balance across customer's open sales
+    const balanceRow = await getRecord(
+      'SELECT COALESCE(SUM(pending_amount), 0) AS outstanding_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
+      [customerId]
+    );
+    const outstandingBalance = money(balanceRow?.outstanding_balance || 0);
+
+    // Active credit notes with remaining balance
+    const creditNotes = await allRecords(
+      `SELECT id, credit_note_number, amount, used_amount, balance_amount, reason, status, return_date, sale_id, created_at
+       FROM credit_notes
+       WHERE customer_id = ? AND status IN ('active', 'partially_used') AND balance_amount > 0
+       ORDER BY return_date ASC, id ASC`,
+      [customerId]
+    );
+    const availableCredits = creditNotes.reduce((sum, cn) => sum + money(cn.balance_amount), 0);
+
+    res.json({
+      customer,
+      outstanding_balance: outstandingBalance,
+      available_credits: money(availableCredits),
+      credit_notes: creditNotes,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Unable to load customer balance.' });
+  }
+});
+
+// List Credit Notes with filters and pagination
+app.get(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const requestedShopId = scopeShopId(req);
+    const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
+    const pagination = parsePagination(req.query);
+    const params = [];
+    const where = ['1 = 1'];
+    if (shopId) {
+      where.push('cn.shop_id = ?');
+      params.push(shopId);
+    }
+    if (req.query.customer_id) {
+      where.push('cn.customer_id = ?');
+      params.push(Number(req.query.customer_id));
+    }
+    if (req.query.status) {
+      where.push('cn.status = ?');
+      params.push(req.query.status);
+    }
+    appendSearchFilter(where, params, req.query.search, [
+      'cn.credit_note_number',
+      'c.name',
+      "COALESCE(c.mobile, '')",
+      "COALESCE(cn.reason, '')",
+    ]);
+    appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'cn.return_date');
+
+    const baseSql = `
+      FROM credit_notes cn
+      JOIN customers c ON c.id = cn.customer_id
+      JOIN shops sh ON sh.id = cn.shop_id
+      LEFT JOIN sales s ON s.id = cn.sale_id
+      WHERE ${where.join(' AND ')}
+    `;
+
+    const rows = await runPaginatedList({
+      dataSql: `
+        SELECT cn.*, c.name AS customer_name, c.mobile AS customer_mobile, sh.name AS shop_name, s.invoice_date AS sale_invoice_date,
+          (SELECT COUNT(*) FROM sales_returns sr WHERE sr.credit_note_id = cn.id) AS items_returned_count
+        ${baseSql}
+        ORDER BY cn.created_at DESC, cn.id DESC
+      `,
+      countSql: `SELECT COUNT(*) AS total ${baseSql}`,
+      params,
+      pagination,
+      totalKey: 'totalCreditNotes',
+    });
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Unable to list credit notes.' });
+  }
+});
+
+// Create Sales Return & Issue Credit Note (with strict row-locking & inventory restock)
+app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = requireScopedShopId(req, req.body.shop_id);
+    const { customer_id, sale_id, reason = '', return_date, items = [] } = req.body;
+
+    if (!customer_id) {
+      return res.status(400).json({ error: 'Please select a customer.' });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one product item must be returned.' });
+    }
+
+    const returnDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(return_date || ''))
+      ? String(return_date)
+      : today();
+
+    const result = await runTransaction(async (tx) => {
+      // 1. Lock customer row to guarantee sequential integrity
+      const customer = await tx.getRecord('SELECT id, name, mobile FROM customers WHERE id = ? FOR UPDATE', [customer_id]);
+      if (!customer) {
+        const error = new Error('Customer not found.');
+        error.status = 404;
+        throw error;
+      }
+
+      // 2. If sale_id provided, lock sale row and validate against sale
+      let originalSale = null;
+      if (sale_id) {
+        originalSale = await tx.getRecord('SELECT * FROM sales WHERE id = ? FOR UPDATE', [sale_id]);
+        if (!originalSale) {
+          const error = new Error('Original sale not found.');
+          error.status = 404;
+          throw error;
+        }
+        if (Number(originalSale.customer_id) !== Number(customer_id)) {
+          const error = new Error('Selected sale does not belong to this customer.');
+          error.status = 400;
+          throw error;
+        }
+      }
+
+      // 3. Validate returned items
+      const validatedItems = [];
+      let totalAmount = 0;
+      for (const item of items) {
+        const productId = Number(item.product_id);
+        const qty = Number(item.quantity);
+        const unitPrice = money(item.unit_price);
+        if (!productId || isNaN(qty) || qty <= 0 || unitPrice < 0) {
+          const error = new Error('Invalid product, quantity, or unit price in return items.');
+          error.status = 400;
+          throw error;
+        }
+        const prod = await tx.getRecord('SELECT id, name, short_name FROM products WHERE id = ?', [productId]);
+        if (!prod) {
+          const error = new Error(`Product ID ${productId} not found.`);
+          error.status = 404;
+          throw error;
+        }
+
+        const lineTotal = money(qty * unitPrice);
+        totalAmount += lineTotal;
+        validatedItems.push({
+          product_id: productId,
+          product_name: prod.short_name || prod.name,
+          quantity: qty,
+          unit_price: unitPrice,
+          total_amount: lineTotal,
+          colour: item.colour ? String(item.colour).trim() : null,
+          restock_inventory: item.restock_inventory !== false,
+          return_reason: item.return_reason || reason || 'Customer return',
+        });
+      }
+
+      totalAmount = money(totalAmount);
+      if (totalAmount <= 0) {
+        const error = new Error('Total return amount must be greater than zero.');
+        error.status = 400;
+        throw error;
+      }
+
+      // 4. Generate unique Credit Note number using row lock or sequence
+      const lastCn = await tx.getRecord('SELECT id FROM credit_notes ORDER BY id DESC LIMIT 1 FOR UPDATE');
+      const nextSeq = (Number(lastCn?.id || 0)) + 1;
+      const creditNoteNumber = `CN-${String(nextSeq).padStart(6, '0')}`;
+
+      // 5. Insert Credit Note
+      const cnInsert = await tx.runQuery(
+        `INSERT INTO credit_notes (
+          credit_note_number, shop_id, customer_id, sale_id, amount, used_amount, balance_amount,
+          reason, status, return_date, created_by
+        ) VALUES (?, ?, ?, ?, ?, 0.00, ?, ?, 'active', ?, ?)`,
+        [creditNoteNumber, shopId, customer_id, sale_id || null, totalAmount, totalAmount, reason || 'Sales return', returnDateStr, req.user.id]
+      );
+      const creditNoteId = cnInsert.id;
+
+      // 6. Insert Sales Return items and restock inventory
+      for (const vItem of validatedItems) {
+        await tx.runQuery(
+          `INSERT INTO sales_returns (
+            credit_note_id, sale_id, shop_id, customer_id, product_id, quantity, unit_price,
+            total_amount, colour, restock_inventory, return_reason
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            creditNoteId,
+            sale_id || null,
+            shopId,
+            customer_id,
+            vItem.product_id,
+            vItem.quantity,
+            vItem.unit_price,
+            vItem.total_amount,
+            vItem.colour,
+            vItem.restock_inventory,
+            vItem.return_reason
+          ]
+        );
+
+        if (vItem.restock_inventory) {
+          const existingBatch = await tx.getRecord(
+            `SELECT id FROM inventory_batches
+             WHERE shop_id = ? AND product_id = ? ${vItem.colour ? 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))' : ''}
+             ORDER BY id DESC LIMIT 1`,
+            vItem.colour ? [shopId, vItem.product_id, vItem.colour] : [shopId, vItem.product_id]
+          );
+          if (existingBatch) {
+            await tx.runQuery(
+              'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+              [vItem.quantity, existingBatch.id]
+            );
+          } else {
+            await tx.runQuery(
+              `INSERT INTO inventory_batches (shop_id, product_id, batch_number, quantity_received, quantity_remaining, purchase_price, colour, received_date)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                shopId,
+                vItem.product_id,
+                `RET-${creditNoteNumber}`,
+                vItem.quantity,
+                vItem.quantity,
+                vItem.unit_price,
+                vItem.colour || null,
+                returnDateStr
+              ]
+            );
+          }
+          await syncStockFromBatches(tx, shopId, vItem.product_id);
+        }
+      }
+
+      return {
+        id: creditNoteId,
+        credit_note_number: creditNoteNumber,
+        amount: totalAmount,
+        balance_amount: totalAmount,
+        status: 'active',
+        items: validatedItems,
+      };
+    });
+
+    await audit(req, 'Created credit note', 'credit_note', result.id, `${result.credit_note_number}, amount ${result.amount}, customer ${customer_id}`);
+    res.status(201).json({ success: true, credit_note: result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to create credit note.' });
+  }
+});
+
 app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { customer_id, paid_amount, notes, payment_mode = 'cash' } = req.body;
+    const { customer_id, paid_amount, notes, payment_mode = 'cash', applied_credit_amount = 0 } = req.body;
     const items = Array.isArray(req.body.items) && req.body.items.length
       ? req.body.items
       : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, selling_price: req.body.selling_price || req.body.unit_price, price_type: req.body.price_type || 'retail' }];
@@ -3588,6 +3874,24 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
     const extraExpensesTotal = validExpenses.reduce((sum, exp) => sum + exp.amount, 0);
 
     const result = await runTransaction(async (tx) => {
+      // Lock customer record for race-condition safe balance tracking
+      const customer = await tx.getRecord('SELECT id, name, mobile FROM customers WHERE id = ? FOR UPDATE', [customer_id]);
+      if (!customer) {
+        const error = new Error('Selected customer not found.');
+        error.status = 404;
+        throw error;
+      }
+
+      // Fetch live previous outstanding balance for this customer
+      const prevBalRow = await tx.getRecord(
+        'SELECT COALESCE(SUM(pending_amount), 0) AS prev_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
+        [customer_id]
+      );
+      const livePrevBalance = money(prevBalRow?.prev_balance || 0);
+      const previousBalance = (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance)))
+        ? money(req.body.previous_balance)
+        : livePrevBalance;
+
       const preparedItems = [];
       const reservedByBatch = new Map();
       for (const item of items) {
@@ -3700,21 +4004,72 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         ? money(req.body.final_total_amount)
         : (req.body.total_amount !== undefined && !isNaN(Number(req.body.total_amount)) ? money(req.body.total_amount) : originalTotal);
 
-      const finalTotalAmount = requestedFinalTotal >= 0 ? requestedFinalTotal : originalTotal;
-      const discountAmount = Math.max(money(originalTotal - finalTotalAmount), 0);
+      const currentInvoiceTotal = requestedFinalTotal >= 0 ? requestedFinalTotal : originalTotal;
+      const discountAmount = Math.max(money(originalTotal - currentInvoiceTotal), 0);
       const discountPercentage = originalTotal > 0 ? Number(((discountAmount / originalTotal) * 100).toFixed(2)) : 0;
 
+      // 3. Handle Credit Note Redemption with Row-Level Locks
+      let requestedCredit = money(applied_credit_amount);
+      let actualAppliedCredit = 0;
+      const redemptions = [];
+
+      if (requestedCredit > 0) {
+        const activeCreditNotes = await tx.allRecords(
+          `SELECT * FROM credit_notes
+           WHERE customer_id = ? AND status IN ('active', 'partially_used') AND balance_amount > 0
+           ORDER BY return_date ASC, id ASC FOR UPDATE`,
+          [customer_id]
+        );
+        const totalAvailCredit = activeCreditNotes.reduce((sum, cn) => sum + money(cn.balance_amount), 0);
+        if (requestedCredit > totalAvailCredit) {
+          const error = new Error(`Requested credit note amount (₹${requestedCredit}) exceeds available credit (₹${totalAvailCredit}).`);
+          error.status = 400;
+          throw error;
+        }
+
+        const maxAllowableCredit = currentInvoiceTotal + previousBalance;
+        if (requestedCredit > maxAllowableCredit) {
+          requestedCredit = maxAllowableCredit;
+        }
+
+        let remainingToRedeem = requestedCredit;
+        for (const cn of activeCreditNotes) {
+          if (remainingToRedeem <= 0) break;
+          const canRedeem = Math.min(remainingToRedeem, money(cn.balance_amount));
+          const newUsed = money(money(cn.used_amount) + canRedeem);
+          const newBalance = money(money(cn.balance_amount) - canRedeem);
+          const newStatus = newBalance === 0 ? 'redeemed' : 'partially_used';
+
+          await tx.runQuery(
+            'UPDATE credit_notes SET used_amount = ?, balance_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [newUsed, newBalance, newStatus, cn.id]
+          );
+          redemptions.push({ credit_note_id: cn.id, amount: canRedeem });
+          actualAppliedCredit = money(actualAppliedCredit + canRedeem);
+          remainingToRedeem = money(remainingToRedeem - canRedeem);
+        }
+      }
+
+      // 4. Net Payable / Total Outstanding & Closing Balance
+      const netPayableAmount = Math.max(money(currentInvoiceTotal + previousBalance - actualAppliedCredit), 0);
       const numPaid = money(paid_amount);
       if (numPaid < 0) {
         const error = new Error('Paid amount cannot be negative.');
         error.status = 400;
         throw error;
       }
-      if (numPaid > finalTotalAmount) {
-        const error = new Error('Paid amount cannot exceed the final bill total.');
+      if (numPaid > netPayableAmount) {
+        const error = new Error(`Paid amount (₹${numPaid}) cannot exceed the Net Payable amount (₹${netPayableAmount}).`);
         error.status = 400;
         throw error;
       }
+      const closingBalance = Math.max(money(netPayableAmount - numPaid), 0);
+
+      // This sale's invoice portion
+      const saleNetInvoiceTotal = Math.max(0, money(currentInvoiceTotal - actualAppliedCredit));
+      const thisSalePaid = Math.min(numPaid, saleNetInvoiceTotal);
+      const thisSalePending = Math.max(0, money(saleNetInvoiceTotal - thisSalePaid));
+      const excessPaid = Math.max(0, money(numPaid - saleNetInvoiceTotal));
 
       // Prepare colours summary
       const primaryProduct = preparedItems[0];
@@ -3728,21 +4083,23 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       }).filter(Boolean);
       const overallColourStr = colourSummaries.length ? colourSummaries.join(', ') : null;
 
-      // 1. Insert SINGLE sales record representing the entire invoice
+      // 5. Insert SINGLE sales record representing the entire invoice with snapshots
       const insertResult = await tx.runQuery(
         `INSERT INTO sales (
           shop_id, product_id, customer_id, quantity, total_amount, paid_amount, pending_amount, 
           due_date, sale_date, invoice_date, payment_terms_days, products_total, extra_expenses_total,
-          notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount, discount_amount, discount_percentage, colour
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount,
+          discount_amount, discount_percentage, colour,
+          previous_balance, current_invoice_total, applied_credit_amount, net_payable_amount, closing_balance
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           shopId, 
           primaryProduct.product_id, 
           customer_id, 
           totalQty, 
-          finalTotalAmount, 
-          numPaid, 
-          Math.max(finalTotalAmount - numPaid, 0), 
+          saleNetInvoiceTotal, 
+          thisSalePaid, 
+          thisSalePending, 
           calculatedDueDate, 
           today(),
           invoiceDateStr,
@@ -3750,7 +4107,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           productsTotal,
           extraExpensesTotal,
           notes || '', 
-          (finalTotalAmount - numPaid) > 0 ? 'open' : 'paid', 
+          thisSalePending > 0 ? 'open' : 'paid', 
           req.user.id, 
           payment_mode, 
           primaryProduct.price_type || 'retail', 
@@ -3758,13 +4115,26 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           originalTotal,
           discountAmount,
           discountPercentage,
-          overallColourStr
+          overallColourStr,
+          previousBalance,
+          currentInvoiceTotal,
+          actualAppliedCredit,
+          netPayableAmount,
+          closingBalance
         ]
       );
 
       const saleId = insertResult.id;
 
-      // 2. Insert individual items into sale_items and allocate stock batches
+      // 6. Record Credit Note Redemptions
+      for (const r of redemptions) {
+        await tx.runQuery(
+          'INSERT INTO credit_note_redemptions (credit_note_id, sale_id, amount) VALUES (?, ?, ?)',
+          [r.credit_note_id, saleId, r.amount]
+        );
+      }
+
+      // 7. Insert individual items into sale_items and allocate stock batches
       for (const item of preparedItems) {
         let itemColourStr = null;
         if (item.colorBreakdown && item.colorBreakdown.length === 1) {
@@ -3805,7 +4175,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         await syncStockFromBatches(tx, shopId, item.product_id);
       }
 
-      // 3. Record extra expenses associated with the sale
+      // 8. Record extra expenses associated with the sale
       if (validExpenses.length > 0) {
         for (const exp of validExpenses) {
           await tx.runQuery(
@@ -3815,37 +4185,292 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         }
       }
 
-      // 4. Record payment if initial amount was paid
-      if (numPaid > 0) {
+      // 9. Record payment if initial amount was paid on this sale
+      if (thisSalePaid > 0) {
         await tx.runQuery(
           'INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)',
-          [saleId, numPaid, today(), 'Initial sale payment']
+          [saleId, thisSalePaid, today(), 'Initial sale payment']
         );
+      }
+
+      // 10. If excess payment was made towards previous balance, allocate in FIFO to older sales
+      if (excessPaid > 0) {
+        const olderSales = await tx.allRecords(
+          'SELECT * FROM sales WHERE customer_id = ? AND pending_amount > 0 AND id != ? ORDER BY due_date ASC, id ASC FOR UPDATE',
+          [customer_id, saleId]
+        );
+        let remainingExcess = excessPaid;
+        for (const os of olderSales) {
+          if (remainingExcess <= 0) break;
+          const alloc = Math.min(remainingExcess, money(os.pending_amount));
+          const newOsPaid = money(money(os.paid_amount) + alloc);
+          const newOsPending = Math.max(money(money(os.total_amount) - newOsPaid), 0);
+          await tx.runQuery(
+            'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+            [newOsPaid, newOsPending, newOsPending > 0 ? 'open' : 'paid', os.id]
+          );
+          await tx.runQuery(
+            'INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)',
+            [os.id, alloc, today(), `Payment applied via sale carry-forward (INV-${String(saleId).padStart(6, '0')})`]
+          );
+          remainingExcess = money(remainingExcess - alloc);
+        }
       }
 
       return { 
         id: saleId,
         ids: [saleId], 
         invoice_number: `INV-${String(saleId).padStart(6, '0')}`,
-        pending_amount: Math.max(finalTotalAmount - numPaid, 0), 
-        total_amount: finalTotalAmount, 
+        pending_amount: thisSalePending, 
+        total_amount: saleNetInvoiceTotal, 
         products_total: productsTotal,
         extra_expenses_total: extraExpensesTotal,
         original_total: originalTotal, 
         discount_amount: discountAmount, 
         discount_percentage: discountPercentage,
+        previous_balance: previousBalance,
+        current_invoice_total: currentInvoiceTotal,
+        applied_credit_amount: actualAppliedCredit,
+        net_payable_amount: netPayableAmount,
+        paid_amount: numPaid,
+        closing_balance: closingBalance,
         invoice_date: invoiceDateStr,
         payment_terms_days: paymentTermsDays,
         due_date: calculatedDueDate
       };
     });
 
-    await audit(req, 'Created sale', 'sale', result.id, `${result.invoice_number}, products total ${result.products_total}, extra expenses ${result.extra_expenses_total}, total ${result.total_amount}, pending ${result.pending_amount}`);
+    await audit(req, 'Created sale', 'sale', result.id, `${result.invoice_number}, products total ${result.products_total}, prev balance ${result.previous_balance}, applied credit ${result.applied_credit_amount}, net payable ${result.net_payable_amount}, closing balance ${result.closing_balance}`);
     res.status(201).json(result);
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create sale.' });
   }
 });
+
+const handleUpdateSale = async (req, res) => {
+  try {
+    const saleId = Number(req.params.id);
+    if (!Number.isInteger(saleId) || saleId <= 0) {
+      return res.status(400).json({ error: 'Choose a valid sale.' });
+    }
+
+    const result = await runTransaction(async (tx) => {
+      const sale = await tx.getRecord('SELECT * FROM sales WHERE id = ? FOR UPDATE', [saleId]);
+      if (!sale) {
+        const error = new Error('Sale not found.');
+        error.status = 404;
+        throw error;
+      }
+
+      // Assert shop access
+      assertShopAccess(req, sale.shop_id);
+      if (isShopStaffRole(req.user.role) && (Number(sale.shop_id) !== Number(req.user.shop_id))) {
+        const error = new Error('You cannot edit sales outside your assigned shop.');
+        error.status = 403;
+        throw error;
+      }
+
+      // 1. Resolve invoice_date and payment_terms_days
+      let invoiceDateStr = sale.invoice_date ? String(sale.invoice_date).slice(0, 10) : (sale.sale_date ? String(sale.sale_date).slice(0, 10) : today());
+      if (req.body.invoice_date !== undefined || req.body.sale_date !== undefined) {
+        const candidate = String(req.body.invoice_date || req.body.sale_date || '').trim().slice(0, 10);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
+          invoiceDateStr = candidate;
+        } else {
+          const error = new Error('Invoice date must be in YYYY-MM-DD format.');
+          error.status = 400;
+          throw error;
+        }
+      }
+
+      let paymentTermsDays = Number(sale.payment_terms_days !== undefined && sale.payment_terms_days !== null ? sale.payment_terms_days : 15);
+      if (req.body.payment_terms !== undefined || req.body.payment_terms_days !== undefined) {
+        const candidateTerms = Number(req.body.payment_terms ?? req.body.payment_terms_days);
+        if (Number.isInteger(candidateTerms) && candidateTerms >= 0) {
+          paymentTermsDays = candidateTerms;
+        } else {
+          const error = new Error('Payment terms must be a non-negative integer.');
+          error.status = 400;
+          throw error;
+        }
+      }
+
+      // Recalculate due_date as invoice_date + payment_terms
+      const invoiceDateObj = new Date(invoiceDateStr + 'T00:00:00');
+      const validInvoiceDate = isNaN(invoiceDateObj.getTime()) ? new Date() : invoiceDateObj;
+      const dueDateObj = new Date(validInvoiceDate);
+      dueDateObj.setDate(dueDateObj.getDate() + paymentTermsDays);
+      const dueY = dueDateObj.getFullYear();
+      const dueM = String(dueDateObj.getMonth() + 1).padStart(2, '0');
+      const dueD = String(dueDateObj.getDate()).padStart(2, '0');
+      const calculatedDueDate = `${dueY}-${dueM}-${dueD}`;
+
+      // 2. Resolve notes
+      let notes = sale.notes || '';
+      if (req.body.notes !== undefined || req.body.remarks !== undefined) {
+        notes = String(req.body.notes ?? req.body.remarks ?? '').trim();
+      }
+
+      // 3. Resolve extra_expenses (Courier / Other charges)
+      let extraExpensesTotal = Number(sale.extra_expenses_total || 0);
+      let expensesUpdated = false;
+
+      if (req.body.expenses !== undefined && Array.isArray(req.body.expenses)) {
+        expensesUpdated = true;
+        await tx.runQuery('DELETE FROM sale_expenses WHERE sale_id = ?', [saleId]);
+        const validExpenses = [];
+        for (const exp of req.body.expenses) {
+          if (!exp) continue;
+          const amt = Number(exp.amount || 0);
+          if (isNaN(amt) || amt < 0) {
+            const error = new Error('Expense amount cannot be negative.');
+            error.status = 400;
+            throw error;
+          }
+          const expName = String(exp.expense_name || exp.description || 'Extra Expense').trim();
+          if (amt > 0) {
+            validExpenses.push({
+              expense_type: String(exp.expense_type || 'courier').trim().slice(0, 50),
+              expense_name: expName.slice(0, 255),
+              amount: money(amt),
+            });
+          }
+        }
+        for (const exp of validExpenses) {
+          await tx.runQuery(
+            'INSERT INTO sale_expenses (sale_id, expense_type, expense_name, amount) VALUES (?, ?, ?, ?)',
+            [saleId, exp.expense_type, exp.expense_name, exp.amount]
+          );
+        }
+        extraExpensesTotal = validExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+      } else if (req.body.extra_expenses !== undefined || req.body.courier !== undefined || req.body.courier_charge !== undefined) {
+        expensesUpdated = true;
+        const amt = Number(req.body.extra_expenses ?? req.body.courier ?? req.body.courier_charge ?? 0);
+        if (isNaN(amt) || amt < 0) {
+          const error = new Error('Extra expenses cannot be negative.');
+          error.status = 400;
+          throw error;
+        }
+        extraExpensesTotal = money(amt);
+        await tx.runQuery('DELETE FROM sale_expenses WHERE sale_id = ?', [saleId]);
+        if (extraExpensesTotal > 0) {
+          await tx.runQuery(
+            'INSERT INTO sale_expenses (sale_id, expense_type, expense_name, amount) VALUES (?, ?, ?, ?)',
+            [saleId, 'courier', 'Courier', extraExpensesTotal]
+          );
+        }
+      }
+
+      // 4. Recalculate financials if expenses were updated
+      let productsTotal = Number(sale.products_total || 0);
+      if (!productsTotal || productsTotal <= 0) {
+        const itemTotals = await tx.getRecord(
+          'SELECT COALESCE(SUM(total_price), 0) AS pt FROM sale_items WHERE sale_id = ?',
+          [saleId]
+        );
+        productsTotal = Number(itemTotals?.pt || sale.total_amount || 0);
+      }
+
+      const discountAmount = Number(sale.discount_amount || 0);
+      const currentInvoiceTotal = expensesUpdated
+        ? Math.max(money(productsTotal + extraExpensesTotal - discountAmount), 0)
+        : Number(sale.current_invoice_total || sale.total_amount || 0);
+
+      const previousBalance = Number(sale.previous_balance || 0);
+      const appliedCreditAmount = Number(sale.applied_credit_amount || 0);
+
+      const netPayableAmount = expensesUpdated
+        ? Math.max(money(currentInvoiceTotal + previousBalance - appliedCreditAmount), 0)
+        : Number(sale.net_payable_amount || (currentInvoiceTotal + previousBalance - appliedCreditAmount));
+
+      const paidAmount = Number(sale.paid_amount || 0);
+      const pendingAmount = expensesUpdated
+        ? Math.max(money(netPayableAmount - paidAmount), 0)
+        : Number(sale.pending_amount || Math.max(netPayableAmount - paidAmount, 0));
+
+      const closingBalance = expensesUpdated
+        ? pendingAmount
+        : Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : pendingAmount);
+
+      const status = pendingAmount > 0 ? 'open' : 'paid';
+
+      // 5. Update sales record
+      await tx.runQuery(
+        `UPDATE sales
+         SET invoice_date = ?,
+             sale_date = ?,
+             payment_terms_days = ?,
+             due_date = ?,
+             notes = ?,
+             extra_expenses_total = ?,
+             products_total = ?,
+             total_amount = ?,
+             current_invoice_total = ?,
+             net_payable_amount = ?,
+             pending_amount = ?,
+             closing_balance = ?,
+             status = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          invoiceDateStr,
+          invoiceDateStr,
+          paymentTermsDays,
+          calculatedDueDate,
+          notes,
+          extraExpensesTotal,
+          productsTotal,
+          currentInvoiceTotal,
+          currentInvoiceTotal,
+          netPayableAmount,
+          pendingAmount,
+          closingBalance,
+          status,
+          saleId
+        ]
+      );
+
+      const updatedSale = await tx.getRecord(
+        `SELECT sa.*, 
+                c.name AS customer_name, c.mobile AS customer_mobile, c.address AS customer_address,
+                sh.name AS shop_name
+         FROM sales sa
+         JOIN shops sh ON sh.id = sa.shop_id
+         LEFT JOIN customers c ON c.id = sa.customer_id
+         WHERE sa.id = ?`,
+        [saleId]
+      );
+
+      const items = await tx.allRecords('SELECT * FROM sale_items WHERE sale_id = ? ORDER BY id ASC', [saleId]);
+      const expList = await tx.allRecords('SELECT * FROM sale_expenses WHERE sale_id = ? ORDER BY id ASC', [saleId]);
+
+      return {
+        ...updatedSale,
+        items,
+        expenses: expList
+      };
+    });
+
+    await audit(
+      req, 
+      'Updated sale', 
+      'sale', 
+      saleId, 
+      `INV-${String(saleId).padStart(6, '0')}, date ${result.invoice_date}, terms ${result.payment_terms_days}d, due ${result.due_date}, expenses ${result.extra_expenses_total}`
+    );
+
+    res.json({
+      success: true,
+      message: `Sale INV-${String(saleId).padStart(6, '0')} updated successfully.`,
+      sale: result
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Unable to update sale.' });
+  }
+};
+
+app.put('/api/sales/:id', authenticateToken, requireShopStaff, handleUpdateSale);
+app.patch('/api/sales/:id', authenticateToken, requireShopStaff, handleUpdateSale);
 
 app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, res) => {
   try {
@@ -3942,7 +4567,24 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
         }
       }
 
-      // 2. Delete payment records, expenses, items, allocations
+      // 2. Restore any redeemed credit notes from this sale
+      const redemptions = await tx.allRecords('SELECT * FROM credit_note_redemptions WHERE sale_id = ?', [saleId]).catch(() => []);
+      for (const r of redemptions) {
+        const amt = Number(r.amount || 0);
+        if (amt > 0) {
+          await tx.runQuery(
+            `UPDATE credit_notes 
+             SET used_amount = used_amount - ?, balance_amount = balance_amount + ?,
+                 status = CASE WHEN balance_amount + ? = amount THEN 'active' ELSE 'partially_used' END,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [amt, amt, amt, r.credit_note_id]
+          );
+        }
+      }
+      await tx.runQuery('DELETE FROM credit_note_redemptions WHERE sale_id = ?', [saleId]).catch(() => {});
+
+      // 3. Delete payment records, expenses, items, allocations
       await tx.runQuery('DELETE FROM payments WHERE sale_id = ?', [saleId]).catch(() => {});
       await tx.runQuery('DELETE FROM sale_expenses WHERE sale_id = ?', [saleId]).catch(() => {});
       await tx.runQuery('DELETE FROM sale_items WHERE sale_id = ?', [saleId]).catch(() => {});

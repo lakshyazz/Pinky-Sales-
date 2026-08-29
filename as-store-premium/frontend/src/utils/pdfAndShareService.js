@@ -94,15 +94,24 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
       }];
 
   const tableRows = items.map((it, idx) => {
-    const qty = Number(it.quantity || 1);
-    const unitPrice = Number(it.unit_price || 0) || (Number(it.total_price || 0) / Math.max(1, qty));
-    const lineTotal = Number(it.total_price || (unitPrice * qty));
-    const itemName = it.product_name || it.name || it.short_name || 'Product';
+    const rate = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? (it.total_amount && it.quantity ? Number(it.total_amount) / Number(it.quantity) : (it.amount && it.quantity ? Number(it.amount) / Number(it.quantity) : 0)));
+    const qty = Number(it.quantity ?? it.qty ?? 1);
+    const lineTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
+    const unitPrice = qty > 0 ? (rate || (lineTotal / qty)) : lineTotal;
+
+    // Short name only - no compatible model lists
+    const rawShort = it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
+    const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
+
+    // Manufacturing brand - render directly without "Mfg:" prefix
+    const rawMfg = it.manufacturing_brand_name || it.mfg_brand_name || it.manufacturing_brand || sale?.manufacturing_brand_name || '';
+    const mfgBrand = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
+    const brandStr = mfgBrand ? `\n${mfgBrand}` : '';
     const colourStr = it.colour ? ` [${it.colour}]` : '';
 
     return [
       idx + 1,
-      `${itemName}${colourStr}`,
+      `${shortName}${colourStr}${brandStr}`,
       `${qty} pcs`,
       `Rs. ${formatMoney(unitPrice)}`,
       `Rs. ${formatMoney(lineTotal)}`
@@ -142,46 +151,88 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
 
   const finalY = (doc.lastAutoTable?.finalY || 140) + 6;
 
-  // Summary Totals
-  const totalAmount = Number(sale?.total_amount || 0);
-  const paidAmount = Number(sale?.paid_amount || 0);
-  const pendingAmount = Number(sale?.pending_amount || (totalAmount - paidAmount));
+  // Summary Totals with Carry-Forward and Credit Notes
   const expensesList = Array.isArray(sale?.expenses) ? sale.expenses : [];
-  const extraExpensesTotal = expensesList.reduce((sum, e) => sum + Number(e.amount || 0), 0);
+  const courier = Number(sale?.extra_expenses_total ?? sale?.extra_expenses ?? sale?.courier_charge ?? sale?.courier ?? (
+    expensesList.reduce((sum, e) => sum + Number(e.amount || 0), 0)
+  ) ?? 0);
+
+  const productsSubtotal = Number(sale?.products_total || items.reduce((sum, it) => {
+    const r = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? 0);
+    const q = Number(it.quantity ?? it.qty ?? 1);
+    const t = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (r * q));
+    return sum + t;
+  }, 0));
+
+  const prevBalance = Number(sale?.previous_balance ?? sale?.old_balance ?? 0);
+  const appliedCredit = Number(sale?.applied_credit_amount ?? sale?.credit_applied ?? 0);
+
+  // Current invoice value + carry forward balance - credits
+  const grandTotal = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit);
+  const paidAmount = Number(sale?.paid_amount ?? sale?.amount_paid ?? 0);
+  const balanceDue = Math.max(0, grandTotal - paidAmount);
 
   const summaryStartX = 114;
   const summaryWidth = 82;
 
-  doc.setFillColor(248, 250, 252);
-  doc.roundedRect(summaryStartX, finalY, summaryWidth, 38, 2, 2, 'F');
-  doc.setDrawColor(226, 232, 240);
-  doc.roundedRect(summaryStartX, finalY, summaryWidth, 38, 2, 2, 'D');
+  // Dynamic box height calculation based on visible rows
+  let rowCount = 4; // Subtotal, Grand Total, Paid, Balance Due
+  if (courier > 0) rowCount++;
+  if (prevBalance > 0) rowCount++;
+  if (appliedCredit > 0) rowCount++;
+  const boxHeight = rowCount * 6 + 6;
 
-  doc.setFontSize(9);
+  doc.setFillColor(248, 250, 252);
+  doc.roundedRect(summaryStartX, finalY, summaryWidth, boxHeight, 2, 2, 'F');
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(summaryStartX, finalY, summaryWidth, boxHeight, 2, 2, 'D');
+
+  let curY = finalY + 5.5;
+  doc.setFontSize(8.5);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
 
-  doc.text('Subtotal:', summaryStartX + 4, finalY + 6);
-  doc.text(`Rs. ${formatMoney(totalAmount - extraExpensesTotal)}`, 192, finalY + 6, { align: 'right' });
+  doc.text('Products Subtotal:', summaryStartX + 4, curY);
+  doc.text(`Rs. ${formatMoney(productsSubtotal)}`, 192, curY, { align: 'right' });
 
-  if (extraExpensesTotal > 0) {
-    doc.text('+ Extra Expenses:', summaryStartX + 4, finalY + 12);
-    doc.text(`Rs. ${formatMoney(extraExpensesTotal)}`, 192, finalY + 12, { align: 'right' });
+  if (courier > 0) {
+    curY += 5.5;
+    doc.text('+ COURIER:', summaryStartX + 4, curY);
+    doc.text(`Rs. ${formatMoney(courier)}`, 192, curY, { align: 'right' });
   }
 
+  if (prevBalance > 0) {
+    curY += 5.5;
+    doc.setTextColor(180, 83, 9); // Amber
+    doc.text('+ PREVIOUS BALANCE:', summaryStartX + 4, curY);
+    doc.text(`Rs. ${formatMoney(prevBalance)}`, 192, curY, { align: 'right' });
+  }
+
+  if (appliedCredit > 0) {
+    curY += 5.5;
+    doc.setTextColor(13, 148, 136); // Teal
+    doc.text('- CREDIT NOTE:', summaryStartX + 4, curY);
+    doc.text(`-Rs. ${formatMoney(appliedCredit)}`, 192, curY, { align: 'right' });
+  }
+
+  curY += 6;
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text('Grand Total:', summaryStartX + 4, finalY + 18);
-  doc.text(`Rs. ${formatMoney(totalAmount)}`, 192, finalY + 18, { align: 'right' });
+  doc.text('Grand Total:', summaryStartX + 4, curY);
+  doc.text(`Rs. ${formatMoney(grandTotal)}`, 192, curY, { align: 'right' });
 
+  curY += 5.5;
+  doc.setFont('helvetica', 'normal');
   doc.setTextColor(13, 148, 136); // Teal
-  doc.text('Amount Paid:', summaryStartX + 4, finalY + 24);
-  doc.text(`Rs. ${formatMoney(paidAmount)}`, 192, finalY + 24, { align: 'right' });
+  doc.text('Amount Paid:', summaryStartX + 4, curY);
+  doc.text(`Rs. ${formatMoney(paidAmount)}`, 192, curY, { align: 'right' });
 
-  doc.setTextColor(225, 29, 72); // Rose
-  doc.setFontSize(10);
-  doc.text('Balance Due:', summaryStartX + 4, finalY + 32);
-  doc.text(`Rs. ${formatMoney(pendingAmount)}`, 192, finalY + 32, { align: 'right' });
+  curY += 6;
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(balanceDue > 0 ? 225 : 13, balanceDue > 0 ? 29 : 148, balanceDue > 0 ? 72 : 136); // Rose or Teal
+  doc.setFontSize(9.5);
+  doc.text('Balance Due:', summaryStartX + 4, curY);
+  doc.text(`Rs. ${formatMoney(balanceDue)}`, 192, curY, { align: 'right' });
 
   // Notes & Footer
   doc.setFontSize(8);
@@ -350,6 +401,14 @@ export const generateLedgerPDFDoc = (customer = {}, invoices = [], payments = []
       debit: Number(inv.total_amount || 0),
       credit: 0,
     });
+    if (Number(inv.applied_credit_amount || 0) > 0) {
+      transactions.push({
+        date: inv.invoice_date || inv.sale_date || '2026-08-27',
+        particulars: `Credit Note applied on ${inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`}`,
+        debit: 0,
+        credit: Number(inv.applied_credit_amount || 0),
+      });
+    }
     if (Number(inv.paid_amount || 0) > 0) {
       transactions.push({
         date: inv.invoice_date || inv.sale_date || '2026-08-27',

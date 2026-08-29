@@ -18,6 +18,7 @@ import {
   FileText,
   History,
   ListFilter,
+  Loader2,
   IndianRupee,
   KeyRound,
   LayoutGrid,
@@ -50,7 +51,11 @@ import {
   Wrench,
   Cpu,
   Layers,
+  RotateCcw,
+  Pencil,
 } from 'lucide-react';
+import SalesReturnModal from './components/modals/SalesReturnModal';
+import EditSaleModal from './components/modals/EditSaleModal';
 import ModelsPage from './components/models/ModelsPage';
 import ProductDetailModal from './components/models/ProductDetailModal';
 import ProductDetailPage from './components/models/ProductDetailPage';
@@ -180,7 +185,8 @@ const productName = (item, options = {}) => {
   const supplier = options.hideSupplier ? null : (item?.supplier_name || (typeof item?.supplier === 'string' ? item?.supplier : null));
 
   const parts = [];
-  if (mfg && !baseName.toLowerCase().includes(mfg.toLowerCase())) parts.push(`Mfg: ${mfg}`);
+  const cleanMfg = mfg ? String(mfg).replace(/^mfg:\s*/i, '').trim() : null;
+  if (cleanMfg && !baseName.toLowerCase().includes(cleanMfg.toLowerCase())) parts.push(cleanMfg);
   if (variant && !baseName.toLowerCase().includes(variant.toLowerCase())) parts.push(variant);
   if (supplier && !baseName.toLowerCase().includes(supplier.toLowerCase())) parts.push(supplier);
 
@@ -722,6 +728,8 @@ const initialForms = {
     payment_terms_days: 15,
     due_date: calculateDueDate(getTodayIso(), 15),
     notes: '',
+    previous_balance: 0,
+    applied_credit_amount: 0,
     items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
     expenses: [],
   },
@@ -903,17 +911,20 @@ function Empty({ title }) {
 
 function BillSummary({ sale }) {
   const items = sale.items || [];
-  const productsTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
   const expenses = Array.isArray(sale.expenses) ? sale.expenses : [];
   const extraExpensesTotal = expenses.reduce((sum, exp) => sum + Math.max(Number(exp.amount || 0), 0), 0);
-  const grandTotal = productsTotal + extraExpensesTotal;
+  const productsTotal = Number(sale.products_total || (Number(sale.total_amount || 0) - extraExpensesTotal));
+  const currentInvoiceTotal = Number(sale.current_invoice_total || (productsTotal + extraExpensesTotal));
+  const previousBalance = Number(sale.previous_balance || 0);
+  const appliedCredit = Number(sale.applied_credit_amount || 0);
+  const netPayable = Number(sale.net_payable_amount || (currentInvoiceTotal + previousBalance - appliedCredit));
   const paidAmount = Number(sale.paid_amount || 0);
-  const pendingAmount = Math.max(grandTotal - paidAmount, 0);
+  const closingBalance = Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : (sale.pending_amount || Math.max(0, netPayable - paidAmount)));
 
   const getStatusBadge = () => {
-    if (grandTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
-    if (paidAmount >= grandTotal) return { label: 'Fully Paid', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
-    if (paidAmount > 0) return { label: `Partial (₹${pendingAmount.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
+    if (netPayable === 0 && currentInvoiceTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (paidAmount >= netPayable && netPayable > 0) return { label: 'Fully Settled', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+    if (paidAmount > 0) return { label: `Partial (₹${closingBalance.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
     return { label: 'Pending / Unpaid', color: 'bg-rose-100 text-rose-800 border-rose-300' };
   };
 
@@ -932,7 +943,7 @@ function BillSummary({ sale }) {
         <strong>{items.length || 1}</strong>
       </div>
       <div>
-        <small>Products total</small>
+        <small>Products subtotal</small>
         <strong>{currency(productsTotal)}</strong>
       </div>
       <div>
@@ -942,16 +953,32 @@ function BillSummary({ sale }) {
         </strong>
       </div>
       <div>
-        <small>Grand total</small>
-        <strong className="text-slate-900 font-black">{currency(grandTotal)}</strong>
+        <small>Current sale total</small>
+        <strong>{currency(currentInvoiceTotal)}</strong>
+      </div>
+      {previousBalance > 0 && (
+        <div>
+          <small>Previous balance</small>
+          <strong className="text-amber-700">+{currency(previousBalance)}</strong>
+        </div>
+      )}
+      {appliedCredit > 0 && (
+        <div>
+          <small>Credit note applied</small>
+          <strong className="text-teal-700">-{currency(appliedCredit)}</strong>
+        </div>
+      )}
+      <div>
+        <small>Net payable</small>
+        <strong className="text-slate-900 font-black">{currency(netPayable)}</strong>
       </div>
       <div>
         <small>Paid amount</small>
         <strong className="text-emerald-700">{currency(paidAmount)}</strong>
       </div>
       <div>
-        <small>Pending balance</small>
-        <strong className={pendingAmount > 0 ? 'text-amber-700' : 'text-emerald-700'}>{currency(pendingAmount)}</strong>
+        <small>Closing balance</small>
+        <strong className={closingBalance > 0 ? 'text-amber-700' : 'text-emerald-700'}>{currency(closingBalance)}</strong>
       </div>
     </section>
   );
@@ -983,21 +1010,126 @@ function SalesCreationWorkspace({
   setShowQuickAddCustomerModal,
   getProductAvailableColors,
   title = 'Create sale',
+  authedFetch,
+  onOpenReturnModal,
 }) {
   const [expensesExpanded, setExpensesExpanded] = useState((forms.sale?.expenses || []).length > 0);
+  const [customerBalanceInfo, setCustomerBalanceInfo] = useState({
+    outstanding_balance: 0,
+    available_credits: 0,
+    credit_notes: [],
+  });
+  const [loadingBalance, setLoadingBalance] = useState(false);
+  const [applyCreditNote, setApplyCreditNote] = useState(false);
+  const [appliedCreditInput, setAppliedCreditInput] = useState('');
+
+  // Automatically fetch customer outstanding balance and available credit notes
+  useEffect(() => {
+    const customerId = forms.sale?.customer_id;
+    if (!customerId) {
+      setCustomerBalanceInfo({ outstanding_balance: 0, available_credits: 0, credit_notes: [] });
+      setApplyCreditNote(false);
+      setAppliedCreditInput('');
+      setForms((prev) => ({
+        ...prev,
+        sale: {
+          ...prev.sale,
+          previous_balance: '',
+          applied_credit_amount: 0,
+        },
+      }));
+      return;
+    }
+
+    let isMounted = true;
+    const fetchBalance = async () => {
+      setLoadingBalance(true);
+      try {
+        if (authedFetch) {
+          const res = await authedFetch(`/customers/${customerId}/balance`);
+          if (isMounted && res) {
+            const outBal = Number(res.outstanding_balance || 0);
+            const availCredits = Number(res.available_credits || 0);
+            setCustomerBalanceInfo({
+              outstanding_balance: outBal,
+              available_credits: availCredits,
+              credit_notes: res.credit_notes || [],
+            });
+            setForms((prev) => ({
+              ...prev,
+              sale: {
+                ...prev.sale,
+                previous_balance: outBal,
+              },
+            }));
+          }
+        } else {
+          const cust = (data.customers || []).find((c) => String(c.id) === String(customerId));
+          const outBal = Number(cust?.pending || 0);
+          setCustomerBalanceInfo({ outstanding_balance: outBal, available_credits: 0, credit_notes: [] });
+          setForms((prev) => ({
+            ...prev,
+            sale: {
+              ...prev.sale,
+              previous_balance: outBal,
+            },
+          }));
+        }
+      } catch (err) {
+        console.error('Error fetching customer balance:', err);
+      } finally {
+        if (isMounted) setLoadingBalance(false);
+      }
+    };
+
+    fetchBalance();
+    return () => {
+      isMounted = false;
+    };
+  }, [forms.sale?.customer_id]);
 
   const items = forms.sale?.items || [];
   const productsTotal = items.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
   const expenses = Array.isArray(forms.sale?.expenses) ? forms.sale.expenses : [];
   const extraExpensesTotal = expenses.reduce((sum, exp) => sum + Math.max(Number(exp.amount || 0), 0), 0);
-  const grandTotal = productsTotal + extraExpensesTotal;
+
+  // Accounting calculations with manual or auto-fetched previous balance
+  const currentInvoiceTotal = productsTotal + extraExpensesTotal;
+  const autoFetchedBalance = Number(customerBalanceInfo?.outstanding_balance || 0);
+  const previousBalance = forms.sale?.previous_balance !== undefined && forms.sale?.previous_balance !== ''
+    ? Math.max(0, Number(forms.sale.previous_balance))
+    : autoFetchedBalance;
+  const availableCredits = Number(customerBalanceInfo?.available_credits || 0);
+  const maxApplicableCredit = Math.min(availableCredits, currentInvoiceTotal + previousBalance);
+
+  const effectiveCreditDeduction = applyCreditNote
+    ? Math.min(Math.max(0, Number(appliedCreditInput || 0)), maxApplicableCredit)
+    : 0;
+
+  const netPayable = Math.max(0, currentInvoiceTotal + previousBalance - effectiveCreditDeduction);
   const paidAmount = Number(forms.sale?.paid_amount || 0);
-  const pendingAmount = Math.max(grandTotal - paidAmount, 0);
+  const closingBalance = Math.max(0, netPayable - paidAmount);
+
+  // Synchronize applied credit snapshot to form state
+  useEffect(() => {
+    setForms((prev) => {
+      if (prev.sale.applied_credit_amount === effectiveCreditDeduction) {
+        return prev;
+      }
+      return {
+        ...prev,
+        sale: {
+          ...prev.sale,
+          applied_credit_amount: effectiveCreditDeduction,
+        },
+      };
+    });
+  }, [effectiveCreditDeduction]);
 
   const getStatusBadge = () => {
-    if (grandTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
-    if (paidAmount >= grandTotal) return { label: 'Fully Paid', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
-    if (paidAmount > 0) return { label: `Partial (₹${pendingAmount.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
+    if (netPayable === 0 && currentInvoiceTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (paidAmount >= netPayable && netPayable > 0) return { label: 'Fully Settled', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
+    if (paidAmount > 0) return { label: `Partial (₹${closingBalance.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
     return { label: 'Pending / Unpaid', color: 'bg-rose-100 text-rose-800 border-rose-300' };
   };
 
@@ -1031,6 +1163,38 @@ function SalesCreationWorkspace({
               searchPlaceholder="Search by name or phone..."
               className="w-full"
             />
+
+            {/* Customer Live Balance & Credit Note Indicator Bar */}
+            {forms.sale.customer_id && (
+              <div className="pt-2 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 text-xs">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-slate-500 font-medium">Outstanding Balance:</span>
+                  <span className={`px-2 py-0.5 rounded-full font-bold text-[11px] border ${
+                    previousBalance > 0 ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                  }`}>
+                    {currency(previousBalance)}
+                  </span>
+
+                  {availableCredits > 0 && (
+                    <span className="px-2 py-0.5 rounded-full font-bold text-[11px] bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1">
+                      <RotateCcw size={10} />
+                      <span>Available Credit: {currency(availableCredits)}</span>
+                    </span>
+                  )}
+                </div>
+
+                {onOpenReturnModal && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenReturnModal(data.customers.find((c) => String(c.id) === String(forms.sale.customer_id)))}
+                    className="text-[11px] font-bold text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2.5 py-1 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                    title="Initiate a Sales Return or Issue Credit Note for this customer"
+                  >
+                    <RotateCcw size={11} /> Issue Credit Note / Return
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Card 2: Items Purchased Table */}
@@ -1381,7 +1545,10 @@ function SalesCreationWorkspace({
         <div className="lg:col-span-4 sticky top-4 space-y-3.5">
           <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-3.5">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-600">Bill Summary</span>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Bill Summary</span>
+                {loadingBalance && <Loader2 size={12} className="animate-spin text-teal-600" />}
+              </div>
               <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border ${status.color}`}>
                 {status.label}
               </span>
@@ -1403,19 +1570,147 @@ function SalesCreationWorkspace({
                 </strong>
               </div>
 
-              <div className="border-t border-slate-100 pt-2 flex items-center justify-between">
-                <span className="text-sm font-bold text-slate-900">Grand Total</span>
-                <span className="text-xl font-black text-slate-900">{currency(grandTotal)}</span>
+              {/* Current Sale Total */}
+              <div className="flex items-center justify-between text-slate-800 font-semibold pt-1 border-t border-slate-100">
+                <span>Current Sale Total</span>
+                <strong className="font-bold">{currency(currentInvoiceTotal)}</strong>
+              </div>
+
+              {/* Previous Outstanding Balance */}
+              <div className="flex items-center justify-between text-slate-700">
+                <span className="flex items-center gap-1">
+                  <span>Previous Balance</span>
+                  {previousBalance > 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
+                      {forms.sale.previous_balance !== '' && Number(forms.sale.previous_balance) !== autoFetchedBalance ? 'Manual' : 'Due'}
+                    </span>
+                  )}
+                </span>
+                <strong className={previousBalance > 0 ? 'text-amber-700 font-bold' : 'text-slate-500'}>
+                  +{currency(previousBalance)}
+                </strong>
+              </div>
+
+              {/* Credit Note Deduction (if applied) */}
+              {effectiveCreditDeduction > 0 && (
+                <div className="flex items-center justify-between text-teal-700 font-bold bg-teal-50/60 px-2 py-1 rounded-lg border border-teal-200/60">
+                  <span>Credit Note Deduction</span>
+                  <span>-{currency(effectiveCreditDeduction)}</span>
+                </div>
+              )}
+
+              {/* Final Grand Total / Net Payable Amount */}
+              <div className="border-t border-slate-200 pt-2 flex items-center justify-between">
+                <div>
+                  <span className="text-sm font-black text-slate-900 block">Final Grand Total</span>
+                  <span className="text-[10px] text-slate-400 font-medium">Net Payable Amount</span>
+                </div>
+                <span className="text-xl font-black text-slate-900">{currency(netPayable)}</span>
               </div>
             </div>
 
-            {/* Payment Inputs inside Sidebar */}
+            {/* Apply Credit Note Widget */}
+            {availableCredits > 0 && (
+              <div className="p-3 bg-teal-50/70 border border-teal-200/90 rounded-xl space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={applyCreditNote}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setApplyCreditNote(checked);
+                        if (checked && !appliedCreditInput) {
+                          setAppliedCreditInput(String(maxApplicableCredit));
+                        }
+                      }}
+                      className="w-4 h-4 text-teal-600 rounded cursor-pointer accent-teal-600"
+                    />
+                    <span className="text-xs font-bold text-teal-950">Apply Credit Note</span>
+                  </label>
+                  <span className="text-[10.5px] font-extrabold text-teal-800 bg-white px-2 py-0.5 rounded-md border border-teal-200">
+                    Avail: {currency(availableCredits)}
+                  </span>
+                </div>
+
+                {applyCreditNote && (
+                  <div className="space-y-1.5 pt-1 border-t border-teal-200/60">
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="number"
+                        min="0"
+                        max={maxApplicableCredit}
+                        value={appliedCreditInput}
+                        onChange={(e) => setAppliedCreditInput(e.target.value)}
+                        placeholder="₹ 0"
+                        className="w-full h-8 px-2.5 text-xs font-black text-teal-800 bg-white border border-teal-300 rounded-lg focus:border-teal-500 focus:outline-none text-right"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setAppliedCreditInput(String(maxApplicableCredit))}
+                        className="px-2 h-8 text-[10px] font-extrabold text-teal-700 bg-white hover:bg-teal-100 border border-teal-300 rounded-lg cursor-pointer shrink-0"
+                        title="Apply maximum possible credit"
+                      >
+                        Use Max
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-teal-700 leading-tight">
+                      Deducted from Grand Total before calculating final closing balance.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Payment & Balance Inputs inside Sidebar */}
             <div className="space-y-2.5 pt-2 border-t border-slate-100">
+              {/* Previous Balance Manual / Auto Input */}
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Paid Amount (₹)</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
+                    <span>Previous Balance (₹)</span>
+                    {autoFetchedBalance > 0 && forms.sale.previous_balance !== '' && Number(forms.sale.previous_balance) !== autoFetchedBalance && (
+                      <span className="px-1.5 py-0.2 rounded text-[9.5px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                        Manual
+                      </span>
+                    )}
+                  </label>
+                  {autoFetchedBalance > 0 && forms.sale.previous_balance !== '' && Number(forms.sale.previous_balance) !== autoFetchedBalance && (
+                    <button
+                      type="button"
+                      onClick={() => setForms((prev) => ({ ...prev, sale: { ...prev.sale, previous_balance: String(autoFetchedBalance) } }))}
+                      className="text-[10px] font-bold text-teal-600 hover:text-teal-800 hover:underline cursor-pointer"
+                      title="Reset to customer's live outstanding balance"
+                    >
+                      Auto: {currency(autoFetchedBalance)}
+                    </button>
+                  )}
+                </div>
                 <input
                   type="number"
                   min="0"
+                  placeholder="₹ 0"
+                  value={forms.sale.previous_balance !== undefined ? forms.sale.previous_balance : ''}
+                  onChange={(e) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, previous_balance: e.target.value } }))}
+                  className="w-full h-10 px-3 text-xs font-bold text-amber-800 bg-white border border-slate-200 rounded-xl focus:border-amber-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-600">Paid Amount (₹)</label>
+                  <button
+                    type="button"
+                    onClick={() => setForms((prev) => ({ ...prev, sale: { ...prev.sale, paid_amount: String(netPayable) } }))}
+                    className="text-[10px] font-bold text-teal-600 hover:text-teal-800 hover:underline cursor-pointer"
+                  >
+                    Pay Full ({currency(netPayable)})
+                  </button>
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  max={netPayable}
                   placeholder="₹ 0"
                   value={forms.sale.paid_amount || ''}
                   onChange={(e) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, paid_amount: e.target.value } }))}
@@ -1439,9 +1734,9 @@ function SalesCreationWorkspace({
               </div>
 
               <div className="flex items-center justify-between text-xs pt-1 px-1">
-                <span className="text-slate-500 font-medium">Pending Balance:</span>
-                <strong className={`font-black ${pendingAmount > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                  {currency(pendingAmount)}
+                <span className="text-slate-500 font-medium">Updated Closing Balance:</span>
+                <strong className={`font-black ${closingBalance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {currency(closingBalance)}
                 </strong>
               </div>
             </div>
@@ -1718,6 +2013,33 @@ function App() {
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', notes: '' });
   const [savingQuickCustomer, setSavingQuickCustomer] = useState(false);
+  const [salesReturnModalOpen, setSalesReturnModalOpen] = useState(false);
+  const [salesReturnTargetCustomer, setSalesReturnTargetCustomer] = useState(null);
+  const [salesReturnTargetSale, setSalesReturnTargetSale] = useState(null);
+
+  const [editSaleModalOpen, setEditSaleModalOpen] = useState(false);
+  const [saleToEdit, setSaleToEdit] = useState(null);
+
+  const openEditSaleModal = (sale) => {
+    setSaleToEdit(sale);
+    setEditSaleModalOpen(true);
+  };
+
+  const openSalesReturnModal = (saleOrCustomer = null) => {
+    if (saleOrCustomer && (saleOrCustomer.sale_id || saleOrCustomer.invoice_number || saleOrCustomer.customer_id)) {
+      setSalesReturnTargetSale(saleOrCustomer);
+      const cust = (data.customers || []).find((c) => String(c.id) === String(saleOrCustomer.customer_id));
+      setSalesReturnTargetCustomer(cust || null);
+    } else if (saleOrCustomer && (saleOrCustomer.name || saleOrCustomer.customer_name)) {
+      const cust = (data.customers || []).find((c) => String(c.id) === String(saleOrCustomer.id || saleOrCustomer.customer_id)) || saleOrCustomer;
+      setSalesReturnTargetCustomer(cust);
+      setSalesReturnTargetSale(null);
+    } else {
+      setSalesReturnTargetCustomer(null);
+      setSalesReturnTargetSale(null);
+    }
+    setSalesReturnModalOpen(true);
+  };
 
   const handleQuickAddCustomerSubmit = async (e) => {
     if (e) e.preventDefault();
@@ -3684,6 +4006,8 @@ function App() {
           shop_id: shopId,
           customer_id: customerId,
           paid_amount: String(Number(forms.sale.paid_amount || 0)),
+          applied_credit_amount: Number(forms.sale.applied_credit_amount || 0),
+          previous_balance: Number(forms.sale.previous_balance || 0),
           invoice_date: forms.sale.invoice_date || getTodayIso(),
           payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15),
           due_date: dueDate,
@@ -3719,6 +4043,8 @@ function App() {
           invoice_date: getTodayIso(),
           payment_terms_days: 15,
           due_date: calculateDueDate(getTodayIso(), 15),
+          previous_balance: 0,
+          applied_credit_amount: 0,
           items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
           expenses: [],
         },
@@ -4595,25 +4921,38 @@ function App() {
               </thead>
               <tbody>
                 ${(Array.isArray(sale.items) && sale.items.length > 0 ? sale.items : [{
-                  product_name: productName(sale),
+                  short_name: sale.short_name || sale.product_short_name,
+                  product_name: sale.product_name || sale.name,
+                  manufacturing_brand_name: sale.manufacturing_brand_name,
                   colour: sale.colour,
                   price_type: sale.price_type || 'retail',
                   quantity: sale.quantity || 1,
                   unit_price: Number(prodTotal) / Number(sale.quantity || 1),
                   total_price: prodTotal,
-                }]).map((it) => `
+                }]).map((it) => {
+                  const rate = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? (it.total_amount && it.quantity ? Number(it.total_amount) / Number(it.quantity) : (it.amount && it.quantity ? Number(it.amount) / Number(it.quantity) : 0)));
+                  const qty = Number(it.quantity ?? it.qty ?? 1);
+                  const itemTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
+                  const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
+
+                  const rawShort = it.short_name || it.product_short_name || it.product_name || it.name || '';
+                  const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
+                  const rawMfg = it.manufacturing_brand_name || it.mfg_brand_name || it.manufacturing_brand || sale.manufacturing_brand_name || '';
+                  const mfgBrand = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
+                  return `
                   <tr>
                     <td>
-                      <strong>${escapeHtml(it.product_name || it.name || productName(it))}</strong>
+                      <strong style="font-size: 12.5px;">${escapeHtml(shortName)}</strong>
+                      ${mfgBrand ? `<br/><small style="color: #0f766e; font-weight: 700; font-size: 11px;">${escapeHtml(mfgBrand)}</small>` : ''}
                       ${it.colour ? `<br/><span style="display:inline-block; margin-top:3px; padding:1px 6px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:4px; font-size:11px; font-weight:700;">Colour: ${escapeHtml(it.colour)}</span>` : ''}
                       <br/>
                       <small style="color: #64748b; font-size: 11px;">${it.price_type === 'wholesale' ? 'Wholesale' : 'Retail'} price</small>
                     </td>
-                    <td class="text-right">${it.quantity || 1} pcs</td>
-                    <td class="text-right">₹${Number(it.unit_price || (Number(it.total_price || 0) / Number(it.quantity || 1))).toLocaleString('en-IN')}</td>
-                    <td class="text-right">₹${Number(it.total_price || (Number(it.unit_price || 0) * Number(it.quantity || 1))).toLocaleString('en-IN')}</td>
+                    <td class="text-right">${qty} pcs</td>
+                    <td class="text-right">₹${Number(unitPrice).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td class="text-right">₹${Number(itemTotal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   </tr>
-                `).join('')}
+                `;}).join('')}
                 ${rawExpenses.map((exp) => `
                   <tr style="background: #fafafa;">
                     <td>
@@ -4621,8 +4960,8 @@ function App() {
                       <small style="color: #94a3b8; font-size: 11px; display: block;">Additional Service / Charge</small>
                     </td>
                     <td class="text-right">1</td>
-                    <td class="text-right">₹${Number(exp.amount || 0).toLocaleString('en-IN')}</td>
-                    <td class="text-right">₹${Number(exp.amount || 0).toLocaleString('en-IN')}</td>
+                    <td class="text-right">₹${Number(exp.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                    <td class="text-right">₹${Number(exp.amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -4631,25 +4970,37 @@ function App() {
             <div class="summary-box">
               <div class="summary-row">
                 <span>Products Subtotal</span>
-                <span>₹${Number(prodTotal).toLocaleString('en-IN')}</span>
+                <span>₹${Number(prodTotal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               ${expensesTotal > 0 ? `
                 <div class="summary-row" style="color: #0f766e; font-weight: 600;">
-                  <span>Extra Expenses</span>
-                  <span>+₹${Number(expensesTotal).toLocaleString('en-IN')}</span>
+                  <span>+ COURIER / EXPENSES</span>
+                  <span>+₹${Number(expensesTotal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              ` : ''}
+              ${Number(sale.previous_balance || 0) > 0 ? `
+                <div class="summary-row" style="color: #b45309; font-weight: 600;">
+                  <span>+ PREVIOUS BALANCE</span>
+                  <span>+₹${Number(sale.previous_balance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                </div>
+              ` : ''}
+              ${Number(sale.applied_credit_amount || 0) > 0 ? `
+                <div class="summary-row" style="color: #0f766e; font-weight: 600;">
+                  <span>- CREDIT NOTE</span>
+                  <span>-₹${Number(sale.applied_credit_amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               ` : ''}
               <div class="summary-row total">
                 <span>Grand Total</span>
-                <span>₹${Number(sale.total_amount).toLocaleString('en-IN')}</span>
+                <span>₹${Number(sale.net_payable_amount ?? sale.total_amount).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               <div class="summary-row paid">
                 <span>Amount Paid</span>
-                <span>₹${Number(sale.paid_amount || 0).toLocaleString('en-IN')}</span>
+                <span>₹${Number(sale.paid_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
               <div class="summary-row due">
-                <span>Outstanding Balance</span>
-                <span>₹${Number(sale.pending_amount || 0).toLocaleString('en-IN')}</span>
+                <span>Balance Due</span>
+                <span>₹${Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : sale.pending_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
             </div>
 
@@ -4723,17 +5074,13 @@ function App() {
       .map((line) => `<div>${safe(line)}</div>`)
       .join('');
     const customerDetails = [sale.mobile, sale.address].filter(Boolean).map(safe).join(' &middot; ');
-    const quantity = invoiceItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-    const total = invoiceItems.reduce((sum, item) => sum + Number(item.total_amount || 0), 0);
-    const paid = invoiceItems.reduce((sum, item) => sum + Number(item.paid_amount || 0), 0);
-    const pending = invoiceItems.reduce((sum, item) => sum + Number(item.pending_amount || 0), 0);
-
     const allExpenses = (sale.expenses && Array.isArray(sale.expenses) ? sale.expenses : []).concat(
       invoiceItems.flatMap(it => (Array.isArray(it.expenses) ? it.expenses : []))
     ).filter((exp, idx, self) => exp && exp.amount > 0 && self.findIndex(o => o.id === exp.id && o.expense_name === exp.expense_name) === idx);
 
-    const extraExpensesSum = Number(sale.extra_expenses_total || allExpenses.reduce((s, e) => s + Number(e.amount || 0), 0) || 0);
-    const productsSubtotal = Number(sale.products_total || Math.max(total - extraExpensesSum, 0));
+    const courier = Number(sale.extra_expenses_total ?? sale.extra_expenses ?? sale.courier_charge ?? sale.courier ?? (
+      allExpenses.reduce((s, e) => s + Number(e.amount || 0), 0)
+    ) ?? 0);
 
     const invoiceDateVal = sale.invoice_date || (isConsolidated ? new Date().toISOString().slice(0, 10) : sale.sale_date);
     const termsLabel = sale.payment_terms_days ? `${sale.payment_terms_days} Days` : '15 Days';
@@ -4742,37 +5089,81 @@ function App() {
     const periodLabel = firstPurchaseDate === latestPurchaseDate
       ? formatDate(firstPurchaseDate)
       : `${formatDate(firstPurchaseDate)} to ${formatDate(latestPurchaseDate)}`;
+
     const expandedItems = invoiceItems.flatMap((item) => {
       if (Array.isArray(item.items) && item.items.length > 0) {
         return item.items.map((sub) => ({
           ...sub,
-          sale_date: item.sale_date,
-          total_amount: sub.total_price || (Number(sub.unit_price || 0) * Number(sub.quantity || 1)),
+          sale_date: item.sale_date || sub.sale_date,
         }));
       }
       return [item];
     });
 
     const itemRows = expandedItems.map((item, index) => {
-      const itemQuantity = Number(item.quantity || 1);
-      const itemTotal = Number(item.total_amount || 0);
-      const unitPrice = itemQuantity ? itemTotal / itemQuantity : itemTotal;
-      const productDetails = [item.brand, item.description].filter(Boolean).map(safe).join(' - ');
+      // 1. Correct key lookups for item rates and row totals
+      const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? (item.total_amount && item.quantity ? Number(item.total_amount) / Number(item.quantity) : (item.amount && item.quantity ? Number(item.amount) / Number(item.quantity) : 0)));
+      const qty = Number(item.quantity ?? item.qty ?? 1);
+      const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
+      const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
+
+      // Only show Short Name - never show concatenated compatible models
+      const rawShort = item.short_name || item.product_short_name || item.product_name || item.name || '';
+      const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
+
+      // Manufacturing brand - render directly without "Mfg:" prefix
+      const rawMfg = item.manufacturing_brand_name || 
+                     item.mfg_brand_name || 
+                     item.manufacturing_brand || 
+                     sale.manufacturing_brand_name || 
+                     sale.mfg_brand_name || 
+                     sale.manufacturing_brand || 
+                     '';
+      const mfgBrand = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
+
+      const companyBrand = item.brand || sale.brand || '';
+      const detailParts = [];
+      if (mfgBrand) detailParts.push(`<strong>${safe(mfgBrand)}</strong>`);
+      if (companyBrand && !shortName.toLowerCase().includes(companyBrand.toLowerCase()) && !mfgBrand.toLowerCase().includes(companyBrand.toLowerCase())) {
+        detailParts.push(safe(companyBrand));
+      }
+      if (item.description) detailParts.push(safe(item.description));
+      const productDetails = detailParts.join(' &middot; ');
+
       return `
         <tr>
           <td class="number">${index + 1}</td>
           <td class="date">${formatDate(item.sale_date)}</td>
           <td class="item">
-            ${safe(item.product_name || item.name || productName(item))}
-            ${item.colour ? `<span style="display:inline-block; margin-left:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(item.colour)}</span>` : ''}
-            ${productDetails ? `<small>${productDetails}</small>` : ''}
+            <strong style="font-size: 12.5px; color: #0f172a; display: block;">${safe(shortName)}</strong>
+            ${item.colour ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(item.colour)}</span>` : ''}
+            ${productDetails ? `<small style="display:block; margin-top:2px; color:#475569; font-size:11px;">${productDetails}</small>` : ''}
           </td>
-          <td class="qty">${itemQuantity}<br/>PCS</td>
+          <td class="qty">${qty}<br/>PCS</td>
           <td class="money">${formatAmount(unitPrice)}</td>
           <td class="money">${formatAmount(itemTotal)}</td>
         </tr>
       `;
     }).join('');
+
+    // Summary calculation breakdown
+    const productsSubtotal = Number(sale.products_total || expandedItems.reduce((sum, it) => {
+      const r = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? 0);
+      const q = Number(it.quantity ?? it.qty ?? 1);
+      const lineTot = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (r * q));
+      return sum + lineTot;
+    }, 0));
+
+    const prevBalance = Number(sale.previous_balance ?? sale.old_balance ?? 0);
+    const appliedCredit = Number(sale.applied_credit_amount ?? sale.credit_applied ?? 0);
+
+    // Current invoice value + carry forward balance - credits
+    const grandTotal = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit);
+    const paidAmount = Number(sale.paid_amount ?? sale.amount_paid ?? (
+      invoiceItems.reduce((sum, item) => sum + Number(item.paid_amount || 0), 0)
+    ) ?? 0);
+    const balanceDue = Math.max(0, grandTotal - paidAmount);
+    const quantity = expandedItems.reduce((sum, item) => sum + Number(item.quantity ?? item.qty ?? 1), 0);
 
     printWindow.document.open();
     printWindow.document.write(`
@@ -4849,7 +5240,7 @@ function App() {
             <div class="summary">
               <div class="notes">
                 <div>Items in Total ${quantity}</div>
-                <div class="words">Total In Words<strong>Indian Rupee ${toWords(total)} Only</strong></div>
+                <div class="words">Total In Words<strong>Indian Rupee ${toWords(grandTotal)} Only</strong></div>
                 <div class="notes-block">Notes<br/>${safe(isConsolidated ? 'This invoice includes all purchases made by this customer at this branch.' : sale.notes || 'Thanks for your business.')}</div>
                 <div class="notes-block">Terms &amp; Conditions<br/>Goods once sold will not be returned or exchanged.</div>
               </div>
@@ -4857,18 +5248,30 @@ function App() {
                 <div class="total-line"><span>Products Subtotal</span><span>${formatAmount(productsSubtotal)}</span></div>
                 ${allExpenses.length > 0 ? allExpenses.map(exp => `
                   <div class="total-line" style="color: #0f766e;">
-                    <span>+ ${safe(exp.expense_name)}</span>
+                    <span>+ ${safe(String(exp.expense_name || 'COURIER').toUpperCase())}</span>
                     <span>${formatAmount(exp.amount)}</span>
                   </div>
-                `).join('') : (extraExpensesSum > 0 ? `
+                `).join('') : (courier > 0 ? `
                   <div class="total-line" style="color: #0f766e;">
-                    <span>+ Extra Expenses</span>
-                    <span>${formatAmount(extraExpensesSum)}</span>
+                    <span>+ COURIER</span>
+                    <span>${formatAmount(courier)}</span>
                   </div>
                 ` : '')}
-                <div class="total-line grand"><span>Grand Total</span><span>Rs.${formatAmount(total)}</span></div>
-                <div class="total-line grand"><span>Amount Paid</span><span>Rs.${formatAmount(paid)}</span></div>
-                <div class="total-line grand"><span>Balance Due</span><span>Rs.${formatAmount(pending)}</span></div>
+                ${prevBalance > 0 ? `
+                  <div class="total-line" style="color: #b45309; font-weight: 600;">
+                    <span>+ PREVIOUS BALANCE</span>
+                    <span>Rs.${formatAmount(prevBalance)}</span>
+                  </div>
+                ` : ''}
+                ${appliedCredit > 0 ? `
+                  <div class="total-line" style="color: #0f766e; font-weight: 600;">
+                    <span>- CREDIT NOTE</span>
+                    <span>-Rs.${formatAmount(appliedCredit)}</span>
+                  </div>
+                ` : ''}
+                <div class="total-line grand"><span>Grand Total</span><span>Rs.${formatAmount(grandTotal)}</span></div>
+                <div class="total-line grand"><span>Amount Paid</span><span>Rs.${formatAmount(paidAmount)}</span></div>
+                <div class="total-line grand" style="color: ${balanceDue > 0 ? '#b91c1c' : '#047857'};"><span>Balance Due</span><span>Rs.${formatAmount(balanceDue)}</span></div>
                 <div class="signature">Authorized Signature</div>
               </div>
             </div>
@@ -4901,9 +5304,19 @@ function App() {
         shopId: String(customer.shop_id || shopId),
       });
       const invoice = await authedFetch(`/customer-invoice?${params.toString()}`);
+      if (!invoice.sales || !invoice.sales.length) {
+        throw new Error('No purchases found for this customer');
+      }
       const firstSale = invoice.sales[0];
+      const lastSale = invoice.sales[invoice.sales.length - 1];
+      const allCustomerItems = invoice.sales.flatMap(s => (Array.isArray(s.items) && s.items.length ? s.items.map(sub => ({ ...sub, sale_date: s.sale_date })) : [s]));
+      const allCustomerExpenses = invoice.sales.flatMap(s => (Array.isArray(s.expenses) ? s.expenses : []));
+      const totalPaid = invoice.sales.reduce((sum, s) => sum + Number(s.paid_amount || 0), 0);
+      const totalPending = invoice.sales.reduce((sum, s) => sum + Number(s.pending_amount || 0), 0);
+      const totalCredit = invoice.sales.reduce((sum, s) => sum + Number(s.applied_credit_amount || 0), 0);
+
       printTaxInvoicePDF({
-        ...firstSale,
+        ...lastSale,
         customer_id: invoice.customer.id,
         customer_name: invoice.customer.name,
         mobile: invoice.customer.mobile,
@@ -4913,7 +5326,12 @@ function App() {
         shop_area: invoice.shop.area,
         shop_address: invoice.shop.address,
         shop_phone: invoice.shop.phone,
-        items: invoice.sales,
+        items: allCustomerItems,
+        expenses: allCustomerExpenses,
+        previous_balance: Number(firstSale.previous_balance || 0),
+        applied_credit_amount: totalCredit,
+        paid_amount: totalPaid,
+        pending_amount: totalPending,
         consolidated: true,
       }, printWindow);
     } catch (error) {
@@ -5870,6 +6288,8 @@ function App() {
                     setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
                     getProductAvailableColors={getProductAvailableColors}
                     title="Record customer purchase"
+                    authedFetch={authedFetch}
+                    onOpenReturnModal={openSalesReturnModal}
                   />
                 </div>
                 <div className="catalog-toolbar panel sales-toolbar">
@@ -6013,11 +6433,22 @@ function App() {
                     setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
                     getProductAvailableColors={getProductAvailableColors}
                     title={data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'}
+                    authedFetch={authedFetch}
+                    onOpenReturnModal={openSalesReturnModal}
                   />
                 </div>
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox"><Search size={18} /><input placeholder="Filter by customer, model, category, shop, or payment mode" value={salesFilters.search} onChange={(event) => setSalesFilters({ ...salesFilters, search: event.target.value })} /></div>
                   <input type="date" value={salesFilters.date} onChange={(event) => setSalesFilters({ ...salesFilters, date: event.target.value })} />
+                  <button
+                    type="button"
+                    onClick={() => openSalesReturnModal()}
+                    className="px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 shrink-0"
+                    title="Initiate a Sales Return and issue a Credit Note"
+                  >
+                    <RotateCcw size={14} className="text-amber-700" />
+                    <span>Sales Return / Credit Note</span>
+                  </button>
                   {role === 'superadmin' && <span className="status-badge">All-location history</span>}
                   {pageLoading.sales && <span className="status-badge due">Loading</span>}
                   <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
@@ -6160,6 +6591,24 @@ function App() {
                                             onClick={() => printTaxInvoicePDF(sale)}
                                           >
                                             <ReceiptText size={13} /> Invoice
+                                          </button>
+
+                                          <button 
+                                            className="px-2 py-1 text-xs font-bold bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-300 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                            type="button"
+                                            title="Initiate Return / Credit Note against this invoice"
+                                            onClick={() => openSalesReturnModal(sale)}
+                                          >
+                                            <RotateCcw size={12} /> Return
+                                          </button>
+
+                                          <button 
+                                            className="px-2 py-1 text-xs font-bold bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 hover:border-sky-300 rounded-lg transition-all flex items-center gap-1 cursor-pointer"
+                                            type="button"
+                                            title="Edit invoice dates, payment terms, expenses & remarks"
+                                            onClick={() => openEditSaleModal(sale)}
+                                          >
+                                            <Pencil size={12} /> Edit
                                           </button>
 
                                           {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
@@ -6614,6 +7063,14 @@ function App() {
                             <span className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-teal-50 text-teal-700 border border-teal-200">
                               Customer Ledger
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => openSalesReturnModal(selectedPaymentCustomer)}
+                              className="px-2 py-0.5 text-[10.5px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-full transition-all flex items-center gap-1 cursor-pointer"
+                              title="Issue Credit Note / Sales Return for this customer"
+                            >
+                              <RotateCcw size={10} /> Return / Credit Note
+                            </button>
                           </div>
                           <p className="text-xs text-slate-500 mt-0.5">
                             {selectedPaymentCustomer.mobile || 'No phone'} · {selectedPaymentCustomer.shop_name}
@@ -6700,6 +7157,22 @@ function App() {
                                         className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
                                       >
                                         <ReceiptText size={12} /> Invoice
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openSalesReturnModal(sale)}
+                                        className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                        title="Return items from this invoice"
+                                      >
+                                        <RotateCcw size={12} /> Return
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditSaleModal(sale)}
+                                        className="px-2 py-1 bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 hover:border-sky-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                        title="Edit invoice dates, payment terms, expenses & remarks"
+                                      >
+                                        <Pencil size={12} /> Edit
                                       </button>
                                       {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
                                         <button
@@ -7704,6 +8177,56 @@ function App() {
             </div>
           </div>
         )}
+        <SalesReturnModal
+          isOpen={salesReturnModalOpen}
+          onClose={() => setSalesReturnModalOpen(false)}
+          customers={data.customers || []}
+          products={data.products || data.productResults || []}
+          initialCustomer={salesReturnTargetCustomer}
+          initialSale={salesReturnTargetSale}
+          shopId={shopId}
+          authedFetch={authedFetch}
+          showToast={showToast}
+          currency={currency}
+          formatDateDMY={formatDateDMY}
+          onSuccess={async () => {
+            await loadTab(active, shopId);
+            if (selectedPaymentCustomer) {
+              const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
+              if (updatedCust) {
+                openCustomerLedgerDrawer(updatedCust);
+              }
+            }
+          }}
+        />
+        <EditSaleModal
+          isOpen={editSaleModalOpen}
+          onClose={() => {
+            setEditSaleModalOpen(false);
+            setSaleToEdit(null);
+          }}
+          sale={saleToEdit}
+          shopId={shopId}
+          authedFetch={authedFetch}
+          showToast={showToast}
+          currency={currency}
+          formatDateDMY={formatDateDMY}
+          onSuccess={async (updatedSale) => {
+            await loadTab(active, shopId);
+            if (selectedPaymentCustomer) {
+              const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
+              if (updatedCust) {
+                openCustomerLedgerDrawer(updatedCust);
+              }
+            }
+            if (updatedSale && detailedShopData?.sales) {
+              setDetailedShopData((prev) => ({
+                ...prev,
+                sales: (prev.sales || []).map((s) => Number(s.id) === Number(updatedSale.id) ? { ...s, ...updatedSale } : s),
+              }));
+            }
+          }}
+        />
         <ConfirmationDialog
           dialog={confirmDialog}
           saving={saving}
