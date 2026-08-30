@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, RotateCcw, Package, AlertCircle, CheckCircle2, Loader2, Sparkles, ReceiptText, ArrowRight, ShieldCheck } from 'lucide-react';
+import SearchableCombobox from '../ui/SearchableCombobox';
 
 export default function SalesReturnModal({
   isOpen,
@@ -32,6 +33,50 @@ export default function SalesReturnModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [createdCreditNote, setCreatedCreditNote] = useState(null);
+
+  // Formatted searchable product options matching the create sale workspace
+  const productOptions = useMemo(() => {
+    return (products || []).map((p) => {
+      const brand = p.company_brand_name || p.brand || '';
+      const mfgBrand = p.manufacturing_brand_name || p.mfg_brand || '';
+      const cat = p.part_category || p.category || '';
+      const quality = p.quality_variant || p.quality || '';
+      const price = Number(p.sale_price || p.retail_price || p.official_price || 0);
+      const wholesalePrice = Number(p.wholesale_price || 0);
+      const shortName = p.short_name || p.name || 'Product';
+
+      const label = `${shortName}${mfgBrand ? ` (${mfgBrand})` : ''}${cat ? ` [${cat}]` : ''} · ₹${price.toLocaleString('en-IN')}`;
+
+      return {
+        id: String(p.id),
+        name: label,
+        label,
+        keywords: [
+          p.name,
+          p.short_name,
+          p.product_name,
+          p.model,
+          p.full_model_list,
+          brand,
+          mfgBrand,
+          cat,
+          quality,
+          p.description,
+          String(price),
+          String(wholesalePrice),
+        ].filter(Boolean).join(' '),
+        brand: mfgBrand || brand,
+        category: cat,
+        quality,
+        model: p.model || p.full_model_list,
+        image_url: p.image_url || p.imageUrl || '',
+        stock: p.stock ?? p.quantity,
+        retailPrice: price,
+        wholesalePrice,
+        coloursCount: Array.isArray(p.colours) ? p.colours.length : undefined,
+      };
+    });
+  }, [products]);
 
   // Initialize or reset when modal opens or initial props change
   useEffect(() => {
@@ -557,18 +602,14 @@ export default function SalesReturnModal({
                             <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
                               Product / Model *
                             </label>
-                            <select
-                              value={item.product_id}
-                              onChange={(e) => handleStandaloneItemChange(idx, 'product_id', e.target.value)}
-                              className="w-full h-9 px-2 text-xs font-bold bg-white border border-slate-200 rounded-lg focus:border-teal-500 focus:outline-none cursor-pointer"
-                            >
-                              <option value="">Select product...</option>
-                              {products.map((p) => (
-                                <option key={p.id} value={p.id}>
-                                  {p.short_name || p.name} (₹{p.sale_price || p.retail_price || 0})
-                                </option>
-                              ))}
-                            </select>
+                            <SearchableCombobox
+                              value={item.product_id ? String(item.product_id) : ''}
+                              onChange={(val) => handleStandaloneItemChange(idx, 'product_id', val)}
+                              options={productOptions}
+                              placeholder="Search product, brand, model..."
+                              searchPlaceholder="Type model (e.g. IP12, A33 WF), brand, price..."
+                              className="w-full"
+                            />
                           </div>
 
                           <div className="sm:col-span-2">
