@@ -110,23 +110,51 @@ class ApiError extends Error {
 }
 
 const api = async (path, options = {}, token = '') => {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(options.headers || {}),
-    },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const rawError = data.error || data.message || data;
-    const errorMessage = typeof rawError === 'string'
-      ? rawError
-      : rawError?.message || (typeof rawError === 'object' && Object.keys(rawError).length ? JSON.stringify(rawError) : '') || 'Something went wrong.';
-    throw new ApiError(errorMessage, response.status);
+  const url = `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+  try {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const rawError = data.error || data.message || data;
+      const errorMessage = typeof rawError === 'string'
+        ? rawError
+        : rawError?.message || (typeof rawError === 'object' && Object.keys(rawError).length ? JSON.stringify(rawError) : '') || 'Invalid credentials or server error.';
+      throw new ApiError(errorMessage, response.status);
+    }
+    return data;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    if (url.includes(':5000')) {
+      try {
+        const fallbackUrl = `/api${path.startsWith('/') ? path : `/${path}`}`;
+        const fallbackResp = await fetch(fallbackUrl, {
+          ...options,
+          headers: {
+            ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            ...(options.headers || {}),
+          },
+        });
+        const fallbackData = await fallbackResp.json().catch(() => ({}));
+        if (!fallbackResp.ok) {
+          const rawError = fallbackData.error || fallbackData.message || fallbackData;
+          const msg = typeof rawError === 'string' ? rawError : rawError?.message || 'Invalid credentials or server error.';
+          throw new ApiError(msg, fallbackResp.status);
+        }
+        return fallbackData;
+      } catch (fbErr) {
+        if (fbErr instanceof ApiError) throw fbErr;
+      }
+    }
+    throw new ApiError(err?.message || 'Cannot reach server. Please ensure backend server is running on port 5000.');
   }
-  return data;
 };
 
 const isSessionError = (error) => (
