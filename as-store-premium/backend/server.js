@@ -3085,6 +3085,7 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
     "COALESCE(c.mobile, '')",
     "COALESCE(c.address, '')",
     "COALESCE(c.notes, '')",
+    "COALESCE(c.gstin, '')",
     "COALESCE(sh.name, '')",
   ]);
   appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'c.created_at');
@@ -3119,20 +3120,22 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
 });
 
 app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res) => {
-    try {
+  try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { name, mobile, address, notes } = req.body;
+    const { name, mobile, address, notes, gstin, customer_type } = req.body;
     if (!name || !mobile) return res.status(400).json({ error: 'Customer name and mobile are required.' });
     const existing = await getRecord('SELECT * FROM customers WHERE shop_id = ? AND mobile = ?', [shopId, mobile]);
     if (existing) {
       return res.status(200).json(existing);
     }
+    const cleanGstin = gstin ? String(gstin).trim().toUpperCase() : null;
+    const cleanType = (customer_type && String(customer_type).trim().toLowerCase() === 'wholesaler') ? 'wholesaler' : 'retailer';
     const result = await runQuery(
-      'INSERT INTO customers (shop_id, name, mobile, address, notes, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [shopId, name, mobile, address || '', notes || '', req.user.id]
+      'INSERT INTO customers (shop_id, name, mobile, address, notes, gstin, customer_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [shopId, name, mobile, address || '', notes || '', cleanGstin, cleanType, req.user.id]
     );
     await audit(req, 'Created customer', 'customer', result.id, name);
-    res.status(201).json({ id: result.id, shop_id: shopId, name, mobile, address, notes });
+    res.status(201).json({ id: result.id, shop_id: shopId, name, mobile, address, notes, gstin: cleanGstin, customer_type: cleanType });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create customer.' });
   }
@@ -3151,7 +3154,7 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
     if (isShopStaffRole(req.user.role) && customer.created_by && customer.created_by !== req.user.id) {
       return res.status(403).json({ error: 'Access denied to edit this customer.' });
     }
-    const { name, mobile, address, notes, default_payment_terms_days, opening_balance } = req.body;
+    const { name, mobile, address, notes, default_payment_terms_days, opening_balance, gstin, customer_type } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Customer name is required.' });
     }
@@ -3160,6 +3163,10 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
     const cleanMobile = mobile !== undefined ? String(mobile).trim() : customer.mobile;
     const cleanAddress = address !== undefined ? String(address).trim() : customer.address;
     const cleanNotes = notes !== undefined ? String(notes).trim() : customer.notes;
+    const cleanGstin = gstin !== undefined ? (String(gstin).trim().toUpperCase() || null) : (customer.gstin || null);
+    const cleanType = customer_type !== undefined
+      ? (String(customer_type).trim().toLowerCase() === 'wholesaler' ? 'wholesaler' : 'retailer')
+      : (customer.customer_type || 'retailer');
     const paymentTerms = default_payment_terms_days !== undefined && !isNaN(Number(default_payment_terms_days))
       ? Number(default_payment_terms_days)
       : (customer.default_payment_terms_days || 15);
@@ -3169,9 +3176,9 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
 
     await runQuery(
       `UPDATE customers
-       SET name = ?, mobile = ?, address = ?, notes = ?, default_payment_terms_days = ?, opening_balance = ?
+       SET name = ?, mobile = ?, address = ?, notes = ?, default_payment_terms_days = ?, opening_balance = ?, gstin = ?, customer_type = ?
        WHERE id = ?`,
-      [cleanName, cleanMobile, cleanAddress, cleanNotes, paymentTerms, cleanOpeningBalance, customerId]
+      [cleanName, cleanMobile, cleanAddress, cleanNotes, paymentTerms, cleanOpeningBalance, cleanGstin, cleanType, customerId]
     );
 
     const updated = await getRecord(`
@@ -3304,6 +3311,18 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
       FROM sale_expenses
       GROUP BY sale_id
     ) se ON se.sale_id = sa.id
+    LEFT JOIN (
+      SELECT sale_id, json_agg(json_build_object(
+        'id', id,
+        'amount', amount,
+        'payment_date', payment_date,
+        'payment_mode', payment_mode,
+        'note', note,
+        'created_at', created_at
+      ) ORDER BY payment_date ASC, id ASC) AS payments
+      FROM payments
+      GROUP BY sale_id
+    ) pm ON pm.sale_id = sa.id
     WHERE ${where.join(' AND ')}
   `;
   const rows = await runPaginatedList({
@@ -3311,6 +3330,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     SELECT sa.*, 
       COALESCE(si_agg.items, '[]'::json) AS items,
       COALESCE(se.expenses, '[]'::json) AS expenses,
+      COALESCE(pm.payments, '[]'::json) AS payments,
       p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
@@ -3501,6 +3521,7 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         COALESCE(si_agg.items, '[]'::json) AS items,
         COALESCE(se.expenses, '[]'::json) AS expenses,
         COALESCE(cnr_agg.credit_redemptions, '[]'::json) AS credit_redemptions,
+        COALESCE(pm.payments, '[]'::json) AS payments,
         p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
         c.name AS customer_name, c.mobile, c.address,
         sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
@@ -3553,6 +3574,18 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         JOIN credit_notes cn ON cn.id = cnr.credit_note_id
         GROUP BY cnr.sale_id
       ) cnr_agg ON cnr_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object(
+          'id', id,
+          'amount', amount,
+          'payment_date', payment_date,
+          'payment_mode', payment_mode,
+          'note', note,
+          'created_at', created_at
+        ) ORDER BY payment_date ASC, id ASC) AS payments
+        FROM payments
+        GROUP BY sale_id
+      ) pm ON pm.sale_id = sa.id
       WHERE sa.shop_id = ? AND c.mobile = ?
     `;
     if (isShopStaffRole(req.user.role)) {
@@ -5137,6 +5170,18 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       FROM sale_expenses
       GROUP BY sale_id
     ) se ON se.sale_id = sa.id
+    LEFT JOIN (
+      SELECT sale_id, json_agg(json_build_object(
+        'id', id,
+        'amount', amount,
+        'payment_date', payment_date,
+        'payment_mode', payment_mode,
+        'note', note,
+        'created_at', created_at
+      ) ORDER BY payment_date ASC, id ASC) AS payments
+      FROM payments
+      GROUP BY sale_id
+    ) pm ON pm.sale_id = sa.id
     WHERE ${where.join(' AND ')}
     GROUP BY sa.shop_id, COALESCE(c.mobile, c.id::TEXT)
   `;
@@ -5213,7 +5258,8 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
           'manufacturing_brand_name', COALESCE(mb.name, p.brand),
           'colour', sa.colour
         ))),
-        'expenses', COALESCE(se.expenses, '[]'::json)
+        'expenses', COALESCE(se.expenses, '[]'::json),
+        'payments', COALESCE(pm.payments, '[]'::json)
       ) ORDER BY ${groupOrderSql}) AS items
     ${baseSql}
     ORDER BY due_date ASC NULLS LAST, pending_amount DESC
@@ -5227,12 +5273,15 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
 });
 
 app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) => {
-  const { sale_id, customer_id, shop_id, amount, note } = req.body;
+  const { sale_id, customer_id, shop_id, amount, note, payment_mode = 'cash', payment_date } = req.body;
   if ((!sale_id && !customer_id) || !amount) return res.status(400).json({ error: 'Customer or sale and amount are required.' });
   const paymentAmount = money(amount);
   if (paymentAmount <= 0) return res.status(400).json({ error: 'Payment amount must be greater than zero.' });
 
-    if (customer_id) {
+  const payDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payment_date || '')) ? String(payment_date) : today();
+  const payMode = String(payment_mode || 'cash').trim();
+
+  if (customer_id) {
     try {
       const userShopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : (shop_id ? Number(shop_id) : null);
       const result = await runTransaction(async (tx) => {
@@ -5272,13 +5321,16 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
           const allocated = Math.min(remainingPayment, money(sale.pending_amount));
           const newPaid = money(sale.paid_amount) + allocated;
           const newPending = Math.max(money(sale.total_amount) - newPaid, 0);
-          await tx.runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [sale.id, allocated, today(), note || 'Customer balance payment']);
+          await tx.runQuery(
+            'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
+            [sale.id, allocated, payDate, payMode, note || 'Customer balance payment']
+          );
           await tx.runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale.id]);
           remainingPayment -= allocated;
         }
         return { pending_amount: totalPending - paymentAmount };
       });
-      await audit(req, 'Recorded customer payment', 'customer', customer_id, `Paid ${paymentAmount}, remaining ${result.pending_amount}`);
+      await audit(req, 'Recorded customer payment', 'customer', customer_id, `Paid ${paymentAmount} on ${payDate} via ${payMode}, remaining ${result.pending_amount}`);
       return res.json({ success: true, pending_amount: result.pending_amount });
     } catch (error) {
       return res.status(error.status || 500).json({ error: error.message || 'Unable to record customer payment.' });
@@ -5294,10 +5346,33 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
   if (paymentAmount > money(sale.pending_amount)) return res.status(400).json({ error: 'Payment cannot exceed the pending balance.' });
   const newPaid = money(sale.paid_amount) + paymentAmount;
   const newPending = Math.max(money(sale.total_amount) - newPaid, 0);
-  await runQuery('INSERT INTO payments (sale_id, amount, payment_date, note) VALUES (?, ?, ?, ?)', [sale_id, paymentAmount, today(), note || 'Payment update']);
+  await runQuery(
+    'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
+    [sale_id, paymentAmount, payDate, payMode, note || 'Payment update']
+  );
   await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale_id]);
-  await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${paymentAmount}, remaining ${newPending}`);
+  await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${paymentAmount} on ${payDate} via ${payMode}, remaining ${newPending}`);
   res.json({ success: true, pending_amount: newPending });
+});
+
+app.get('/api/cash-customer', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = scopeShopId(req) || (req.user?.shop_id ? Number(req.user.shop_id) : 1);
+    let cashCustomer = await getRecord(
+      "SELECT * FROM customers WHERE shop_id = ? AND (name ILIKE '%Cash Customer%' OR mobile = '9999999999' OR mobile = '0000000000') ORDER BY id ASC LIMIT 1",
+      [shopId]
+    );
+    if (!cashCustomer) {
+      const ins = await runQuery(
+        "INSERT INTO customers (shop_id, name, mobile, address, notes, opening_balance) VALUES (?, 'Cash Customer', '9999999999', 'Walk-in / Cash', 'Default Cash Customer', 0.00)",
+        [shopId]
+      );
+      cashCustomer = await getRecord('SELECT * FROM customers WHERE id = ?', [ins.id]);
+    }
+    res.json({ success: true, customer: cashCustomer });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to fetch default cash customer.' });
+  }
 });
 
 app.post('/api/audit', authenticateToken, async (req, res) => {

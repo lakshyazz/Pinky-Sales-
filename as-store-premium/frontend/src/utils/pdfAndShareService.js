@@ -85,7 +85,12 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   const custName = customer?.customer_name || customer?.name || sale?.customer_name || 'Walk-in Customer';
   const custMobile = customer?.mobile || sale?.mobile || '';
   const custAddress = customer?.address || sale?.address || '';
-  const customerDetails = [custMobile, custAddress].filter(Boolean).join(' · ');
+  const custGstin = customer?.gstin || sale?.gstin || sale?.customer_gstin || '';
+  const customerDetails = [
+    custMobile ? `Phone: ${custMobile}` : '',
+    custAddress,
+    custGstin ? `GSTIN: ${custGstin}` : ''
+  ].filter(Boolean).join(' · ');
 
   const invoiceNo = sale?.invoice_number || `INV-${String(sale?.id || 1).padStart(6, '0')}`;
   const invoiceDate = formatDMY(sale?.invoice_date || sale?.sale_date || new Date().toISOString());
@@ -285,7 +290,22 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   }
   rightRows.push({ label: 'Grand Total', amount: formatMoney(grandTotal), bold: true });
   rightRows.push({ label: 'Amount Paid', amount: formatMoney(paidAmount), bold: false });
-  rightRows.push({ label: 'Balance Due', amount: formatMoney(balanceDue), bold: true, color: balanceDue > 0 ? [225, 29, 72] : [15, 118, 110] });
+  if (balanceDue <= 0) {
+    rightRows.push({ label: 'Payment Status', amount: 'PAID IN FULL', bold: true, color: [22, 101, 52] });
+    const latestPayment = Array.isArray(sale?.payments) && sale.payments.length > 0
+      ? sale.payments[sale.payments.length - 1]
+      : null;
+    if (latestPayment && latestPayment.payment_date) {
+      rightRows.push({
+        label: 'Paid On',
+        amount: `${formatDMY(latestPayment.payment_date)} (${String(latestPayment.payment_mode || 'Cash').toUpperCase()})`,
+        bold: false,
+        color: [22, 101, 52]
+      });
+    }
+  } else {
+    rightRows.push({ label: 'Balance Due', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
+  }
 
   const rightRowsHeight = rightRows.length * 6;
   const signatureHeight = 22;
@@ -366,9 +386,11 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   const custName = customer?.customer_name || customer?.name || 'Customer';
   const custMobile = customer?.mobile || '';
   const custAddress = customer?.address || '';
+  const custGstin = customer?.gstin || '';
   const openingBal = Number(customer?.opening_balance || 0);
 
-  const validInvoices = invoices.filter(inv => Number(inv.pending_amount || 0) > 0 || invoices.length <= 1);
+  // Keep ALL invoices in statement so complete history of customer purchases remains!
+  const validInvoices = Array.isArray(invoices) && invoices.length > 0 ? invoices : [];
   const totalBilled = validInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0) + openingBal;
   const totalPaid = validInvoices.reduce((s, inv) => s + Number(inv.paid_amount || 0), 0);
   const totalDue = Number(customer?.pending_amount ?? (validInvoices.reduce((s, inv) => s + Number(inv.pending_amount || 0), 0) + openingBal));
@@ -423,11 +445,11 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
-  doc.text('Customer Address', 13, 47);
+  doc.text(custGstin ? 'GSTIN' : 'Customer Address', 13, 47);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(17, 17, 17);
   doc.text(':', 44, 47);
-  doc.text(custAddress || 'Local Customer', 47, 47);
+  doc.text(custGstin || custAddress || 'Local Customer', 47, 47);
 
   // Right Side Meta
   doc.setFont('helvetica', 'normal');
@@ -440,7 +462,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
-  doc.text('Open Invoices', 108, 42);
+  doc.text('Total Purchases', 108, 42);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(17, 17, 17);
   doc.text(':', 142, 42);
@@ -455,7 +477,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(17, 17, 17);
-  doc.text('Outstanding Statement Summary', 13, 56.3);
+  doc.text('Customer Purchase & Balance Summary', 13, 56.3);
   doc.line(10, 58, 200, 58);
 
   // 3 Metric Blocks (58 to 72mm)
@@ -463,7 +485,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(71, 85, 105);
   doc.text('TOTAL INVOICED', 20, 63);
-  doc.text('TOTAL PAID', 85, 63);
+  doc.text('TOTAL PAID / REPAID', 85, 63);
   doc.text('TOTAL OUTSTANDING DUE', 145, 63);
 
   doc.setFontSize(10);
@@ -472,7 +494,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.text(`Rs. ${formatMoney(totalBilled)}`, 20, 69);
   doc.setTextColor(15, 118, 110);
   doc.text(`Rs. ${formatMoney(totalPaid)}`, 85, 69);
-  doc.setTextColor(225, 29, 72);
+  doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
   doc.text(`Rs. ${formatMoney(totalDue)}`, 145, 69);
 
   doc.line(10, 72, 200, 72);
@@ -487,6 +509,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
     const invTotal = Number(inv.total_amount || 0);
     const invPaid = Number(inv.paid_amount || 0);
     const invPending = Number(inv.pending_amount || 0);
+    const isPaid = invPending <= 0;
 
     return [
       idx + 1,
@@ -496,7 +519,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
       `${itemsCount} items`,
       formatMoney(invTotal),
       formatMoney(invPaid),
-      formatMoney(invPending),
+      isPaid ? '0 (PAID)' : formatMoney(invPending),
     ];
   });
 
@@ -543,18 +566,84 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
       4: { cellWidth: 22, halign: 'center' },
       5: { cellWidth: 28, halign: 'right' },
       6: { cellWidth: 26, halign: 'right' },
-      7: { cellWidth: 30, halign: 'right', fontStyle: 'bold', textColor: [225, 29, 72] },
+      7: { cellWidth: 30, halign: 'right', fontStyle: 'bold' },
     },
   });
 
-  const finalY = (doc.lastAutoTable?.finalY || 150) + 8;
+  // Extract all repayment events across invoices to display exact repayment dates
+  const allPayments = validInvoices.flatMap((inv) => {
+    const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
+    const pms = Array.isArray(inv.payments) ? inv.payments : [];
+    return pms.map((pm) => ({
+      date: pm.payment_date || inv.invoice_date || inv.sale_date,
+      invoiceNo,
+      mode: pm.payment_mode || 'Cash',
+      note: pm.note || 'Repayment received',
+      amount: Number(pm.amount || 0),
+    }));
+  }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  let currentY = (doc.lastAutoTable?.finalY || 150) + 6;
+
+  if (allPayments.length > 0 && currentY < 230) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9);
+    doc.setTextColor(15, 118, 110);
+    doc.text('Repayments & Collections Received', 13, currentY);
+    currentY += 2;
+
+    const paymentRows = allPayments.map((p, pIdx) => [
+      pIdx + 1,
+      formatDMY(p.date),
+      p.invoiceNo,
+      String(p.mode).toUpperCase(),
+      p.note,
+      `Rs. ${formatMoney(p.amount)}`
+    ]);
+
+    autoTable(doc, {
+      startY: currentY,
+      margin: { left: 10, right: 10 },
+      head: [['#', 'Payment Date', 'Invoice Ref', 'Mode', 'Particulars / Note', 'Amount Paid']],
+      body: paymentRows,
+      theme: 'plain',
+      headStyles: {
+        fillColor: [240, 253, 244],
+        textColor: [22, 101, 52],
+        fontSize: 8,
+        fontStyle: 'bold',
+        lineWidth: 0.2,
+        lineColor: [187, 247, 208],
+        cellPadding: 1.8,
+      },
+      bodyStyles: {
+        textColor: [17, 17, 17],
+        fontSize: 7.5,
+        lineWidth: 0.2,
+        lineColor: [226, 232, 240],
+        cellPadding: 1.8,
+      },
+      columnStyles: {
+        0: { cellWidth: 10, halign: 'center' },
+        1: { cellWidth: 26 },
+        2: { cellWidth: 26, fontStyle: 'bold' },
+        3: { cellWidth: 22 },
+        4: { cellWidth: 'auto' },
+        5: { cellWidth: 30, halign: 'right', fontStyle: 'bold', textColor: [22, 101, 52] },
+      },
+    });
+
+    currentY = (doc.lastAutoTable?.finalY || currentY) + 6;
+  }
+
+  const finalY = Math.min(currentY, 260);
   doc.setFontSize(8);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
-  doc.text('This is an official computer-generated statement of pending customer receivables.', 13, finalY);
-  doc.text('Please verify and process prompt payment via cash or UPI.', 13, finalY + 5);
+  doc.text('This is an official computer-generated statement of customer purchases and repayments.', 13, finalY);
+  doc.text('Please verify all entries. Thank you for your business.', 13, finalY + 4);
 
-  const sigY = Math.min(finalY + 25, 275);
+  const sigY = Math.min(finalY + 16, 275);
   doc.setDrawColor(153, 153, 153);
   doc.setLineWidth(0.25);
   doc.line(135, sigY, 195, sigY);
@@ -576,6 +665,7 @@ export const generateLedgerPDFDoc = (customer = {}, invoices = [], payments = []
   const shopName = String(shop?.name || 'PINKY SALES').toUpperCase();
   const custName = customer?.customer_name || customer?.name || 'Customer';
   const custMobile = customer?.mobile || 'N/A';
+  const custGstin = customer?.gstin || '';
 
   // Ledger Title
   doc.setFillColor(13, 148, 136);
@@ -589,30 +679,41 @@ export const generateLedgerPDFDoc = (customer = {}, invoices = [], payments = []
 
   doc.setTextColor(51, 65, 85);
   doc.setFontSize(9.5);
-  doc.text(`Customer Account: ${custName} | Phone: ${custMobile}`, 14, 28);
-  doc.text(`Ledger Period: All active open balances as of ${new Date().toLocaleDateString('en-GB')}`, 14, 33);
+  doc.text(`Customer Account: ${custName} | Phone: ${custMobile}${custGstin ? ` | GSTIN: ${custGstin}` : ''}`, 14, 28);
+  doc.text(`Ledger Period: All active purchases and repayments as of ${new Date().toLocaleDateString('en-GB')}`, 14, 33);
 
   // Build Chronological Transactions list
   const transactions = [];
   invoices.forEach(inv => {
+    const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
+    const invDate = inv.invoice_date || inv.sale_date || '2026-08-27';
     transactions.push({
-      date: inv.invoice_date || inv.sale_date || '2026-08-27',
-      particulars: `Invoice ${inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`} (${inv.items?.length || 1} items)`,
+      date: invDate,
+      particulars: `Purchase: ${invNo} (${inv.items?.length || 1} items)`,
       debit: Number(inv.total_amount || 0),
       credit: 0,
     });
     if (Number(inv.applied_credit_amount || 0) > 0) {
       transactions.push({
-        date: inv.invoice_date || inv.sale_date || '2026-08-27',
-        particulars: `Credit Note applied on ${inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`}`,
+        date: invDate,
+        particulars: `Credit Note applied on ${invNo}`,
         debit: 0,
         credit: Number(inv.applied_credit_amount || 0),
       });
     }
-    if (Number(inv.paid_amount || 0) > 0) {
+    if (Array.isArray(inv.payments) && inv.payments.length > 0) {
+      inv.payments.forEach(p => {
+        transactions.push({
+          date: p.payment_date || invDate,
+          particulars: `Repayment via ${p.payment_mode || 'Cash'}${p.note ? ` (${p.note})` : ''} on ${invNo}`,
+          debit: 0,
+          credit: Number(p.amount || 0),
+        });
+      });
+    } else if (Number(inv.paid_amount || 0) > 0) {
       transactions.push({
-        date: inv.invoice_date || inv.sale_date || '2026-08-27',
-        particulars: `Initial payment on ${inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`}`,
+        date: invDate,
+        particulars: `Repayment on ${invNo}`,
         debit: 0,
         credit: Number(inv.paid_amount || 0),
       });

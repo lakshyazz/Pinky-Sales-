@@ -173,6 +173,7 @@ const currency = (value) => {
   }
   return `\u20b9${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 };
+const today = () => new Date().toISOString().slice(0, 10);
 const compactModelName = (value) => {
   const name = String(value || 'Unnamed product').trim();
   if (name.length <= 60) return name;
@@ -720,7 +721,7 @@ const initialForms = {
     image_url: '', image_urls: [],
   },
   stock: { product_id: '', quantity: '', colour: '', supplier_id: '' },
-  customer: { name: '', mobile: '', address: '', notes: '' },
+  customer: { name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' },
   sale: {
     product_id: '',
     customer_id: '',
@@ -1161,13 +1162,43 @@ function SalesCreationWorkspace({
                 <Users size={14} className="text-teal-600" />
                 Customer &amp; Account
               </span>
-              <button
-                type="button"
-                onClick={() => setShowQuickAddCustomerModal(true)}
-                className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer hover:underline"
-              >
-                <Plus size={13} /> Add New Customer
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    let cashCust = (data.customers || []).find((c) => 
+                      c.name?.toLowerCase().includes('cash customer') || c.mobile === '9999999999' || c.mobile === '0000000000'
+                    );
+                    if (!cashCust && authedFetch) {
+                      try {
+                        const res = await authedFetch('/cash-customer');
+                        if (res?.customer) cashCust = res.customer;
+                      } catch (err) {}
+                    }
+                    if (cashCust) {
+                      setForms((prev) => ({
+                        ...prev,
+                        sale: {
+                          ...prev.sale,
+                          customer_id: String(cashCust.id),
+                          payment_mode: 'cash'
+                        }
+                      }));
+                    }
+                  }}
+                  className="text-[11px] font-bold px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 flex items-center gap-1 cursor-pointer transition-colors shadow-2xs"
+                  title="Select default Walk-in Cash Customer"
+                >
+                  ⚡ Walk-in Cash Customer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowQuickAddCustomerModal(true)}
+                  className="text-[11px] font-bold text-teal-600 hover:text-teal-700 flex items-center gap-1 cursor-pointer hover:underline"
+                >
+                  <Plus size={13} /> Add New Customer
+                </button>
+              </div>
             </div>
             <SearchableCombobox
               value={forms.sale.customer_id}
@@ -2068,7 +2099,7 @@ function App() {
   const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
   const [showQuickAddCustomerModal, setShowQuickAddCustomerModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', notes: '' });
+  const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
   const [savingQuickCustomer, setSavingQuickCustomer] = useState(false);
   const [salesReturnModalOpen, setSalesReturnModalOpen] = useState(false);
   const [salesReturnTargetCustomer, setSalesReturnTargetCustomer] = useState(null);
@@ -2115,7 +2146,7 @@ function App() {
             Number(c.id) === Number(editingCustomer.id) ? { ...c, ...updated, ...quickCustomerForm } : c
           ),
         }));
-        setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+        setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
         setEditingCustomer(null);
         setShowQuickAddCustomerModal(false);
         showToast('Customer updated successfully');
@@ -2132,7 +2163,7 @@ function App() {
           setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: String(newId) } }));
         }
         setCustomerPager((prev) => ({ ...prev, total: (prev.total || 0) + 1 }));
-        setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+        setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
         setEditingCustomer(null);
         setShowQuickAddCustomerModal(false);
         showToast('Customer created successfully');
@@ -2276,7 +2307,7 @@ function App() {
   const [expandedSaleId, setExpandedSaleId] = useState(null);
   const [selectedPaymentCustomer, setSelectedPaymentCustomer] = useState(null);
   const [paymentModalTarget, setPaymentModalTarget] = useState(null);
-  const [paymentModalForm, setPaymentModalForm] = useState({ amount: '', mode: 'cash', reference_no: '', note: '' });
+  const [paymentModalForm, setPaymentModalForm] = useState({ amount: '', mode: 'cash', reference_no: '', note: '', date: today() });
   const [pendingStatusFilter, setPendingStatusFilter] = useState('all');
   const [openShareDropdownId, setOpenShareDropdownId] = useState(null);
   const [shareModalTarget, setShareModalTarget] = useState(null);
@@ -2285,6 +2316,7 @@ function App() {
   const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
   const [openingBalanceInput, setOpeningBalanceInput] = useState('');
   const [savingOpeningBalance, setSavingOpeningBalance] = useState(false);
+  const [customerDrawerTab, setCustomerDrawerTab] = useState('all');
 
   const handleSaveOpeningBalance = async () => {
     if (!selectedPaymentCustomer) return;
@@ -4689,6 +4721,7 @@ function App() {
       const payload = {
         amount: numericAmount,
         payment_mode: paymentModalForm.mode || 'cash',
+        payment_date: paymentModalForm.date || today(),
         note: [
           paymentModalForm.note?.trim(),
           paymentModalForm.reference_no ? `Ref: ${paymentModalForm.reference_no.trim()}` : ''
@@ -4709,7 +4742,7 @@ function App() {
 
       showToast(`Payment of ${currency(numericAmount)} recorded successfully!`);
       setPaymentModalTarget(null);
-      setPaymentModalForm({ amount: '', mode: 'cash', reference_no: '', note: '' });
+      setPaymentModalForm({ amount: '', mode: 'cash', reference_no: '', note: '', date: today() });
       await Promise.all([
         loadTab('payments', shopId),
         loadTab('sales', shopId),
@@ -5285,7 +5318,12 @@ function App() {
       .filter(Boolean)
       .map((line) => `<div>${safe(line)}</div>`)
       .join('');
-    const customerDetails = [sale.mobile, sale.address].filter(Boolean).map(safe).join(' &middot; ');
+    const custGstin = sale.gstin || sale.customer_gstin || '';
+    const customerDetails = [
+      sale.mobile ? `Phone: ${safe(sale.mobile)}` : '',
+      sale.address ? safe(sale.address) : '',
+      custGstin ? `<strong>GSTIN:</strong> ${safe(custGstin)}` : ''
+    ].filter(Boolean).join(' &middot; ');
     const allExpenses = (sale.expenses && Array.isArray(sale.expenses) ? sale.expenses : []).concat(
       invoiceItems.flatMap(it => (Array.isArray(it.expenses) ? it.expenses : []))
     ).filter((exp, idx, self) => exp && exp.amount > 0 && self.findIndex(o => o.id === exp.id && o.expense_name === exp.expense_name) === idx);
@@ -5462,7 +5500,17 @@ function App() {
                 ` : ''}
                 <div class="total-line grand"><span>Grand Total</span><span>Rs.${formatAmount(grandTotal)}</span></div>
                 <div class="total-line grand"><span>Amount Paid</span><span>Rs.${formatAmount(paidAmount)}</span></div>
-                <div class="total-line grand" style="color: ${balanceDue > 0 ? '#b91c1c' : '#047857'};"><span>Balance Due</span><span>Rs.${formatAmount(balanceDue)}</span></div>
+                ${balanceDue <= 0 ? `
+                  <div class="total-line grand" style="color: #047857;"><span>Payment Status</span><span>✓ PAID IN FULL</span></div>
+                  ${Array.isArray(sale.payments) && sale.payments.length > 0 ? `
+                    <div class="total-line" style="color: #047857; font-size: 11px;">
+                      <span>Paid on ${formatDate(sale.payments[sale.payments.length - 1].payment_date)}</span>
+                      <span>via ${(sale.payments[sale.payments.length - 1].payment_mode || 'Cash').toUpperCase()}</span>
+                    </div>
+                  ` : ''}
+                ` : `
+                  <div class="total-line grand" style="color: #b91c1c;"><span>Balance Due</span><span>Rs.${formatAmount(balanceDue)}</span></div>
+                `}
                 <div class="signature">Authorized Signature</div>
               </div>
             </div>
@@ -6516,8 +6564,43 @@ function App() {
                 <FormPanel title="Add customer" action="Add customer" onSubmit={() => post('/customers', 'customer', 'Customer added')} disabled={saving || needsSpecificShop}>
                   <Input label="Name" className="md:col-span-1" value={forms.customer.name} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, name: v } })} />
                   <Input label="Mobile" className="md:col-span-1" value={forms.customer.mobile} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, mobile: v } })} />
-                  <Input label="Address" className="md:col-span-2" value={forms.customer.address} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, address: v } })} />
-                  <Input label="Notes" className="md:col-span-4" value={forms.customer.notes} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, notes: v } })} />
+                  <Input label="Address" className="md:col-span-1" value={forms.customer.address} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, address: v } })} />
+                  <Input label="GSTIN (Optional)" className="md:col-span-1" placeholder="e.g. 24AAAAA0000A1Z5" value={forms.customer.gstin || ''} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, gstin: v.toUpperCase() } })} />
+                  <div className="md:col-span-4 flex flex-col gap-1.5">
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Customer Type</label>
+                    <div className="flex items-center gap-3">
+                      <label className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-bold cursor-pointer transition-all ${
+                        forms.customer.customer_type === 'retailer' || !forms.customer.customer_type
+                          ? 'bg-teal-50 border-teal-500 text-teal-800 shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="customer_type_main"
+                          value="retailer"
+                          checked={forms.customer.customer_type === 'retailer' || !forms.customer.customer_type}
+                          onChange={(e) => setForms({ ...forms, customer: { ...forms.customer, customer_type: e.target.value } })}
+                          className="accent-teal-600"
+                        />
+                        <span>Retailer</span>
+                      </label>
+                      <label className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-xs font-bold cursor-pointer transition-all ${
+                        forms.customer.customer_type === 'wholesaler'
+                          ? 'bg-indigo-50 border-indigo-500 text-indigo-800 shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="customer_type_main"
+                          value="wholesaler"
+                          checked={forms.customer.customer_type === 'wholesaler'}
+                          onChange={(e) => setForms({ ...forms, customer: { ...forms.customer, customer_type: e.target.value } })}
+                          className="accent-indigo-600"
+                        />
+                        <span>Wholesaler</span>
+                      </label>
+                    </div>
+                  </div>
                 </FormPanel>
                 <div className="panel p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs mb-4">
                   <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Record customer purchase</h2>
@@ -6573,7 +6656,7 @@ function App() {
                     type="button"
                     onClick={() => {
                       setEditingCustomer(null);
-                      setQuickCustomerForm({ name: '', mobile: '', address: '', notes: '' });
+                      setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
                       setShowQuickAddCustomerModal(true);
                     }}
                     className="px-3.5 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs bg-teal-600 hover:bg-teal-700 text-white border-teal-600"
@@ -6581,73 +6664,164 @@ function App() {
                     <Plus size={15} /> Add Customer
                   </button>
                 </div>
-                <CardGrid items={data.customers} render={(customer) => {
-                  const allCustomerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id));
-                  const customerSales = allCustomerSales.slice(0, 3);
-                  const lastPurchase = allCustomerSales[0]?.sale_date ? String(allCustomerSales[0].sale_date).slice(0, 10) : 'No purchases';
-                  return (
-                    <>
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="card-icon-wrapper">
-                          <Contact size={18} />
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors cursor-pointer border border-transparent hover:border-teal-200"
-                            title="Edit Customer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingCustomer(customer);
-                              setQuickCustomerForm({
-                                name: customer.name || '',
-                                mobile: customer.mobile || '',
-                                address: customer.address || '',
-                                notes: customer.notes || '',
-                              });
-                              setShowQuickAddCustomerModal(true);
-                            }}
-                          >
-                            <Edit3 size={15} />
-                          </button>
-                          <button
-                            type="button"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer border border-transparent hover:border-rose-200"
-                            title="Delete Customer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteCustomer(customer);
-                            }}
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                      </div>
-                      <h3>{customer.name}</h3>
-                      <p>{customer.mobile}</p>
-                      <div className="customer-card-metrics">
-                        <span><small>Pending</small><b>{currency(customer.pending)}</b></span>
-                        <span><small>Last purchase</small><b>{lastPurchase}</b></span>
-                        <span><small>Total purchases</small><b>{allCustomerSales.length}</b></span>
-                      </div>
-                      <div className="metrics"><span>{customer.address || 'No address'}</span><span className={`status-badge ${Number(customer.pending) > 0 ? 'pending' : 'paid'}`}>{currency(customer.pending)}</span></div>
-                      <div className="mini-list">
-                        {customerSales.map((sale) => (
-                          <div key={sale.id}>
-                            <span title={sale.product_name}>{productName(sale)} x {sale.quantity}</span>
-                            <strong>{currency(sale.pending_amount)}</strong>
-                          </div>
-                        ))}
-                        {!customerSales.length && <small>No purchases yet</small>}
-                      </div>
-                      {customerSales.length > 0 && (
-                        <button className="soft" type="button" onClick={() => printCustomerInvoicePDF({ ...customer, customer_id: customer.id, shop_id: shopId })}>
-                          <ReceiptText size={16} /> Complete invoice
-                        </button>
-                      )}
-                    </>
-                  );
-                }} />
+                {/* Customer List as Rows / Table */}
+                <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50/80 border-b border-slate-200 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                          <th className="py-3.5 px-4 w-12 text-center">#</th>
+                          <th className="py-3.5 px-4">Customer Name</th>
+                          <th className="py-3.5 px-4">Mobile</th>
+                          <th className="py-3.5 px-4">Address / Area</th>
+                          <th className="py-3.5 px-4">GSTIN</th>
+                          <th className="py-3.5 px-4 text-center">Purchases</th>
+                          <th className="py-3.5 px-4 text-right">Pending Due</th>
+                          <th className="py-3.5 px-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {data.customers.length === 0 ? (
+                          <tr>
+                            <td colSpan="8" className="py-8 text-center text-slate-400 font-medium">
+                              No customers found.
+                            </td>
+                          </tr>
+                        ) : (
+                          data.customers.map((customer, idx) => {
+                            const allCustomerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id));
+                            const isCash = customer.name?.toLowerCase().includes('cash customer') || customer.mobile === '9999999999' || customer.mobile === '0000000000';
+                            const pendingVal = Number(customer.pending || 0);
+                            const isWholesaler = String(customer.customer_type || '').toLowerCase() === 'wholesaler';
+
+                            return (
+                              <tr key={customer.id} className="hover:bg-slate-50/80 transition-colors group">
+                                <td className="py-3.5 px-4 text-center font-bold text-slate-400">
+                                  {idx + 1}
+                                </td>
+                                <td className="py-3.5 px-4 font-bold text-slate-900">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className={`w-8 h-8 rounded-xl font-black text-xs flex items-center justify-center border shrink-0 ${
+                                      isWholesaler 
+                                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200' 
+                                        : 'bg-teal-50 text-teal-700 border-teal-100'
+                                    }`}>
+                                      {customer.name?.charAt(0)?.toUpperCase() || 'C'}
+                                    </div>
+                                    <div>
+                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                        <span className="font-bold text-slate-900 text-[13px]">{customer.name}</span>
+                                        {isCash ? (
+                                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                            Default Cash
+                                          </span>
+                                        ) : (
+                                          <span className={`inline-flex items-center px-1.5 py-0.2 rounded text-[9.5px] font-bold uppercase tracking-wider ${
+                                            isWholesaler
+                                              ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                              : 'bg-teal-50 text-teal-700 border border-teal-200'
+                                          }`}>
+                                            {isWholesaler ? 'Wholesaler' : 'Retailer'}
+                                          </span>
+                                        )}
+                                      </div>
+                                      {customer.shop_name && (
+                                        <span className="text-[10.5px] text-slate-400 block font-normal">{customer.shop_name}</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="py-3.5 px-4 font-medium text-slate-700">
+                                  {customer.mobile || <span className="text-slate-400">-</span>}
+                                </td>
+                                <td className="py-3.5 px-4 text-slate-600 max-w-[180px] truncate" title={customer.address || ''}>
+                                  {customer.address || <span className="text-slate-400">-</span>}
+                                </td>
+                                <td className="py-3.5 px-4">
+                                  {customer.gstin ? (
+                                    <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 tracking-wider">
+                                      {customer.gstin}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 text-[11px]">-</span>
+                                  )}
+                                </td>
+                                <td className="py-3.5 px-4 text-center">
+                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                                    {allCustomerSales.length} {allCustomerSales.length === 1 ? 'purchase' : 'purchases'}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  <strong className={`text-sm font-black ${pendingVal > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                    {currency(pendingVal)}
+                                  </strong>
+                                </td>
+                                <td className="py-3.5 px-4 text-right">
+                                  <div className="flex items-center justify-end gap-1.5">
+                                    {/* View Detail Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const custRecord = {
+                                          ...customer,
+                                          customer_id: customer.id,
+                                          customer_name: customer.name,
+                                          items: allCustomerSales,
+                                          pending_amount: pendingVal,
+                                          total_amount: allCustomerSales.reduce((s, a) => s + Number(a.total_amount || 0), 0),
+                                          paid_amount: allCustomerSales.reduce((s, a) => s + Number(a.paid_amount || 0), 0),
+                                        };
+                                        setSelectedPaymentCustomer(custRecord);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-colors cursor-pointer shadow-2xs"
+                                      title="View Complete Customer Details & Purchases"
+                                    >
+                                      <Eye size={13} /> View Detail
+                                    </button>
+
+                                    {/* Edit Customer */}
+                                    <button
+                                      type="button"
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-teal-600 hover:bg-teal-50 transition-colors cursor-pointer border border-transparent hover:border-teal-200"
+                                      title="Edit Customer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setEditingCustomer(customer);
+                                        setQuickCustomerForm({
+                                          name: customer.name || '',
+                                          mobile: customer.mobile || '',
+                                          address: customer.address || '',
+                                          gstin: customer.gstin || '',
+                                          customer_type: customer.customer_type || 'retailer',
+                                        });
+                                        setShowQuickAddCustomerModal(true);
+                                      }}
+                                    >
+                                      <Edit3 size={14} />
+                                    </button>
+
+                                    {/* Delete Customer */}
+                                    <button
+                                      type="button"
+                                      className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer border border-transparent hover:border-rose-200"
+                                      title="Delete Customer"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleDeleteCustomer(customer);
+                                      }}
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
                 <Pagination
                   meta={customerPager}
                   loading={pageLoading.customers}
@@ -7456,32 +7630,70 @@ function App() {
                           </div>
                         </div>
 
-                        {/* Invoices List */}
+                        {/* Invoices List with Complete Purchase & Payment Retention */}
                         {(() => {
-                          const unpaidInvoices = (selectedPaymentCustomer.items || [selectedPaymentCustomer]).filter(sale => Number(sale.pending_amount || 0) > 0);
+                          const allCustomerInvoices = selectedPaymentCustomer.items || [selectedPaymentCustomer];
+                          const unpaidInvoices = allCustomerInvoices.filter(sale => Number(sale.pending_amount || 0) > 0);
+                          const paidInvoices = allCustomerInvoices.filter(sale => Number(sale.pending_amount || 0) <= 0);
+
+                          const displayedInvoices = customerDrawerTab === 'pending'
+                            ? unpaidInvoices
+                            : (customerDrawerTab === 'paid' ? paidInvoices : allCustomerInvoices);
 
                           return (
                             <div>
-                              <div className="flex items-center justify-between mb-2">
+                              <div className="flex items-center justify-between mb-2.5">
                                 <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                                  Unpaid Invoices ({unpaidInvoices.length})
+                                  Purchase & Payment History ({allCustomerInvoices.length})
                                 </h4>
                                 <button
                                   type="button"
                                   onClick={() => printCustomerInvoicePDF(selectedPaymentCustomer)}
-                                  className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1"
+                                  className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer"
                                 >
                                   <ReceiptText size={13} /> Complete Statement
                                 </button>
                               </div>
 
-                              {unpaidInvoices.length === 0 ? (
+                              {/* Tab Filter: All / Pending / Paid */}
+                              <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl mb-3">
+                                <button
+                                  type="button"
+                                  onClick={() => setCustomerDrawerTab('all')}
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                                    customerDrawerTab === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                                  }`}
+                                >
+                                  All ({allCustomerInvoices.length})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setCustomerDrawerTab('pending')}
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                                    customerDrawerTab === 'pending' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                                  }`}
+                                >
+                                  Pending ({unpaidInvoices.length})
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setCustomerDrawerTab('paid')}
+                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                                    customerDrawerTab === 'paid' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                                  }`}
+                                >
+                                  Paid in Full ({paidInvoices.length})
+                                </button>
+                              </div>
+
+                              {displayedInvoices.length === 0 ? (
                                 <div className="p-4 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
-                                  All invoices are fully paid!
+                                  {customerDrawerTab === 'pending' ? 'No pending invoices for this customer.' : 'No invoices in this category.'}
                                 </div>
                               ) : (
                                 <div className="space-y-2.5">
-                                  {unpaidInvoices.map((sale) => {
+                                  {displayedInvoices.map((sale) => {
+                                    const isPaid = Number(sale.pending_amount || 0) <= 0;
                                     const saleDueInfo = getDueDateInfo(sale.due_date);
                                     const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
                                     
@@ -7493,18 +7705,32 @@ function App() {
                                               {invNumber}
                                             </span>
                                             <span className="text-[11px] text-slate-500 ml-2">
-                                              {formatDateDMY(sale.sale_date || sale.invoice_date)}
+                                              Bought on {formatDateDMY(sale.sale_date || sale.invoice_date)}
                                             </span>
                                           </div>
-                                          <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
-                                            {saleDueInfo.label}
-                                          </span>
+                                          {isPaid ? (
+                                            <span className="px-2 py-0.5 rounded-full text-[10.5px] border bg-emerald-50 text-emerald-800 border-emerald-200 font-bold">
+                                              ✓ Paid in Full
+                                            </span>
+                                          ) : (
+                                            <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
+                                              {saleDueInfo.label}
+                                            </span>
+                                          )}
                                         </div>
 
                                         <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
                                           <div>
-                                            <span className="text-slate-500 text-[11px]">Pending: </span>
-                                            <strong className="font-bold text-slate-900">{currency(sale.pending_amount)}</strong>
+                                            {isPaid ? (
+                                              <span className="text-emerald-700 font-bold text-[11.5px]">
+                                                Paid in Full
+                                              </span>
+                                            ) : (
+                                              <>
+                                                <span className="text-slate-500 text-[11px]">Pending: </span>
+                                                <strong className="font-bold text-rose-600">{currency(sale.pending_amount)}</strong>
+                                              </>
+                                            )}
                                             <span className="text-slate-400 text-[10.5px] ml-1.5">(Total: {currency(sale.total_amount)})</span>
                                           </div>
 
@@ -7552,6 +7778,23 @@ function App() {
                                             )}
                                           </div>
                                         </div>
+
+                                        {/* Payments / Repayments history on this invoice */}
+                                        {Array.isArray(sale.payments) && sale.payments.length > 0 && (
+                                          <div className="bg-emerald-50/60 p-2 rounded-lg border border-emerald-100 text-[11px] text-emerald-900 space-y-1">
+                                            <span className="font-bold block text-[10px] uppercase tracking-wider text-emerald-700">
+                                              Repayment Details:
+                                            </span>
+                                            {sale.payments.map((pm, pidx) => (
+                                              <div key={pm.id || pidx} className="flex items-center justify-between">
+                                                <span>
+                                                  Repaid on <strong>{formatDateDMY(pm.payment_date)}</strong> via <strong className="capitalize">{pm.payment_mode || 'Cash'}</strong>{pm.note ? ` (${pm.note})` : ''}
+                                                </span>
+                                                <strong className="font-bold text-emerald-800">{currency(pm.amount)}</strong>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
 
                                         {/* Multi-product line items in this invoice */}
                                         {(() => {
@@ -7753,8 +7996,21 @@ function App() {
                           </div>
                         </div>
 
-                        {/* Payment Mode & Reference No */}
+                        {/* Payment Date, Mode & Reference No */}
                         <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-bold text-slate-700 mb-1">
+                              Payment Date <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="date"
+                              required
+                              className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                              value={paymentModalForm.date || today()}
+                              onChange={(e) => setPaymentModalForm({ ...paymentModalForm, date: e.target.value })}
+                            />
+                          </div>
+
                           <div>
                             <label className="block text-xs font-bold text-slate-700 mb-1">Payment Mode</label>
                             <select
@@ -7768,17 +8024,17 @@ function App() {
                               <option value="cheque">Cheque</option>
                             </select>
                           </div>
+                        </div>
 
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1">Reference No</label>
-                            <input
-                              type="text"
-                              placeholder="e.g. UPI Ref / Txn ID"
-                              className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
-                              value={paymentModalForm.reference_no}
-                              onChange={(e) => setPaymentModalForm({ ...paymentModalForm, reference_no: e.target.value })}
-                            />
-                          </div>
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1">Reference No (Optional)</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. UPI Ref / Txn ID"
+                            className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                            value={paymentModalForm.reference_no}
+                            onChange={(e) => setPaymentModalForm({ ...paymentModalForm, reference_no: e.target.value })}
+                          />
                         </div>
 
                         {/* Notes */}
@@ -8475,14 +8731,49 @@ function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Notes</label>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">GSTIN (GST Number - Optional)</label>
                     <input
                       type="text"
-                      placeholder="Optional notes"
-                      value={quickCustomerForm.notes}
-                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, notes: e.target.value })}
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all"
+                      placeholder="e.g. 24AAAAA0000A1Z5"
+                      value={quickCustomerForm.gstin || ''}
+                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, gstin: e.target.value.toUpperCase() })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all uppercase tracking-wider font-mono text-xs"
                     />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1.5">Customer Type</label>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <label className={`flex items-center justify-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer transition-all ${
+                        quickCustomerForm.customer_type === 'retailer' || !quickCustomerForm.customer_type
+                          ? 'bg-teal-50 border-teal-500 text-teal-800 shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="customer_type_modal"
+                          value="retailer"
+                          checked={quickCustomerForm.customer_type === 'retailer' || !quickCustomerForm.customer_type}
+                          onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, customer_type: e.target.value })}
+                          className="accent-teal-600"
+                        />
+                        <span>Retailer</span>
+                      </label>
+                      <label className={`flex items-center justify-center gap-2 px-3 py-2 rounded-xl border text-xs font-bold cursor-pointer transition-all ${
+                        quickCustomerForm.customer_type === 'wholesaler'
+                          ? 'bg-indigo-50 border-indigo-500 text-indigo-800 shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="customer_type_modal"
+                          value="wholesaler"
+                          checked={quickCustomerForm.customer_type === 'wholesaler'}
+                          onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, customer_type: e.target.value })}
+                          className="accent-indigo-600"
+                        />
+                        <span>Wholesaler</span>
+                      </label>
+                    </div>
                   </div>
 
                   <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
