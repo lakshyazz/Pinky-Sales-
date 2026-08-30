@@ -2612,6 +2612,17 @@ function App() {
     prevActiveRef.current = active;
   }, [active]);
 
+  // Disable mouse wheel scrolling on number inputs across the entire application
+  useEffect(() => {
+    const handleWheel = () => {
+      if (document.activeElement && document.activeElement.type === 'number') {
+        document.activeElement.blur();
+      }
+    };
+    window.addEventListener('wheel', handleWheel, { passive: true });
+    return () => window.removeEventListener('wheel', handleWheel);
+  }, []);
+
   // Global search keyboard shortcut (Ctrl+K, Cmd+K, Ctrl+/, Alt+K)
   useEffect(() => {
     const handleGlobalKeyDown = (e) => {
@@ -2619,7 +2630,7 @@ function App() {
         e.preventDefault();
         setGlobalSearchFocused(true);
         hydrateGlobalSearch();
-        const searchInput = document.querySelector('.global-search input') || document.querySelector('input[placeholder*="Search"]') || document.querySelector('input[type="search"]');
+        const searchInput = document.getElementById('dashboard-global-search') || document.querySelector('.global-search input') || document.querySelector('input[placeholder*="Search"]') || document.querySelector('input[type="search"]');
         if (searchInput) {
           searchInput.focus();
           if (typeof searchInput.select === 'function') searchInput.select();
@@ -5682,57 +5693,45 @@ function App() {
 
   const matchesProductSearch = (product, searchQuery) => {
     if (!searchQuery || !searchQuery.trim()) return true;
-    const rawQuery = searchQuery.trim().toLowerCase();
-    const normalizedQuery = normalizeSearchString(searchQuery);
 
-    // 1. Text match (Name, Short Name, Brand, Manufacturer, Category, Compatible Models, Description, Colours)
-    const productTextData = [
+    // Split query into lowercase individual search terms
+    const tokens = searchQuery.toLowerCase().trim().split(/\s+/).filter(Boolean);
+
+    // Build a searchable string combining all attributes
+    const searchableHaystack = [
       product.name,
       product.short_name,
       product.product_name,
       product.model,
+      product.title,
       product.brand,
+      product.brand_name,
       product.company_brand_name,
-      product.manufacturing_brand_name,
+      product.mfg_brand,
       product.mfg_brand_name,
       product.manufacturing_brand,
+      product.manufacturing_brand_name,
       product.manufacturer,
       product.category,
       product.part_category,
+      product.sub_category,
+      product.quality,
       product.quality_variant,
+      product.display_type,
       product.compatible_models,
       product.full_model_list,
       product.description,
-      Array.isArray(product.colours) ? product.colours.join(' ') : product.colours,
+      Array.isArray(product.colours) ? product.colours.join(' ') : (product.colours || ''),
+      String(product.cost_price || product.cost || product.purchase_price || product.avg_cost_price || ''),
+      String(product.wholesale_price || product.wholesale || ''),
+      String(product.sale_price || product.price || product.retail_price || product.official_price || '')
     ]
       .filter(Boolean)
-      .join(' ');
+      .join(' ')
+      .toLowerCase();
 
-    const textMatches =
-      productTextData.toLowerCase().includes(rawQuery) ||
-      (normalizedQuery.length > 0 && normalizeSearchString(productTextData).includes(normalizedQuery));
-
-    // 2. Exact or partial price match across all tiers
-    const priceValues = [
-      product.retail_price,
-      product.wholesale_price,
-      product.purchase_price,
-      product.sale_price,
-      product.official_price,
-      product.avg_cost_price,
-      product.price,
-    ]
-      .filter((p) => p !== undefined && p !== null && p !== '')
-      .map((p) => String(Number(p)));
-
-    const priceMatches = priceValues.some(
-      (priceStr) =>
-        priceStr === rawQuery ||
-        priceStr.startsWith(rawQuery) ||
-        priceStr.includes(rawQuery)
-    );
-
-    return textMatches || priceMatches;
+    // Match if EVERY typed token is present in the haystack
+    return tokens.every((token) => searchableHaystack.includes(token));
   };
 
   const modelItems = role === 'customer' 

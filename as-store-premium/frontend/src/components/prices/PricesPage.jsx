@@ -121,58 +121,45 @@ export default function PricesPage({
     const query = String(search || '').trim();
     if (!query) return consolidated;
 
-    const rawQuery = query.toLowerCase();
-    const normalizedQuery = normalizeString(query);
+    // Split query into lowercase individual search terms
+    const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
 
     return consolidated.filter((product) => {
-      // 1. Text match (Name, Brand, Manufacturer, Category, Compatible Models, Description, Colours)
-      const productTextData = [
+      // Build a searchable string combining all attributes
+      const searchableHaystack = [
         product.name,
         product.short_name,
         product.product_name,
         product.model,
+        product.title,
         product.brand,
+        product.brand_name,
         product.company_brand_name,
-        product.manufacturing_brand_name,
+        product.mfg_brand,
         product.mfg_brand_name,
         product.manufacturing_brand,
+        product.manufacturing_brand_name,
         product.manufacturer,
         product.category,
         product.part_category,
+        product.sub_category,
+        product.quality,
         product.quality_variant,
+        product.display_type,
         product.compatible_models,
         product.full_model_list,
         product.description,
-        Array.isArray(product.colours) ? product.colours.join(' ') : product.colours,
+        Array.isArray(product.colours) ? product.colours.join(' ') : (product.colours || ''),
+        String(product.cost_price || product.cost || product.purchase_price || product.avg_cost_price || ''),
+        String(product.wholesale_price || product.wholesale || ''),
+        String(product.sale_price || product.price || product.retail_price || product.official_price || '')
       ]
         .filter(Boolean)
-        .join(' ');
+        .join(' ')
+        .toLowerCase();
 
-      const textMatches =
-        productTextData.toLowerCase().includes(rawQuery) ||
-        (normalizedQuery.length > 0 && normalizeString(productTextData).includes(normalizedQuery));
-
-      // 2. Exact or partial price match across all tiers
-      const priceValues = [
-        product.retail_price,
-        product.wholesale_price,
-        product.purchase_price,
-        product.sale_price,
-        product.official_price,
-        product.avg_cost_price,
-        product.price,
-      ]
-        .filter((p) => p !== undefined && p !== null && p !== '')
-        .map((p) => String(Number(p)));
-
-      const priceMatches = priceValues.some(
-        (priceStr) =>
-          priceStr === rawQuery ||
-          priceStr.startsWith(rawQuery) ||
-          priceStr.includes(rawQuery)
-      );
-
-      return textMatches || priceMatches;
+      // Match if EVERY typed token is present in the haystack
+      return tokens.every((token) => searchableHaystack.includes(token));
     });
   }, [items, stock, search]);
 

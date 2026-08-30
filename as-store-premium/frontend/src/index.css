@@ -58,6 +58,18 @@ html {
   box-sizing: border-box;
 }
 
+/* Disable spin buttons on number inputs and prevent mouse wheel incrementing */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 body {
   margin: 0;
   min-width: 320px;
