@@ -766,8 +766,8 @@ const initialForms = {
     paid_amount: '',
     payment_mode: 'cash',
     invoice_date: getTodayIso(),
-    payment_terms_days: 15,
-    due_date: calculateDueDate(getTodayIso(), 15),
+    payment_terms_days: 7,
+    due_date: calculateDueDate(getTodayIso(), 7),
     notes: '',
     previous_balance: 0,
     applied_credit_amount: 0,
@@ -1571,40 +1571,54 @@ function SalesCreationWorkspace({
                   <span className="text-[10px] text-slate-400 font-medium">Days</span>
                 </div>
                 <div className="space-y-1">
-                  <input
-                    type="number"
-                    min="0"
-                    value={forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15}
-                    onChange={(e) => updateSalePaymentTerms(e.target.value)}
-                    placeholder="15"
-                    className="w-full h-10 px-3 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
-                  />
-                  <div className="flex items-center gap-1">
-                    {PAYMENT_TERMS_PRESETS.map((preset) => {
-                      const isSelected = Number(forms.sale.payment_terms_days) === preset;
-                      return (
-                        <button
-                          key={preset}
-                          type="button"
-                          onClick={() => updateSalePaymentTerms(preset)}
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold cursor-pointer border transition-all ${
-                            isSelected
-                              ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
-                              : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
-                          }`}
-                        >
-                          {preset}d
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {netBalance <= 0 || (netPayable > 0 && paidAmount >= netPayable) ? (
+                    <div className="w-full h-10 px-3 flex items-center bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800">
+                      0 Days (Fully Paid / Advance)
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type="number"
+                        min="0"
+                        value={forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7}
+                        onChange={(e) => updateSalePaymentTerms(e.target.value)}
+                        placeholder="7"
+                        className="w-full h-10 px-3 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
+                      />
+                      <div className="flex items-center gap-1">
+                        {PAYMENT_TERMS_PRESETS.map((preset) => {
+                          const isSelected = Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7) === preset;
+                          return (
+                            <button
+                              key={preset}
+                              type="button"
+                              onClick={() => updateSalePaymentTerms(preset)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-extrabold cursor-pointer border transition-all ${
+                                isSelected
+                                  ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                                  : 'bg-slate-50 hover:bg-slate-100 text-slate-600 border-slate-200'
+                              }`}
+                            >
+                              {preset}d
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Due Date (Auto Calculated)</label>
-                <div className="w-full h-10 px-3 flex items-center bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700">
-                  {forms.sale.due_date ? formatDateDMY(forms.sale.due_date) : 'Auto calculated'}
+                <div className={`w-full h-10 px-3 flex items-center border rounded-xl text-xs font-bold ${
+                  netBalance <= 0 || (netPayable > 0 && paidAmount >= netPayable)
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                    : 'bg-slate-50 border-slate-200 text-slate-700'
+                }`}>
+                  {netBalance <= 0 || (netPayable > 0 && paidAmount >= netPayable)
+                    ? 'N/A (Fully Paid / Settled)'
+                    : (forms.sale.due_date ? formatDateDMY(forms.sale.due_date) : 'Auto calculated')}
                 </div>
               </div>
             </div>
@@ -4236,7 +4250,7 @@ function App() {
   };
 
   const updateSaleInvoiceDate = (invoiceDate) => {
-    const terms = forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15;
+    const terms = forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7;
     const newDueDate = calculateDueDate(invoiceDate, terms);
     setForms((prev) => ({
       ...prev,
@@ -4268,25 +4282,14 @@ function App() {
       title: `Delete sale for ${productName(sale)}?`,
       message: `This will delete the sale, remove its payments, and restore ${sale.quantity || 1} item(s) to stock. You can then create the corrected sale.`,
       confirmLabel: 'Delete sale',
+      intent: 'danger',
       onConfirm: async () => {
         try {
-          setSaving(true);
           await authedFetch(`/sales/${sale.id}`, { method: 'DELETE' });
           showToast('Sale deleted and stock restored');
-          await Promise.all([
-            loadTab('sales', shopId),
-            loadTab('payments', shopId),
-            loadTab('dashboard', shopId),
-            loadTab('stock', shopId),
-            loadTab('prices', shopId),
-            loadTab('models', shopId),
-            loadTab('customers', shopId),
-            loadCore(),
-          ]);
+          await loadTab(active, shopId);
         } catch (error) {
-          showToast(error.message || 'Unable to delete this sale');
-        } finally {
-          setSaving(false);
+          showToast(error.message || 'Unable to delete sale', 'error');
         }
       },
     });
@@ -4345,7 +4348,7 @@ function App() {
           apply_advance: forms.sale.apply_advance !== false,
           previous_balance: Number(forms.sale.previous_balance || 0),
           invoice_date: forms.sale.invoice_date || getTodayIso(),
-          payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15),
+          payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7),
           due_date: dueDate,
           notes,
           payment_mode: forms.sale.payment_mode || 'cash',
@@ -4383,8 +4386,8 @@ function App() {
         sale: {
           ...initialForms.sale,
           invoice_date: getTodayIso(),
-          payment_terms_days: 15,
-          due_date: calculateDueDate(getTodayIso(), 15),
+          payment_terms_days: 7,
+          due_date: calculateDueDate(getTodayIso(), 7),
           previous_balance: 0,
           applied_credit_amount: 0,
           items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],

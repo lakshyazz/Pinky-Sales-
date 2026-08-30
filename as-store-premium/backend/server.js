@@ -4168,13 +4168,13 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       // If previous balance was negative or closing balance is negative, update customer advance pool
       if (closingBalance < 0) {
         await tx.runQuery(
-          'UPDATE customers SET advance_balance = ?, pending = 0 WHERE id = ?',
+          'UPDATE customers SET advance_balance = ? WHERE id = ?',
           [Math.abs(closingBalance), customer_id]
         );
       } else if (previousBalance < 0 && closingBalance >= 0) {
         await tx.runQuery(
-          'UPDATE customers SET pending = ?, advance_balance = 0 WHERE id = ?',
-          [closingBalance, customer_id]
+          'UPDATE customers SET advance_balance = 0 WHERE id = ?',
+          [customer_id]
         );
       }
 
@@ -4183,6 +4183,11 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       const thisSalePaid = money(totalAdvanceApplied + directPaidForThisSale);
       const thisSalePending = Math.max(0, money(saleNetInvoiceTotal - thisSalePaid));
       const excessPaid = Math.max(0, money(numPaid - netAfterAdvance));
+
+      // If fully paid or covered by advance, payment terms is 0 days and due date is invoice date
+      const isPaidInFull = thisSalePending <= 0;
+      const finalPaymentTerms = isPaidInFull ? 0 : paymentTermsDays;
+      const finalDueDate = isPaidInFull ? invoiceDateStr : calculatedDueDate;
 
       // Prepare colours summary
       const primaryProduct = preparedItems[0];
@@ -4213,10 +4218,10 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           saleNetInvoiceTotal, 
           thisSalePaid, 
           thisSalePending, 
-          calculatedDueDate, 
+          finalDueDate, 
           today(),
           invoiceDateStr,
-          paymentTermsDays,
+          finalPaymentTerms,
           productsTotal,
           extraExpensesTotal,
           notes || '', 
