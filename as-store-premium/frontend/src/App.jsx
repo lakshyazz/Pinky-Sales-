@@ -5368,10 +5368,12 @@ function App() {
     const invoiceNo = sale.invoice_number || `INV-${String(sale.id || 1).padStart(6, '0')}`;
     
     const shopName = 'PINKYSALES';
-    const shopLines = [sale.shop_address, sale.shop_area, sale.shop_phone ? `Phone: ${sale.shop_phone}` : '', 'India']
-      .filter(Boolean)
-      .map((line) => `<div>${safe(line)}</div>`)
-      .join('');
+    const shopAddress = 'C-314, Pratik Arcade, Surat';
+    const shopPhone = '+91 90995 69700';
+    const shopLines = `
+      <div>${safe(shopAddress)}</div>
+      <div>Gujarat, India &middot; Phone: ${safe(shopPhone)}</div>
+    `;
     const custGstin = sale.gstin || sale.customer_gstin || '';
     const customerDetails = [
       sale.mobile ? `Phone: ${safe(sale.mobile)}` : '',

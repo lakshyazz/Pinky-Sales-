@@ -78,9 +78,8 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   });
 
   const shopName = 'PINKYSALES';
-  const shopAddress = shop?.address || sale?.shop_address || 'Main Market, Wholesale Complex';
-  const shopArea = shop?.area || sale?.shop_area || 'Ahmedabad, Gujarat';
-  const shopPhone = shop?.phone || sale?.shop_phone || '9826060394';
+  const shopAddress = 'C-314, Pratik Arcade, Surat';
+  const shopPhone = '+91 90995 69700';
   
   const custName = customer?.customer_name || customer?.name || sale?.customer_name || 'Walk-in Customer';
   const custMobile = customer?.mobile || sale?.mobile || '';
@@ -116,8 +115,8 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   doc.setFontSize(8);
   doc.setTextColor(51, 65, 85);
   doc.text(shopAddress, 13, 21.5);
-  doc.text(`${shopArea}${shopPhone ? ` · Phone: ${shopPhone}` : ''}`, 13, 25.5);
-  doc.text('India', 13, 29.5);
+  doc.text(`Phone: ${shopPhone}`, 13, 25.5);
+  doc.text('Gujarat, India', 13, 29.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(22);
@@ -396,9 +395,8 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   });
 
   const shopName = 'PINKYSALES';
-  const shopAddress = shop?.address || 'Main Market, Wholesale Complex';
-  const shopArea = shop?.area || 'Ahmedabad, Gujarat';
-  const shopPhone = shop?.phone || '9826060394';
+  const shopAddress = 'C-314, Pratik Arcade, Surat';
+  const shopPhone = '+91 90995 69700';
 
   const custName = customer?.customer_name || customer?.name || 'Customer';
   const custMobile = customer?.mobile || '';
@@ -427,8 +425,8 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.setFontSize(8);
   doc.setTextColor(51, 65, 85);
   doc.text(shopAddress, 13, 21.5);
-  doc.text(`${shopArea}${shopPhone ? ` · Phone: ${shopPhone}` : ''}`, 13, 25.5);
-  doc.text('India', 13, 29.5);
+  doc.text(`Phone: ${shopPhone}`, 13, 25.5);
+  doc.text('Gujarat, India', 13, 29.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(20);
@@ -693,11 +691,12 @@ export const generateLedgerPDFDoc = (customer = {}, invoices = [], payments = []
   doc.text(shopName, 14, 13);
   doc.setFontSize(10);
   doc.text('CUSTOMER TRANSACTION LEDGER', 196, 13, { align: 'right' });
-
   doc.setTextColor(51, 65, 85);
+  doc.setFontSize(8.5);
+  doc.text(`Store: C-314, Pratik Arcade, Surat, Gujarat | Phone: +91 90995 69700`, 14, 25);
   doc.setFontSize(9.5);
-  doc.text(`Customer Account: ${custName} | Phone: ${custMobile}${custGstin ? ` | GSTIN: ${custGstin}` : ''}`, 14, 28);
-  doc.text(`Ledger Period: All active purchases and repayments as of ${new Date().toLocaleDateString('en-GB')}`, 14, 33);
+  doc.text(`Customer Account: ${custName} | Phone: ${custMobile}${custGstin ? ` | GSTIN: ${custGstin}` : ''}`, 14, 30);
+  doc.text(`Ledger Period: All active purchases and repayments as of ${new Date().toLocaleDateString('en-GB')}`, 14, 35);
 
   // Build Chronological Transactions list
   const transactions = [];
@@ -798,6 +797,7 @@ export const formatWhatsAppMessage = ({
 }) => {
   const custName = customer?.customer_name || customer?.name || sale?.customer_name || 'Valued Customer';
   const shopName = 'PINKYSALES';
+  const shopContact = `📍 *C-314, Pratik Arcade, Surat*\n📞 *+91 90995 69700*`;
 
   // Determine if this is a single-invoice target
   const isSingleInvoice = Boolean(
@@ -871,9 +871,9 @@ export const formatWhatsAppMessage = ({
     }
 
     if (type === 'invoice_reminder_only' || type === 'reminder_only') {
-      msg += `\nKindly arrange payment for any pending dues at your earliest convenience.\n\nThank you for your business!`;
+      msg += `\nKindly arrange payment for any pending dues at your earliest convenience.\n\nThank you for your business!\n*${shopName}*\n${shopContact}`;
     } else {
-      msg += `\nPlease find your official Tax Invoice PDF attached.\n\nThank you for your business!`;
+      msg += `\nPlease find your official Tax Invoice PDF attached.\n\nThank you for your business!\n*${shopName}*\n${shopContact}`;
     }
 
     return msg;
@@ -894,7 +894,7 @@ export const formatWhatsAppMessage = ({
   const totalPaid = Number(customer?.paid_amount ?? rawPendingInvoices.reduce((s, i) => s + Number(i.paid_amount || 0), 0));
 
   if (type === 'ledger') {
-    return `Dear ${custName},\n\nGreetings from *${shopName}*.\n\nPlease find your official *Customer Transaction Ledger* attached.\n\n📊 *Total Outstanding Balance:* Rs. ${formatMoney(totalPending)}\n\nPlease review the attached running statement for full debit and credit history.\n\nThank you!`;
+    return `Dear ${custName},\n\nGreetings from *${shopName}*.\n\nPlease find your official *Customer Transaction Ledger* attached.\n\n📊 *Total Outstanding Balance:* Rs. ${formatMoney(totalPending)}\n\nPlease review the attached running statement for full debit and credit history.\n\nThank you!\n*${shopName}*\n${shopContact}`;
   }
 
   // Default: Pending Summary / Account Statement
@@ -918,9 +918,9 @@ export const formatWhatsAppMessage = ({
   msg += `⚠️ *Total Outstanding Due:* *Rs. ${formatMoney(totalPending)}*\n\n`;
 
   if (type === 'pending_reminder_only' || type === 'reminder_only') {
-    msg += `Kindly arrange for the settlement of dues at your earliest convenience.\n\nThank you for your cooperation!`;
+    msg += `Kindly arrange for the settlement of dues at your earliest convenience.\n\nThank you for your cooperation!\n*${shopName}*\n${shopContact}`;
   } else {
-    msg += `Please find your consolidated Statement attached. Kindly arrange for the settlement of dues.\n\nThank you for your cooperation!`;
+    msg += `Please find your consolidated Statement attached. Kindly arrange for the settlement of dues.\n\nThank you for your cooperation!\n*${shopName}*\n${shopContact}`;
   }
 
   return msg;
