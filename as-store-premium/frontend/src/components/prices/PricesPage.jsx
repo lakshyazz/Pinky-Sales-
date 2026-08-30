@@ -224,6 +224,50 @@ export default function PricesPage({
     }
   };
 
+  // Cost Price Privacy Visibility (Super Admin)
+  const [globalShowCost, setGlobalShowCost] = useState(true);
+  const [revealedCostIds, setRevealedCostIds] = useState(() => new Set());
+  const [hiddenCostIds, setHiddenCostIds] = useState(() => new Set());
+
+  const isCostRevealed = (productId) => {
+    const pId = String(productId || '');
+    if (globalShowCost) {
+      return !hiddenCostIds.has(pId);
+    }
+    return revealedCostIds.has(pId);
+  };
+
+  const toggleCostVisibility = (productId) => {
+    const pId = String(productId || '');
+    if (globalShowCost) {
+      setHiddenCostIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(pId)) next.delete(pId);
+        else next.add(pId);
+        return next;
+      });
+    } else {
+      setRevealedCostIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(pId)) next.delete(pId);
+        else next.add(pId);
+        return next;
+      });
+    }
+  };
+
+  const toggleGlobalCost = () => {
+    if (globalShowCost) {
+      setGlobalShowCost(false);
+      setRevealedCostIds(new Set());
+      setHiddenCostIds(new Set());
+    } else {
+      setGlobalShowCost(true);
+      setRevealedCostIds(new Set());
+      setHiddenCostIds(new Set());
+    }
+  };
+
   const selectedShopRecord = useMemo(() => {
     return shops.find((s) => String(s.id) === String(shopId));
   }, [shops, shopId]);
@@ -342,7 +386,27 @@ export default function PricesPage({
           )}
         </div>
 
-        <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+        <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end flex-wrap">
+          {hasPurchase && (
+            <button
+              type="button"
+              onClick={toggleGlobalCost}
+              className={`flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                globalShowCost
+                  ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-rose-700'
+              }`}
+              title={globalShowCost ? "Hide all cost prices" : "Reveal all cost prices"}
+            >
+              {globalShowCost ? (
+                <EyeOff className="w-3.5 h-3.5 text-rose-600" />
+              ) : (
+                <Eye className="w-3.5 h-3.5 text-slate-500" />
+              )}
+              <span>{globalShowCost ? 'Hide Cost' : 'Show Cost'}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={toggleGlobalWholesale}
@@ -395,6 +459,7 @@ export default function PricesPage({
               const isLowStock = stockQtyVal > 0 && stockQtyVal <= 4;
               const displayCostPrice = product.avg_cost_price ?? product.purchase_price;
               const associatedSups = product.associated_suppliers || [];
+              const isCostShown = isCostRevealed(product.id);
               const isWholesaleShown = isWholesaleRevealed(product.id);
 
               return (
@@ -520,7 +585,32 @@ export default function PricesPage({
                             <span className="text-[8px] font-bold text-rose-600 bg-rose-50 px-1 py-0.2 rounded">Avg</span>
                           )}
                         </div>
-                        <span className="text-sm font-semibold text-rose-700 mt-0.5">{priceLabel(displayCostPrice)}</span>
+                        {isCostShown ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleCostVisibility(product.id);
+                            }}
+                            title="Click to hide cost price"
+                            className="text-sm font-semibold text-rose-700 hover:text-rose-800 mt-0.5 inline-flex items-center justify-end gap-1 transition-colors cursor-pointer"
+                          >
+                            <span>{priceLabel(displayCostPrice)}</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleCostVisibility(product.id);
+                            }}
+                            title="Click to reveal cost price"
+                            className="text-xs font-mono font-bold text-slate-400 hover:text-rose-600 hover:bg-rose-50/60 px-1.5 py-0.5 rounded transition-all cursor-pointer inline-flex items-center justify-end gap-1 self-end mt-0.5"
+                          >
+                            <span className="tracking-widest">••••••</span>
+                            <Eye className="w-3 h-3 opacity-60" />
+                          </button>
+                        )}
                       </div>
                     )}
 
