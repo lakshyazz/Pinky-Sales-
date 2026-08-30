@@ -289,6 +289,8 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   }
   if (prevBalance > 0) {
     rightRows.push({ label: '+ PREVIOUS BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
+  } else if (prevBalance < 0) {
+    rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
   }
   if (appliedCredit > 0) {
     rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
@@ -313,6 +315,22 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
     }
   } else {
     rightRows.push({ label: 'Balance Due', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
+  }
+
+  // Calculate customer's remaining available advance / credit balance
+  const remainingCredit = (sale?.closing_balance !== undefined && Number(sale.closing_balance) < 0)
+    ? Math.abs(Number(sale.closing_balance))
+    : (prevBalance < 0 && (productsSubtotal + courier + prevBalance) < 0
+      ? Math.abs(productsSubtotal + courier + prevBalance)
+      : Number(customer?.advance_balance ?? sale?.customer_advance_balance ?? sale?.advance_balance ?? 0));
+
+  if (remainingCredit > 0) {
+    rightRows.push({
+      label: 'Available Credit',
+      amount: `${formatMoney(remainingCredit)} Cr`,
+      bold: true,
+      color: [15, 118, 110]
+    });
   }
 
   const rightRowsHeight = rightRows.length * 6;
@@ -345,12 +363,11 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   doc.setTextColor(71, 85, 105);
   doc.text('Goods once sold will not be returned or exchanged.', 13, startY + 38);
 
-  const availAdv = Number(customer?.advance_balance ?? sale?.advance_balance ?? 0);
-  if (availAdv > 0) {
+  if (remainingCredit > 0) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(15, 118, 110);
-    doc.text(`Available Store Credit / Advance: Rs. ${formatMoney(availAdv)}`, 13, startY + 44);
+    doc.text(`Available Store Credit / Advance: Rs. ${formatMoney(remainingCredit)}`, 13, startY + 44);
   }
 
   // Right Content: Totals Table
@@ -865,9 +882,15 @@ export const formatWhatsAppMessage = ({
     } else {
       msg += `✨ *Payment Status:* Fully Paid\n`;
     }
-    const availCredit = Number(customer?.advance_balance ?? inv?.advance_balance ?? 0);
-    if (availCredit > 0) {
-      msg += `💼 *Available Store Credit / Advance:* Rs. ${formatMoney(availCredit)}\n`;
+    const prevBal = Number(inv?.previous_balance ?? inv?.old_balance ?? 0);
+    const remainingCredit = (inv.closing_balance !== undefined && Number(inv.closing_balance) < 0)
+      ? Math.abs(Number(inv.closing_balance))
+      : (prevBal < 0 && (Number(inv.products_total || 0) + prevBal) < 0
+        ? Math.abs(Number(inv.products_total || 0) + prevBal)
+        : Number(customer?.advance_balance ?? inv?.customer_advance_balance ?? inv?.advance_balance ?? 0));
+
+    if (remainingCredit > 0) {
+      msg += `💼 *Available Store Credit / Advance:* Rs. ${formatMoney(remainingCredit)}\n`;
     }
 
     if (type === 'invoice_reminder_only' || type === 'reminder_only') {

@@ -5525,6 +5525,13 @@ function App() {
     const balanceDue = Math.max(0, grandTotal - paidAmount);
     const quantity = expandedItems.reduce((sum, item) => sum + Number(item.quantity ?? item.qty ?? 1), 0);
 
+    // Calculate customer's remaining available advance / store credit balance
+    const remainingCredit = (sale.closing_balance !== undefined && Number(sale.closing_balance) < 0)
+      ? Math.abs(Number(sale.closing_balance))
+      : (prevBalance < 0 && (productsSubtotal + courier + prevBalance) < 0
+        ? Math.abs(productsSubtotal + courier + prevBalance)
+        : Number(sale.customer_advance_balance ?? sale.advance_balance ?? 0));
+
     printWindow.document.open();
     printWindow.document.write(`
       <!doctype html>
@@ -5602,6 +5609,11 @@ function App() {
                 <div class="words">Total In Words<strong>Indian Rupee ${toWords(grandTotal)} Only</strong></div>
                 <div class="notes-block">Notes<br/>${safe(isConsolidated ? 'This invoice includes all purchases made by this customer at this branch.' : sale.notes || 'Thanks for your business.')}</div>
                 <div class="notes-block">Terms &amp; Conditions<br/>Goods once sold will not be returned or exchanged.</div>
+                ${remainingCredit > 0 ? `
+                  <div class="notes-block" style="color: #0f766e; font-weight: 700; background: #f0fdfa; padding: 6px 8px; border-radius: 4px; border: 1px solid #99f6e4;">
+                    Available Store Credit / Advance: Rs. ${formatAmount(remainingCredit)} Cr
+                  </div>
+                ` : ''}
               </div>
               <div class="totals">
                 <div class="total-line"><span>Products Subtotal</span><span>${formatAmount(productsSubtotal)}</span></div>
@@ -5621,7 +5633,12 @@ function App() {
                     <span>+ PREVIOUS BALANCE</span>
                     <span>Rs.${formatAmount(prevBalance)}</span>
                   </div>
-                ` : ''}
+                ` : (prevBalance < 0 ? `
+                  <div class="total-line" style="color: #0f766e; font-weight: 600;">
+                    <span>- PREVIOUS ADVANCE</span>
+                    <span>-Rs.${formatAmount(Math.abs(prevBalance))}</span>
+                  </div>
+                ` : '')}
                 ${appliedCredit > 0 ? `
                   <div class="total-line" style="color: #0f766e; font-weight: 600;">
                     <span>- CREDIT NOTE</span>
@@ -5647,6 +5664,12 @@ function App() {
                 ` : `
                   <div class="total-line grand" style="color: #b91c1c;"><span>Balance Due</span><span>Rs.${formatAmount(balanceDue)}</span></div>
                 `}
+                ${remainingCredit > 0 ? `
+                  <div class="total-line grand" style="color: #0f766e; border-top: 1px dashed #0f766e; margin-top: 3px; padding-top: 3px;">
+                    <span>Available Credit</span>
+                    <span>Rs.${formatAmount(remainingCredit)} Cr</span>
+                  </div>
+                ` : ''}
                 <div class="signature">Authorized Signature</div>
               </div>
             </div>
