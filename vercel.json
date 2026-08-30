@@ -3,6 +3,11 @@
   "installCommand": "npm install && npm --prefix as-store-premium/frontend ci",
   "buildCommand": "npm --prefix as-store-premium/frontend run build",
   "outputDirectory": "as-store-premium/frontend/dist",
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "as-store-premium/backend/**"
+    }
+  },
   "cleanUrls": true,
   "headers": [
     {
