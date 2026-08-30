@@ -3151,7 +3151,7 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
     if (isShopStaffRole(req.user.role) && customer.created_by && customer.created_by !== req.user.id) {
       return res.status(403).json({ error: 'Access denied to edit this customer.' });
     }
-    const { name, mobile, address, notes, default_payment_terms_days } = req.body;
+    const { name, mobile, address, notes, default_payment_terms_days, opening_balance } = req.body;
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: 'Customer name is required.' });
     }
@@ -3163,25 +3163,28 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
     const paymentTerms = default_payment_terms_days !== undefined && !isNaN(Number(default_payment_terms_days))
       ? Number(default_payment_terms_days)
       : (customer.default_payment_terms_days || 15);
+    const cleanOpeningBalance = opening_balance !== undefined && !isNaN(Number(opening_balance))
+      ? money(Number(opening_balance))
+      : money(Number(customer.opening_balance || 0));
 
     await runQuery(
       `UPDATE customers
-       SET name = ?, mobile = ?, address = ?, notes = ?, default_payment_terms_days = ?
+       SET name = ?, mobile = ?, address = ?, notes = ?, default_payment_terms_days = ?, opening_balance = ?
        WHERE id = ?`,
-      [cleanName, cleanMobile, cleanAddress, cleanNotes, paymentTerms, customerId]
+      [cleanName, cleanMobile, cleanAddress, cleanNotes, paymentTerms, cleanOpeningBalance, customerId]
     );
 
     const updated = await getRecord(`
-      SELECT c.*, sh.name AS shop_name, COALESCE(SUM(s.pending_amount), 0) AS pending
+      SELECT c.*, sh.name AS shop_name, (COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0)) AS pending
       FROM customers c
-      LEFT JOIN sales s ON s.customer_id = c.id
+      LEFT JOIN sales s ON s.customer_id = c.id AND s.pending_amount > 0
       LEFT JOIN shops sh ON sh.id = c.shop_id
       WHERE c.id = ?
       GROUP BY c.id, sh.id
     `, [customerId]);
 
-    await audit(req, 'Updated customer', 'customer', customerId, cleanName);
-    res.json(updated || { id: customerId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes: cleanNotes });
+    await audit(req, 'Updated customer', 'customer', customerId, `${cleanName} (Opening Balance: ${cleanOpeningBalance})`);
+    res.json(updated || { id: customerId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes: cleanNotes, opening_balance: cleanOpeningBalance });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to update customer.' });
   }
@@ -3281,8 +3284,10 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
         'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
         'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
         'brand', p_item.brand,
+        'brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+        'mfg_brand', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
         'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
-        'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name),
+        'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
         'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
         'quality_variant', p_item.quality_variant,
         'model', p_item.model,
@@ -3522,8 +3527,10 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
           'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
           'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
           'brand', p_item.brand,
+          'brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+          'mfg_brand', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
           'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
-          'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name),
+          'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
           'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
           'quality_variant', p_item.quality_variant,
           'model', p_item.model,
@@ -3591,15 +3598,16 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
     if (!Number.isInteger(customerId) || customerId <= 0) {
       return res.status(400).json({ error: 'Valid customer ID is required.' });
     }
-    const customer = await getRecord('SELECT id, name, mobile, address, shop_id FROM customers WHERE id = ?', [customerId]);
+    const customer = await getRecord('SELECT id, name, mobile, address, shop_id, COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?', [customerId]);
     if (!customer) return res.status(404).json({ error: 'Customer not found.' });
 
-    // Outstanding balance across customer's open sales
+    // Outstanding balance across customer's open sales (only pending_amount > 0)
     const balanceRow = await getRecord(
       'SELECT COALESCE(SUM(pending_amount), 0) AS outstanding_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
       [customerId]
     );
-    const outstandingBalance = money(balanceRow?.outstanding_balance || 0);
+    const invoiceOutstanding = money(balanceRow?.outstanding_balance || 0);
+    const openingBalance = money(customer.opening_balance || 0);
 
     // Active credit notes with remaining balance
     const creditNotes = await allRecords(
@@ -3610,10 +3618,13 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
       [customerId]
     );
     const availableCredits = creditNotes.reduce((sum, cn) => sum + money(cn.balance_amount), 0);
+    const totalPending = Math.max(0, money((invoiceOutstanding + openingBalance) - availableCredits));
 
     res.json({
       customer,
-      outstanding_balance: outstandingBalance,
+      outstanding_balance: totalPending,
+      invoices_outstanding: invoiceOutstanding,
+      opening_balance: openingBalance,
       available_credits: money(availableCredits),
       credit_notes: creditNotes,
     });
@@ -4147,6 +4158,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       );
 
       const saleId = insertResult.id;
+      const invNumber = `INV-${String(saleId).padStart(6, '0')}`;
+      await tx.runQuery('UPDATE sales SET invoice_number = ? WHERE id = ?', [invNumber, saleId]);
 
       // 6. Record Credit Note Redemptions
       for (const r of redemptions) {
@@ -5087,6 +5100,7 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     JOIN products p ON p.id = sa.product_id
     JOIN customers c ON c.id = sa.customer_id
     JOIN shops sh ON sh.id = sa.shop_id
+    LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
     LEFT JOIN (
       SELECT si.sale_id, json_agg(json_build_object(
         'id', si.id,
@@ -5096,11 +5110,17 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
         'total_price', si.total_price,
         'price_type', si.price_type,
         'colour', si.colour,
-        'name', p_item.name,
-        'product_name', p_item.name,
-        'short_name', p_item.short_name,
-        'product_short_name', p_item.short_name,
+        'custom_product_name', si.custom_product_name,
+        'custom_brand_name', si.custom_brand_name,
+        'name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+        'product_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+        'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+        'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
         'brand', p_item.brand,
+        'brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+        'mfg_brand', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+        'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
+        'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
         'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
         'quality_variant', p_item.quality_variant,
         'model', p_item.model,
@@ -5109,6 +5129,7 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       ) ORDER BY si.id ASC) AS items
       FROM sale_items si
       JOIN products p_item ON p_item.id = si.product_id
+      LEFT JOIN manufacturing_brands mb_item ON mb_item.id = p_item.manufacturing_brand_id
       GROUP BY si.sale_id
     ) si_agg ON si_agg.sale_id = sa.id
     LEFT JOIN (
@@ -5134,11 +5155,12 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       (ARRAY_AGG(sh.phone ORDER BY ${groupOrderSql}))[1] AS shop_phone,
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
-      COALESCE(SUM(sa.pending_amount), 0) AS pending_amount,
+      COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0) AS pending_amount,
+      (ARRAY_AGG(COALESCE(c.opening_balance, 0) ORDER BY ${groupOrderSql}))[1] AS opening_balance,
       (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}))[1] AS due_date,
       JSON_AGG(JSON_BUILD_OBJECT(
         'id', sa.id,
-        'invoice_number', 'INV-' || LPAD(sa.id::TEXT, 6, '0'),
+        'invoice_number', COALESCE(sa.invoice_number, 'INV-' || LPAD(sa.id::TEXT, 6, '0')),
         'shop_id', sa.shop_id,
         'product_id', sa.product_id,
         'customer_id', sa.customer_id,
@@ -5161,8 +5183,12 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
         'product_short_name', p.short_name,
         'full_model_list', p.full_model_list,
         'brand', p.brand,
+        'brand_name', COALESCE(mb.name, p.brand),
+        'mfg_brand', COALESCE(mb.name, p.brand),
         'category', p.category,
         'description', p.description,
+        'manufacturing_brand_id', sa.manufacturing_brand_id,
+        'manufacturing_brand_name', COALESCE(mb.name, p.brand),
         'customer_name', c.name,
         'mobile', c.mobile,
         'address', c.address,
@@ -5182,6 +5208,9 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
           'short_name', p.short_name,
           'product_short_name', p.short_name,
           'brand', p.brand,
+          'brand_name', COALESCE(mb.name, p.brand),
+          'mfg_brand', COALESCE(mb.name, p.brand),
+          'manufacturing_brand_name', COALESCE(mb.name, p.brand),
           'colour', sa.colour
         ))),
         'expenses', COALESCE(se.expenses, '[]'::json)

@@ -11,7 +11,13 @@ export default function EditSaleModal({
   authedFetch,
   showToast,
   onSuccess,
-  currency = (v) => `₹${Number(v || 0).toLocaleString('en-IN')}`,
+  currency = (v) => {
+    const num = Number(v || 0);
+    if (Math.abs(num - Math.round(num)) < 0.005) {
+      return `₹${Math.round(num).toLocaleString('en-IN')}`;
+    }
+    return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  },
   formatDateDMY = (d) => d || '',
 }) {
   const [invoiceDate, setInvoiceDate] = useState(() => new Date().toISOString().slice(0, 10));

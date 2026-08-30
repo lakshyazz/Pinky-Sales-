@@ -44,6 +44,7 @@ import {
   Users,
   UploadCloud,
   Check,
+  CheckCircle2,
   Clock,
   Calendar,
   Filter,
@@ -53,9 +54,12 @@ import {
   Layers,
   RotateCcw,
   Pencil,
+  Copy,
+  Share2,
 } from 'lucide-react';
 const SalesReturnModal = React.lazy(() => import('./components/modals/SalesReturnModal'));
 const EditSaleModal = React.lazy(() => import('./components/modals/EditSaleModal'));
+const ShareInvoiceModal = React.lazy(() => import('./components/modals/ShareInvoiceModal'));
 const ProductDetailModal = React.lazy(() => import('./components/models/ProductDetailModal'));
 const ProductDetailPage = React.lazy(() => import('./components/models/ProductDetailPage'));
 import ModelsPage from './components/models/ModelsPage';
@@ -78,9 +82,11 @@ import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
 import { consolidateProductList } from './utils/productConsolidation';
 import { 
   shareToWhatsAppService, 
+  formatWhatsAppMessage,
   generateInvoicePDFDoc, 
   generateStatementPDFDoc, 
-  generateLedgerPDFDoc 
+  generateLedgerPDFDoc,
+  getBrandName
 } from './utils/pdfAndShareService';
 import { 
   exportToExcel, 
@@ -160,7 +166,13 @@ const readStoredSession = () => {
   }
 };
 
-const currency = (value) => `\u20b9${Number(value || 0).toLocaleString('en-IN')}`;
+const currency = (value) => {
+  const num = Number(value || 0);
+  if (Math.abs(num - Math.round(num)) < 0.005) {
+    return `\u20b9${Math.round(num).toLocaleString('en-IN')}`;
+  }
+  return `\u20b9${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
 const compactModelName = (value) => {
   const name = String(value || 'Unnamed product').trim();
   if (name.length <= 60) return name;
@@ -2269,6 +2281,86 @@ function App() {
   const [openShareDropdownId, setOpenShareDropdownId] = useState(null);
   const [shareModalTarget, setShareModalTarget] = useState(null);
   const [shareModalLoading, setShareModalLoading] = useState(false);
+  const [shareModalSelectedInvoiceId, setShareModalSelectedInvoiceId] = useState('all');
+  const [editingOpeningBalance, setEditingOpeningBalance] = useState(false);
+  const [openingBalanceInput, setOpeningBalanceInput] = useState('');
+  const [savingOpeningBalance, setSavingOpeningBalance] = useState(false);
+
+  const handleSaveOpeningBalance = async () => {
+    if (!selectedPaymentCustomer) return;
+    const custId = selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id;
+    if (!custId) return;
+    const newBal = Number(openingBalanceInput || 0);
+    if (isNaN(newBal) || newBal < 0) {
+      showToast('Opening balance cannot be negative', 'error');
+      return;
+    }
+    setSavingOpeningBalance(true);
+    try {
+      await authedFetch(`/customers/${custId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: selectedPaymentCustomer.customer_name || selectedPaymentCustomer.name,
+          mobile: selectedPaymentCustomer.mobile,
+          address: selectedPaymentCustomer.address,
+          opening_balance: newBal,
+        }),
+      });
+      setSelectedPaymentCustomer((prev) => {
+        if (!prev) return prev;
+        const prevBal = Number(prev.opening_balance || 0);
+        const diff = newBal - prevBal;
+        return {
+          ...prev,
+          opening_balance: newBal,
+          pending_amount: Math.max(0, Number(prev.pending_amount || 0) + diff),
+        };
+      });
+      setEditingOpeningBalance(false);
+      showToast('Opening balance updated successfully');
+      loadPendingPage();
+      loadCustomersPage();
+    } catch (err) {
+      showToast(err.message || 'Failed to update opening balance', 'error');
+    } finally {
+      setSavingOpeningBalance(false);
+    }
+  };
+
+  const openInvoiceShareModal = (sale, customer = null) => {
+    const custObj = customer || {
+      id: sale.customer_id,
+      customer_id: sale.customer_id,
+      customer_name: sale.customer_name,
+      name: sale.customer_name,
+      mobile: sale.mobile,
+      address: sale.address,
+      shop_id: sale.shop_id,
+      shop_name: sale.shop_name,
+    };
+    setShareModalTarget({
+      mode: 'single_invoice',
+      sale,
+      customer: custObj,
+      items: [sale],
+    });
+    setShareModalSelectedInvoiceId(String(sale.id));
+  };
+
+  const openPendingShareModal = (customer) => {
+    const rawInvoices = Array.isArray(customer?.items) && customer.items.length > 0
+      ? customer.items
+      : (Array.isArray(customer?.invoices) && customer.invoices.length > 0
+          ? customer.invoices
+          : [customer]);
+    setShareModalTarget({
+      mode: 'pending_customer',
+      customer,
+      sale: null,
+      items: rawInvoices,
+    });
+    setShareModalSelectedInvoiceId('all');
+  };
 
   const token = session?.token || '';
   const role = session?.role || 'customer';
@@ -5184,14 +5276,11 @@ function App() {
     const latestPurchaseDate = purchaseDates[purchaseDates.length - 1] || invoiceDateVal;
     const hasOutstandingBalance = invoiceItems.some((item) => Number(item.pending_amount || 0) > 0);
     const outstandingDueDates = invoiceItems.filter((item) => Number(item.pending_amount || 0) > 0).map((item) => item.due_date).filter(Boolean).sort();
-    const invoiceNo = isConsolidated
-      ? `C-${String(sale.shop_id || 0).padStart(3, '0')}-${String(sale.customer_id || 0).padStart(5, '0')}`
-      : `D-${String(sale.id).padStart(5, '0')}`;
-    let rawShopName = sale.shop_name || 'PINKYSALES';
-    if (!rawShopName || rawShopName.toLowerCase().includes('warehouse') || rawShopName.toLowerCase() === 'pinky sales') {
-      rawShopName = 'PINKYSALES';
-    }
-    const shopName = safe(rawShopName);
+    
+    // Single source of truth: INV-XXXXXX format across entire application
+    const invoiceNo = sale.invoice_number || `INV-${String(sale.id || 1).padStart(6, '0')}`;
+    
+    const shopName = 'PINKYSALES';
     const shopLines = [sale.shop_address, sale.shop_area, sale.shop_phone ? `Phone: ${sale.shop_phone}` : '', 'India']
       .filter(Boolean)
       .map((line) => `<div>${safe(line)}</div>`)
@@ -5205,8 +5294,9 @@ function App() {
       allExpenses.reduce((s, e) => s + Number(e.amount || 0), 0)
     ) ?? 0);
 
-    const termsLabel = sale.payment_terms_days ? `${sale.payment_terms_days} Days` : '15 Days';
-    const dueDateVal = sale.due_date || (outstandingDueDates.length ? outstandingDueDates[0] : (hasOutstandingBalance ? 'Not set' : 'Paid'));
+    const isCash = String(sale.payment_mode || '').trim().toLowerCase() === 'cash';
+    const termsLabel = isCash ? 'Terms: Cash Only' : (sale.payment_terms_days ? `${sale.payment_terms_days} Days` : '15 Days');
+    const dueDateVal = isCash ? 'Immediate / On Receipt' : (sale.due_date || (outstandingDueDates.length ? outstandingDueDates[0] : (hasOutstandingBalance ? 'Not set' : 'Paid')));
 
     const periodLabel = firstPurchaseDate === latestPurchaseDate
       ? formatDate(firstPurchaseDate)
@@ -5217,42 +5307,29 @@ function App() {
       const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? (item.total_amount && item.quantity ? Number(item.total_amount) / Number(item.quantity) : (item.amount && item.quantity ? Number(item.amount) / Number(item.quantity) : 0)));
       const qty = Number(item.quantity ?? item.qty ?? 1);
       const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
-      const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
-
-      // Priority: item-specific sale date -> parent invoice date -> fallback
-      const itemDisplayDate = item.invoice_date || item.sale_date || sale.invoice_date || sale.sale_date || invoiceDateVal;
+      const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : lineTotal;
 
       // Only show Short Name - never show concatenated compatible models
       const rawShort = item.short_name || item.product_short_name || item.product_name || item.name || '';
       const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
 
-      // Manufacturing brand - render directly without "Mfg:" prefix
-      const rawMfg = item.manufacturing_brand_name || 
-                     item.mfg_brand_name || 
-                     item.manufacturing_brand || 
-                     sale.manufacturing_brand_name || 
-                     sale.mfg_brand_name || 
-                     sale.manufacturing_brand || 
-                     '';
-      const mfgBrand = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
-
-      const companyBrand = item.brand || sale.brand || '';
-      const detailParts = [];
-      if (mfgBrand) detailParts.push(`<strong>${safe(mfgBrand)}</strong>`);
-      if (companyBrand && !shortName.toLowerCase().includes(companyBrand.toLowerCase()) && !mfgBrand.toLowerCase().includes(companyBrand.toLowerCase())) {
-        detailParts.push(safe(companyBrand));
-      }
-      if (item.description) detailParts.push(safe(item.description));
-      const productDetails = detailParts.join(' &middot; ');
+      // Item Description Formatting:
+      // Line 1: Product Name (e.g. MOTO EDGE 50)
+      // Line 2 (if present): Color Variants / Attributes (e.g. [ Black: 2, Green: 2 ])
+      // Line 3 (if present): Brand Name Only (e.g. AS CARE — strictly without Mfg. prefix)
+      const brandName = getBrandName(item, sale);
+      const colourStr = item.colour && String(item.colour).trim()
+        ? (String(item.colour).trim().startsWith('[') ? String(item.colour).trim() : `[ ${String(item.colour).trim()} ]`)
+        : '';
+      const productDetails = brandName ? `<small style="display:block; margin-top:2px; color:#475569; font-size:11px; font-weight:700;">${safe(brandName)}</small>` : '';
 
       return `
         <tr>
           <td class="number">${index + 1}</td>
-          <td class="date">${formatDate(itemDisplayDate)}</td>
           <td class="item">
             <strong style="font-size: 12.5px; color: #0f172a; display: block;">${safe(shortName)}</strong>
-            ${item.colour ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(item.colour)}</span>` : ''}
-            ${productDetails ? `<small style="display:block; margin-top:2px; color:#475569; font-size:11px;">${productDetails}</small>` : ''}
+            ${colourStr ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(colourStr)}</span>` : ''}
+            ${productDetails}
           </td>
           <td class="qty">${qty}<br/>PCS</td>
           <td class="money">${formatAmount(unitPrice)}</td>
@@ -5307,7 +5384,6 @@ function App() {
             th:last-child, td:last-child { border-right: 0; }
             th { background: #f2f2f2; text-align: left; font-weight: 700; }
             .number { width: 38px; text-align: center; }
-            .date { width: 82px; white-space: nowrap; }
             .qty { width: 82px; text-align: right; }
             .money { width: 100px; text-align: right; }
             .item { min-height: 42px; }
@@ -5349,7 +5425,7 @@ function App() {
             <div class="bill-title">Bill To</div>
             <div class="bill-to">${safe(sale.customer_name || 'Walk-in Customer')}${customerDetails ? `<small>${customerDetails}</small>` : ''}</div>
             <table>
-              <thead><tr><th class="number">#</th><th class="date">Date</th><th>Item &amp; Description</th><th class="qty">Qty</th><th class="money">Rate</th><th class="money">Amount</th></tr></thead>
+              <thead><tr><th class="number">#</th><th>Item &amp; Description</th><th class="qty">Qty</th><th class="money">Rate</th><th class="money">Amount</th></tr></thead>
               <tbody>${itemRows}</tbody>
             </table>
             <div class="summary">
@@ -5563,6 +5639,9 @@ function App() {
     for (const sale of visibleSales) {
       const key = String(sale.customer_id || sale.customer_name || 'unknown');
       if (!map.has(key)) {
+        const custObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id));
+        const openingBalance = Number(custObj?.opening_balance || 0);
+
         map.set(key, {
           customer_id: sale.customer_id,
           customer_name: sale.customer_name || 'Walk-in Customer',
@@ -5573,6 +5652,7 @@ function App() {
           total_purchase_amount: 0,
           total_paid: 0,
           total_pending: 0,
+          opening_balance: openingBalance,
           last_purchase_date: null,
           invoices: [],
         });
@@ -5581,19 +5661,24 @@ function App() {
       g.total_invoices += 1;
       g.total_purchase_amount += Number(sale.total_amount || 0);
       g.total_paid += Number(sale.paid_amount || 0);
-      g.total_pending += Number(sale.pending_amount || 0);
+      const invPending = Math.max(0, Number(sale.pending_amount || 0));
+      g.total_pending += invPending;
       const invDate = sale.invoice_date || sale.sale_date;
       if (!g.last_purchase_date || String(invDate) > String(g.last_purchase_date)) {
         g.last_purchase_date = invDate;
       }
       g.invoices.push(sale);
     }
+    // Incorporate opening balance into customer total pending
+    for (const g of map.values()) {
+      g.total_pending = Math.max(0, g.total_pending + Number(g.opening_balance || 0));
+    }
     return Array.from(map.values());
-  }, [visibleSales]);
+  }, [visibleSales, data.customers]);
 
   const pendingMetrics = useMemo(() => {
     const list = data.pending || [];
-    const totalPendingAmount = list.reduce((sum, item) => sum + Number(item.pending_amount || 0), 0);
+    const totalPendingAmount = list.reduce((sum, item) => sum + Math.max(0, Number(item.pending_amount || 0)), 0);
     const totalCustomers = list.length;
     let overdueCustomers = 0;
     let dueTodayCustomers = 0;
@@ -5603,7 +5688,9 @@ function App() {
       const info = getDueDateInfo(item.due_date);
       if (info.type === 'overdue') overdueCustomers += 1;
       if (info.type === 'today') dueTodayCustomers += 1;
-      totalPendingInvoices += (item.items?.length || 1);
+      // Invoices with Pending Amount <= 0 must not be counted in the pending invoice count
+      const activeInvs = (item.items || []).filter(inv => Number(inv.pending_amount || 0) > 0);
+      totalPendingInvoices += (activeInvs.length > 0 ? activeInvs.length : (Number(item.pending_amount || 0) > 0 ? 1 : 0));
     });
 
     return {
@@ -6701,14 +6788,33 @@ function App() {
                               </button>
 
                               {group.invoices.length > 0 && (
-                                <button 
-                                  className="px-2.5 py-2 text-xs font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                                  type="button"
-                                  title="Print Consolidated Customer Invoice"
-                                  onClick={() => printCustomerInvoicePDF(group.invoices[0])}
-                                >
-                                  <ReceiptText size={15} /> All Invoices
-                                </button>
+                                <>
+                                  <button 
+                                    className="px-2.5 py-2 text-xs font-bold bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                                    type="button"
+                                    title="Print Consolidated Customer Invoice"
+                                    onClick={() => printCustomerInvoicePDF(group.invoices[0])}
+                                  >
+                                    <ReceiptText size={15} /> All Invoices
+                                  </button>
+                                  <button 
+                                    className="px-2.5 py-2 text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                                    type="button"
+                                    title="Share Customer Statement & Invoices"
+                                    onClick={() => openPendingShareModal({
+                                      ...group,
+                                      id: group.customer_id,
+                                      customer_id: group.customer_id,
+                                      customer_name: group.customer_name,
+                                      items: group.invoices,
+                                      pending_amount: group.total_pending,
+                                      total_amount: group.total_purchase_amount,
+                                      paid_amount: group.total_paid,
+                                    })}
+                                  >
+                                    <Send size={14} /> Share
+                                  </button>
+                                </>
                               )}
                             </div>
                           </div>
@@ -6735,7 +6841,7 @@ function App() {
                                         price_type: sale.price_type || 'retail',
                                         colour: sale.colour,
                                       }];
-                                  const invNumber = `INV-${String(sale.id).padStart(6, '0')}`;
+                                  const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
                                   const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
 
                                   return (
@@ -6748,9 +6854,15 @@ function App() {
                                           <span className="text-xs font-bold text-slate-700">
                                             Date: {formatDateDMY(sale.invoice_date || sale.sale_date)}
                                           </span>
-                                          <span className="text-[11px] text-slate-400 font-medium">
-                                            · Due: {sale.due_date ? formatDateDMY(sale.due_date) : 'Not set'}
-                                          </span>
+                                          {String(sale.payment_mode || '').trim().toLowerCase() === 'cash' ? (
+                                            <span className="text-[11px] font-bold text-sky-700">
+                                              · Terms: Cash Only
+                                            </span>
+                                          ) : (
+                                            <span className="text-[11px] text-slate-400 font-medium">
+                                              · Due: {sale.due_date ? formatDateDMY(sale.due_date) : 'Not set'}
+                                            </span>
+                                          )}
                                         </div>
 
                                         <div className="flex items-center gap-2">
@@ -6767,6 +6879,15 @@ function App() {
                                             onClick={() => printTaxInvoicePDF(sale)}
                                           >
                                             <ReceiptText size={13} /> Invoice
+                                          </button>
+
+                                          <button 
+                                            className="px-2 py-1 text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                                            type="button"
+                                            title="Share this invoice via WhatsApp & PDF"
+                                            onClick={() => openInvoiceShareModal(sale, group)}
+                                          >
+                                            <Send size={12} /> Share
                                           </button>
 
                                           <button 
@@ -6805,9 +6926,14 @@ function App() {
                                         <span className="text-[10.5px] font-bold uppercase text-slate-400 block">Products</span>
                                         {saleItems.map((it, itIdx) => (
                                           <div key={it.id || itIdx} className="flex items-center justify-between text-xs text-slate-700 py-0.5">
-                                            <div className="flex items-center gap-1.5">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
                                               <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
                                               <span className="font-bold">{it.product_name || it.name || productName(it)}</span>
+                                              {getBrandName(it, sale) && (
+                                                <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                                  {getBrandName(it, sale)}
+                                                </span>
+                                              )}
                                               {it.colour && (
                                                 <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
                                                   ● {it.colour}
@@ -7160,9 +7286,9 @@ function App() {
                                     {/* WhatsApp & PDF Share Button */}
                                     <button
                                        type="button"
-                                       onClick={() => setShareModalTarget(item)}
+                                       onClick={() => openPendingShareModal(item)}
                                        className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
-                                       title="Share WhatsApp Reminder & Invoice PDF"
+                                       title="Share WhatsApp Reminder & Invoice Documents"
                                      >
                                        <Send size={12} /> Share
                                      </button>
@@ -7281,155 +7407,228 @@ function App() {
                               <strong className="text-emerald-400 font-bold">{currency(selectedPaymentCustomer.paid_amount)}</strong>
                             </div>
                           </div>
+                          <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-xs">
+                            <div>
+                              <span className="text-slate-400 block text-[10.5px]">Carry Forward (Opening) Balance</span>
+                              <strong className="text-amber-300 font-bold">
+                                {currency(selectedPaymentCustomer.opening_balance || 0)}
+                              </strong>
+                            </div>
+                            {!editingOpeningBalance ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpeningBalanceInput(String(selectedPaymentCustomer.opening_balance || 0));
+                                  setEditingOpeningBalance(true);
+                                }}
+                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                              >
+                                <Pencil size={11} /> Edit Balance
+                              </button>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  value={openingBalanceInput}
+                                  onChange={(e) => setOpeningBalanceInput(e.target.value)}
+                                  className="w-24 px-2 py-0.5 text-xs bg-slate-800 border border-slate-600 rounded text-white outline-none font-bold"
+                                  placeholder="0.00"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={savingOpeningBalance}
+                                  onClick={handleSaveOpeningBalance}
+                                  className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold disabled:opacity-50 cursor-pointer"
+                                >
+                                  {savingOpeningBalance ? 'Saving...' : 'Save'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingOpeningBalance(false)}
+                                  className="px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded text-[11px] cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
 
                         {/* Invoices List */}
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                              Unpaid Invoices ({(selectedPaymentCustomer.items || [selectedPaymentCustomer]).length})
-                            </h4>
-                            <button
-                              type="button"
-                              onClick={() => printCustomerInvoicePDF(selectedPaymentCustomer)}
-                              className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1"
-                            >
-                              <ReceiptText size={13} /> Complete Statement
-                            </button>
-                          </div>
+                        {(() => {
+                          const unpaidInvoices = (selectedPaymentCustomer.items || [selectedPaymentCustomer]).filter(sale => Number(sale.pending_amount || 0) > 0);
 
-                          <div className="space-y-2.5">
-                            {(selectedPaymentCustomer.items || [selectedPaymentCustomer]).map((sale) => {
-                              const saleDueInfo = getDueDateInfo(sale.due_date);
-                              const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
-                              
-                              return (
-                                <div key={sale.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2.5 hover:border-slate-300 transition-all">
-                                  <div className="flex items-center justify-between">
-                                    <div>
-                                      <span className="font-mono font-black text-slate-900 text-xs">
-                                        {invNumber}
-                                      </span>
-                                      <span className="text-[11px] text-slate-500 ml-2">
-                                        {formatDateDMY(sale.sale_date || sale.invoice_date)}
-                                      </span>
-                                    </div>
-                                    <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
-                                      {saleDueInfo.label}
-                                    </span>
-                                  </div>
+                          return (
+                            <div>
+                              <div className="flex items-center justify-between mb-2">
+                                <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                                  Unpaid Invoices ({unpaidInvoices.length})
+                                </h4>
+                                <button
+                                  type="button"
+                                  onClick={() => printCustomerInvoicePDF(selectedPaymentCustomer)}
+                                  className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1"
+                                >
+                                  <ReceiptText size={13} /> Complete Statement
+                                </button>
+                              </div>
 
-                                  <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
-                                    <div>
-                                      <span className="text-slate-500 text-[11px]">Pending: </span>
-                                      <strong className="font-bold text-slate-900">{currency(sale.pending_amount)}</strong>
-                                      <span className="text-slate-400 text-[10.5px] ml-1.5">(Total: {currency(sale.total_amount)})</span>
-                                    </div>
-
-                                    <div className="flex items-center gap-1.5">
-                                      <button
-                                        type="button"
-                                        onClick={() => printTaxInvoicePDF(sale)}
-                                        className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
-                                      >
-                                        <ReceiptText size={12} /> Invoice
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => openSalesReturnModal(sale)}
-                                        className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                                        title="Return items from this invoice"
-                                      >
-                                        <RotateCcw size={12} /> Return
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => openEditSaleModal(sale)}
-                                        className="px-2 py-1 bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 hover:border-sky-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                                        title="Edit invoice dates, payment terms, expenses & remarks"
-                                      >
-                                        <Pencil size={12} /> Edit
-                                      </button>
-                                      {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
-                                        <button
-                                          type="button"
-                                          onClick={() => deleteSale(sale)}
-                                          className="p-1 text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors"
-                                          title="Delete invoice and restore stock"
-                                        >
-                                          <Trash2 size={12} />
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-
-                                  {/* Multi-product line items in this invoice */}
-                                  {(() => {
-                                    const invoiceProducts = Array.isArray(sale.items) && sale.items.length > 0
-                                      ? sale.items
-                                      : [{
-                                          id: 0,
-                                          product_name: sale.product_name || productName(sale),
-                                          quantity: sale.quantity || 1,
-                                          unit_price: Number(sale.total_amount || 0) / Math.max(1, Number(sale.quantity || 1)),
-                                          total_price: sale.total_amount,
-                                          colour: sale.colour
-                                        }];
-                                    const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
-
+                              {unpaidInvoices.length === 0 ? (
+                                <div className="p-4 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
+                                  All invoices are fully paid!
+                                </div>
+                              ) : (
+                                <div className="space-y-2.5">
+                                  {unpaidInvoices.map((sale) => {
+                                    const saleDueInfo = getDueDateInfo(sale.due_date);
+                                    const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
+                                    
                                     return (
-                                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 space-y-1.5">
-                                        <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                                          <span>Invoice Items ({invoiceProducts.length})</span>
-                                          <span>Line Total</span>
+                                      <div key={sale.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2.5 hover:border-slate-300 transition-all">
+                                        <div className="flex items-center justify-between">
+                                          <div>
+                                            <span className="font-mono font-black text-slate-900 text-xs">
+                                              {invNumber}
+                                            </span>
+                                            <span className="text-[11px] text-slate-500 ml-2">
+                                              {formatDateDMY(sale.sale_date || sale.invoice_date)}
+                                            </span>
+                                          </div>
+                                          <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
+                                            {saleDueInfo.label}
+                                          </span>
                                         </div>
-                                        {invoiceProducts.map((it, itIdx) => {
-                                          const itemQty = Number(it.quantity || 1);
-                                          const itemUnit = Number(it.unit_price || 0) || (Number(it.total_price || 0) / Math.max(1, itemQty));
-                                          const itemLineTotal = Number(it.total_price || (itemUnit * itemQty));
+
+                                        <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
+                                          <div>
+                                            <span className="text-slate-500 text-[11px]">Pending: </span>
+                                            <strong className="font-bold text-slate-900">{currency(sale.pending_amount)}</strong>
+                                            <span className="text-slate-400 text-[10.5px] ml-1.5">(Total: {currency(sale.total_amount)})</span>
+                                          </div>
+
+                                          <div className="flex items-center gap-1.5">
+                                            <button
+                                              type="button"
+                                              onClick={() => printTaxInvoicePDF(sale)}
+                                              className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                                            >
+                                              <ReceiptText size={12} /> Invoice
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openInvoiceShareModal(sale, selectedPaymentCustomer)}
+                                              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                                              title="Share this invoice via WhatsApp & PDF"
+                                            >
+                                              <Send size={12} /> Share
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openSalesReturnModal(sale)}
+                                              className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                              title="Return items from this invoice"
+                                            >
+                                              <RotateCcw size={12} /> Return
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => openEditSaleModal(sale)}
+                                              className="px-2 py-1 bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 hover:border-sky-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                              title="Edit invoice dates, payment terms, expenses & remarks"
+                                            >
+                                              <Pencil size={12} /> Edit
+                                            </button>
+                                            {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
+                                              <button
+                                                type="button"
+                                                onClick={() => deleteSale(sale)}
+                                                className="p-1 text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors"
+                                                title="Delete invoice and restore stock"
+                                              >
+                                                <Trash2 size={12} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {/* Multi-product line items in this invoice */}
+                                        {(() => {
+                                          const invoiceProducts = Array.isArray(sale.items) && sale.items.length > 0
+                                            ? sale.items
+                                            : [{
+                                                id: 0,
+                                                product_name: sale.product_name || productName(sale),
+                                                quantity: sale.quantity || 1,
+                                                unit_price: Number(sale.total_amount || 0) / Math.max(1, Number(sale.quantity || 1)),
+                                                total_price: sale.total_amount,
+                                                colour: sale.colour
+                                              }];
+                                          const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
 
                                           return (
-                                            <div key={it.id || itIdx} className="flex items-center justify-between text-xs py-1 border-b border-slate-100 last:border-0">
-                                              <div>
-                                                <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                                                  <span className="w-1.5 h-1.5 rounded-full bg-teal-500 shrink-0"></span>
-                                                  <span>{it.product_name || it.name || productName(it)}</span>
-                                                  {it.colour && (
-                                                    <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
-                                                      ● {it.colour}
-                                                    </span>
-                                                  )}
-                                                </div>
-                                                <div className="text-[11px] text-slate-400 pl-3">
-                                                  Qty: {itemQty} pcs · Rate: {currency(itemUnit)}
-                                                </div>
+                                            <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 space-y-1.5">
+                                              <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                                                <span>Invoice Items ({invoiceProducts.length})</span>
+                                                <span>Line Total</span>
                                               </div>
-                                              <strong className="text-slate-900 font-bold text-xs shrink-0 ml-2">
-                                                {currency(itemLineTotal)}
-                                              </strong>
+                                              {invoiceProducts.map((it, itIdx) => {
+                                                const itemQty = Number(it.quantity || 1);
+                                                const itemUnit = Number(it.unit_price || 0) || (Number(it.total_price || 0) / Math.max(1, itemQty));
+                                                const itemLineTotal = Number(it.total_price || (itemUnit * itemQty));
+
+                                                return (
+                                                  <div key={it.id || itIdx} className="flex items-center justify-between text-xs py-1 border-b border-slate-100 last:border-0">
+                                                    <div>
+                                                      <div className="flex items-center gap-1.5 flex-wrap">
+                                                        <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
+                                                        <span className="font-bold">{it.product_name || it.name || productName(it)}</span>
+
+                                                        {getBrandName(it, sale) && (
+                                                          <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                                            {getBrandName(it, sale)}
+                                                          </span>
+                                                        )}
+                                                        {it.colour && (
+                                                          <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
+                                                            ● {it.colour}
+                                                          </span>
+                                                        )}
+                                                      </div>
+                                                      <div className="text-[11px] text-slate-400 pl-3">
+                                                        Qty: {itemQty} pcs · Rate: {currency(itemUnit)}
+                                                      </div>
+                                                    </div>
+                                                    <strong className="text-slate-900 font-bold text-xs shrink-0 ml-2">
+                                                      {currency(itemLineTotal)}
+                                                    </strong>
+                                                  </div>
+                                                );
+                                              })}
+
+                                              {expensesList.length > 0 && (
+                                                <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[11px]">
+                                                  <span className="text-[10px] font-bold text-teal-700 uppercase">Extra Expenses:</span>
+                                                  {expensesList.map((exp, expIdx) => (
+                                                    <div key={exp.id || expIdx} className="flex justify-between text-teal-800 font-medium">
+                                                      <span>+ {exp.expense_name || exp.expense_type}</span>
+                                                      <span>{currency(exp.amount)}</span>
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
                                             </div>
                                           );
-                                        })}
-
-                                        {expensesList.length > 0 && (
-                                          <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[11px]">
-                                            <span className="text-[10px] font-bold text-teal-700 uppercase">Extra Expenses:</span>
-                                            {expensesList.map((exp, expIdx) => (
-                                              <div key={exp.id || expIdx} className="flex justify-between text-teal-800 font-medium">
-                                                <span>+ {exp.expense_name || exp.expense_type}</span>
-                                                <span>{currency(exp.amount)}</span>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
+                                        })()}
                                       </div>
                                     );
-                                  })()}
+                                  })}
                                 </div>
-                              );
-                            })}
-                          </div>
-                        </div>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Drawer Sticky Footer Actions */}
@@ -7452,7 +7651,7 @@ function App() {
                         {/* Drawer Share Button */}
                         <button
                           type="button"
-                          onClick={() => setShareModalTarget(selectedPaymentCustomer)}
+                          onClick={() => openPendingShareModal(selectedPaymentCustomer)}
                           className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
                         >
                           <Send size={15} /> Share
@@ -7612,213 +7811,6 @@ function App() {
                           </button>
                         </div>
                       </form>
-                    </motion.div>
-                  </div>
-                )}
-              </AnimatePresence>
-
-              {/* 7. SHARE DOCUMENTS & WHATSAPP MODAL */}
-              <AnimatePresence>
-                {shareModalTarget && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-                    {/* Modal Backdrop */}
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      onClick={() => setShareModalTarget(null)}
-                      className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity"
-                    />
-
-                    {/* Modal Content */}
-                    <motion.div
-                      initial={{ scale: 0.95, opacity: 0, y: 10 }}
-                      animate={{ scale: 1, opacity: 1, y: 0 }}
-                      exit={{ scale: 0.95, opacity: 0, y: 10 }}
-                      className="relative bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 z-10 space-y-5"
-                    >
-                      {/* Header */}
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold shadow-2xs">
-                            <Send size={18} />
-                          </div>
-                          <div>
-                            <h3 className="text-base font-black text-slate-900">
-                              Share Documents &amp; Reminder
-                            </h3>
-                            <p className="text-xs text-slate-500 font-medium">
-                              Customer: <strong className="text-slate-800">{shareModalTarget.customer_name || shareModalTarget.name}</strong> · Pending: <strong className="text-rose-600 font-bold">{currency(shareModalTarget.pending_amount)}</strong>
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setShareModalTarget(null)}
-                          className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition-colors"
-                        >
-                          <X size={18} />
-                        </button>
-                      </div>
-
-                      {/* Action 1: Recommended Primary Button */}
-                      <button
-                        type="button"
-                        disabled={shareModalLoading}
-                        onClick={async () => {
-                          setShareModalLoading(true);
-                          try {
-                            await shareToWhatsAppService({
-                              customer: shareModalTarget,
-                              type: 'invoice_and_reminder',
-                              sale: shareModalTarget.items?.[0] || shareModalTarget,
-                              shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
-                              authedFetch,
-                              showToast,
-                            });
-                            setShareModalTarget(null);
-                          } catch (e) {
-                            showToast('Sharing error: ' + e.message);
-                          } finally {
-                            setShareModalLoading(false);
-                          }
-                        }}
-                        className="w-full p-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-2xl font-bold text-sm shadow-md transition-all flex items-center justify-between group cursor-pointer"
-                      >
-                        <div className="flex items-center gap-3 text-left">
-                          <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
-                            <Send size={16} />
-                          </div>
-                          <div>
-                            <span className="block font-black text-white">Send Invoice PDF + WhatsApp Reminder</span>
-                            <span className="text-[11px] text-emerald-100 font-normal">Auto-generates PDF, pre-fills message &amp; opens WhatsApp</span>
-                          </div>
-                        </div>
-                        <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-black uppercase tracking-wider text-white">
-                          Default
-                        </span>
-                      </button>
-
-                      {/* Secondary Document Options */}
-                      <div className="space-y-2">
-                        <span className="text-[10.5px] font-black uppercase text-slate-400 tracking-wider block">
-                          Individual Document Options
-                        </span>
-                        <div className="grid grid-cols-2 gap-2">
-                          {/* Tax Invoice PDF */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              shareToWhatsAppService({
-                                customer: shareModalTarget,
-                                type: 'invoice_pdf',
-                                sale: shareModalTarget.items?.[0] || shareModalTarget,
-                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
-                                authedFetch,
-                                showToast,
-                              });
-                              setShareModalTarget(null);
-                            }}
-                            className="p-3 bg-slate-50 hover:bg-teal-50/60 border border-slate-200 hover:border-teal-200 rounded-2xl text-left transition-all cursor-pointer group"
-                          >
-                            <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
-                              <FileText size={14} />
-                            </div>
-                            <strong className="text-xs font-bold text-slate-900 block">Tax Invoice PDF</strong>
-                            <span className="text-[10px] text-slate-400 block">Download official invoice</span>
-                          </button>
-
-                          {/* Account Statement */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              shareToWhatsAppService({
-                                customer: shareModalTarget,
-                                type: 'statement',
-                                sale: shareModalTarget.items?.[0] || shareModalTarget,
-                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
-                                authedFetch,
-                                showToast,
-                              });
-                              setShareModalTarget(null);
-                            }}
-                            className="p-3 bg-slate-50 hover:bg-indigo-50/60 border border-slate-200 hover:border-indigo-200 rounded-2xl text-left transition-all cursor-pointer group"
-                          >
-                            <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
-                              <ReceiptText size={14} />
-                            </div>
-                            <strong className="text-xs font-bold text-slate-900 block">Account Statement</strong>
-                            <span className="text-[10px] text-slate-400 block">Multi-invoice summary PDF</span>
-                          </button>
-
-                          {/* Customer Ledger */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              shareToWhatsAppService({
-                                customer: shareModalTarget,
-                                type: 'ledger',
-                                sale: shareModalTarget.items?.[0] || shareModalTarget,
-                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
-                                authedFetch,
-                                showToast,
-                              });
-                              setShareModalTarget(null);
-                            }}
-                            className="p-3 bg-slate-50 hover:bg-amber-50/60 border border-slate-200 hover:border-amber-200 rounded-2xl text-left transition-all cursor-pointer group"
-                          >
-                            <div className="w-7 h-7 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
-                              <BarChart3 size={14} />
-                            </div>
-                            <strong className="text-xs font-bold text-slate-900 block">Customer Ledger</strong>
-                            <span className="text-[10px] text-slate-400 block">Running debit/credit balance</span>
-                          </button>
-
-                          {/* WhatsApp Reminder Text Only */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              shareToWhatsAppService({
-                                customer: shareModalTarget,
-                                type: 'reminder_only',
-                                sale: shareModalTarget.items?.[0] || shareModalTarget,
-                                shop: data.shops.find(s => s.id === (shareModalTarget.shop_id || shopId)),
-                                authedFetch,
-                                showToast,
-                              });
-                              setShareModalTarget(null);
-                            }}
-                            className="p-3 bg-slate-50 hover:bg-emerald-50/60 border border-slate-200 hover:border-emerald-200 rounded-2xl text-left transition-all cursor-pointer group"
-                          >
-                            <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center mb-1.5 group-hover:scale-105 transition-transform">
-                              <Send size={14} />
-                            </div>
-                            <strong className="text-xs font-bold text-slate-900 block">Reminder Only</strong>
-                            <span className="text-[10px] text-slate-400 block">Send text without PDF</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Message Preview Box */}
-                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1.5">
-                        <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400">
-                          <span>WhatsApp Text Preview</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const msg = `Dear ${shareModalTarget.customer_name || shareModalTarget.name},\n\nThis is a friendly reminder from Warehouse (Pinky Sales).\n\nOutstanding Balance: Rs. ${Number(shareModalTarget.pending_amount || 0).toLocaleString('en-IN')}\nDue Date: ${shareModalTarget.due_date ? new Date(shareModalTarget.due_date).toLocaleDateString('en-GB') : 'Earliest'}\n\nPlease find your official invoice document attached.\n\nKindly arrange payment at your earliest convenience. Thank you!`;
-                              navigator.clipboard.writeText(msg);
-                              showToast('Reminder text copied to clipboard!');
-                            }}
-                            className="text-teal-700 hover:text-teal-800 font-bold flex items-center gap-1 cursor-pointer"
-                          >
-                            Copy Text
-                          </button>
-                        </div>
-                        <p className="text-slate-600 text-[11px] leading-relaxed font-mono whitespace-pre-line bg-white p-2 rounded-lg border border-slate-200">
-                          {`Dear ${shareModalTarget.customer_name || shareModalTarget.name},\nOutstanding Balance: Rs. ${Number(shareModalTarget.pending_amount || 0).toLocaleString('en-IN')}\nPlease find the invoice attached. Thank you!`}
-                        </p>
-                      </div>
                     </motion.div>
                   </div>
                 )}
@@ -8407,6 +8399,18 @@ function App() {
                 }));
               }
             }}
+          />
+        </React.Suspense>
+        <React.Suspense fallback={null}>
+          <ShareInvoiceModal
+            isOpen={Boolean(shareModalTarget)}
+            onClose={() => setShareModalTarget(null)}
+            target={shareModalTarget}
+            shop={data.shops.find((s) => String(s.id) === String(shareModalTarget?.customer?.shop_id || shareModalTarget?.sale?.shop_id || shopId)) || {}}
+            authedFetch={authedFetch}
+            showToast={showToast}
+            currency={currency}
+            formatDateDMY={formatDateDMY}
           />
         </React.Suspense>
         <ConfirmationDialog
