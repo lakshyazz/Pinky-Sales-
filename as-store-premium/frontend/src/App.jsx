@@ -5949,70 +5949,154 @@ function App() {
   const dashboardWarehouseStock = useMemo(() => dashboardAvailability.reduce((sum, item) => sum + Number(item.warehouse_stock || 0), 0), [dashboardAvailability]);
   const dashboardBranchPerformance = data.dashboard?.shopWise?.filter((shop) => shop.location_type !== 'warehouse') || [];
   const dashboardShopCount = dashboardBranchPerformance.length || data.dashboard?.totals?.total_shops || 0;
-  const globalQuery = globalSearch.trim().toLowerCase();
+  const globalQueryTokens = useMemo(() => {
+    return globalSearch.toLowerCase().trim().split(/\s+/).filter(Boolean);
+  }, [globalSearch]);
 
   const globalSearchResults = useMemo(() => {
-    if (!globalQuery) return [];
+    if (!globalQueryTokens.length) return [];
     const results = [];
-    const matches = (values) => values
-      .filter((value) => value !== null && value !== undefined)
-      .some((value) => String(value).toLowerCase().includes(globalQuery));
-    const addResult = (result, values) => {
-      if (results.length >= 10 || !matches(values)) return;
-      results.push(result);
+    const maxResults = 30;
+
+    // Multi-token fuzzy matcher: every token must be present in the target searchable string
+    const matchesAllTokens = (searchableText) => {
+      const lower = String(searchableText || '').toLowerCase();
+      return globalQueryTokens.every((token) => lower.includes(token));
     };
+
+    const addResult = (result, searchableFields) => {
+      if (results.length >= maxResults) return;
+      const combined = searchableFields
+        .filter((v) => v !== null && v !== undefined && v !== '')
+        .map((v) => (Array.isArray(v) ? v.join(' ') : String(v)))
+        .join(' ')
+        .toLowerCase();
+      if (matchesAllTokens(combined)) {
+        results.push(result);
+      }
+    };
+
+    // 1. Products (model, short_name, manufacturing brand, general brand, category, sub_category, price, wholesale_price, colours)
     const productsById = new Map();
     [...dashboardAvailability, ...(role === 'customer' ? data.catalog : data.products)].forEach((item) => {
       if (!item?.id) return;
       productsById.set(String(item.id), { ...productsById.get(String(item.id)), ...item });
     });
-    [...productsById.values()].forEach((item) => addResult({
-      kind: 'product',
-      type: 'Product',
-      title: productName(item),
-      meta: joinUniqueText([item.brand, item.category, item.available_locations], 'Model details'),
-      icon: Smartphone,
-      item,
-    }, [productName(item), fullModelList(item), item.brand, item.category, item.description, item.available_locations]));
+
+    [...productsById.values()].forEach((item) => {
+      const pName = productName(item);
+      const mfgBrand = item.manufacturing_brand_name || item.mfg_brand || item.brand_name || item.brand || '';
+      const cleanBrand = String(mfgBrand).replace(/^(mfg|brand)[\s.:-]*/i, '').trim();
+      const prices = [
+        item.sale_price, item.selling_price, item.price, item.retail_price,
+        item.wholesale_price, item.official_price, item.purchase_price
+      ].filter(Boolean);
+      const priceStrings = prices.map((p) => String(p));
+      const colours = Array.isArray(item.colours) ? item.colours.join(' ') : (item.colour || '');
+      const models = fullModelList(item);
+
+      addResult({
+        kind: 'product',
+        type: 'Product',
+        title: pName,
+        meta: joinUniqueText([
+          cleanBrand ? `Brand: ${cleanBrand}` : '',
+          item.sale_price || item.selling_price ? currency(item.sale_price || item.selling_price) : '',
+          item.category,
+          item.available_locations || (item.quantity !== undefined ? `${item.quantity} in stock` : '')
+        ], 'Model details'),
+        icon: Smartphone,
+        item,
+      }, [
+        pName,
+        item.model,
+        models,
+        item.short_name,
+        cleanBrand,
+        item.brand,
+        item.category,
+        item.sub_category,
+        item.description,
+        ...priceStrings,
+        colours,
+        item.available_locations,
+        item.compatibility
+      ]);
+    });
+
+    // 2. Manufacturing Brands & Categories
     const brandNames = [
-      ...data.reference.brands.map((brand) => brand.name),
-      ...data.products.map((product) => product.brand),
-      ...data.catalog.map((product) => product.brand),
+      ...(Array.isArray(data.reference?.brands) ? data.reference.brands.map((b) => b.name) : []),
+      ...(Array.isArray(data.reference?.manufacturing_brands) ? data.reference.manufacturing_brands.map((b) => b.name) : []),
+      ...data.products.map((p) => p.manufacturing_brand_name || p.brand),
+      ...data.catalog.map((p) => p.manufacturing_brand_name || p.brand),
     ].filter(Boolean);
-    [...new Set(brandNames.map((name) => String(name).trim()).filter(Boolean))].forEach((brand) => addResult({
-      kind: 'brand',
-      type: 'Brand',
-      title: brand,
-      meta: 'Filter inventory and catalog',
-      icon: Package,
-      item: { brand },
-    }, [brand]));
-    data.customers.forEach((customer) => addResult({
-      kind: 'customer',
-      type: 'Customer',
-      title: customer.name,
-      meta: joinUniqueText([customer.mobile, customer.shop_name, currency(customer.pending)], 'Customer account'),
-      icon: Users,
-      item: customer,
-    }, [customer.name, customer.mobile, customer.address, customer.shop_name, customer.pending]));
-    data.sales.forEach((sale) => addResult({
-      kind: 'sale',
-      type: 'Sale',
-      title: sale.customer_name || 'Walk-in customer',
-      meta: joinUniqueText([productName(sale), sale.shop_name, sale.payment_mode, currency(sale.total_amount)], 'Sale record'),
-      icon: ReceiptText,
-      item: sale,
-    }, [sale.customer_name, sale.mobile, productName(sale), sale.product_name, sale.brand, sale.category, sale.shop_name, sale.payment_mode]));
-    data.shops.forEach((shop) => addResult({
-      kind: 'shop',
-      type: shop.location_type === 'warehouse' ? 'Warehouse' : 'Shop',
-      title: shop.name,
-      meta: joinUniqueText([shop.area, shop.phone], 'Location'),
-      icon: Store,
-      item: shop,
-    }, [shop.name, shop.area, shop.address, shop.phone, shop.location_type]));
+
+    [...new Set(brandNames.map((name) => String(name).replace(/^(mfg|brand)[\s.:-]*/i, '').trim()).filter(Boolean))].forEach((brand) => {
+      addResult({
+        kind: 'brand',
+        type: 'Brand',
+        title: brand,
+        meta: 'Filter inventory and catalog by brand',
+        icon: Package,
+        item: { brand },
+      }, [brand]);
+    });
+
+    // 3. Customers
+    (data.customers || []).forEach((customer) => {
+      addResult({
+        kind: 'customer',
+        type: 'Customer',
+        title: customer.name,
+        meta: joinUniqueText([customer.mobile, customer.customer_type ? String(customer.customer_type).toUpperCase() : '', customer.shop_name, customer.pending ? `Due: ${currency(customer.pending)}` : ''], 'Customer account'),
+        icon: Users,
+        item: customer,
+      }, [customer.name, customer.mobile, customer.address, customer.shop_name, customer.gstin, customer.customer_type, customer.pending]);
+    });
+
+    // 4. Sales / Invoices
+    (data.sales || []).forEach((sale) => {
+      const invNo = sale.invoice_number || (sale.id ? `INV-${String(sale.id).padStart(6, '0')}` : '');
+      const sBrand = sale.manufacturing_brand_name || sale.brand || '';
+      addResult({
+        kind: 'sale',
+        type: 'Invoice / Sale',
+        title: `${invNo ? `${invNo} · ` : ''}${sale.customer_name || 'Walk-in customer'}`,
+        meta: joinUniqueText([productName(sale), sBrand, sale.shop_name, sale.payment_mode, currency(sale.total_amount)], 'Sale record'),
+        icon: ReceiptText,
+        item: sale,
+      }, [
+        invNo,
+        sale.customer_name,
+        sale.mobile,
+        productName(sale),
+        sale.product_name,
+        sBrand,
+        sale.category,
+        sale.shop_name,
+        sale.payment_mode,
+        sale.total_amount,
+        sale.paid_amount,
+        sale.due_date,
+        sale.invoice_date
+      ]);
+    });
+
+    // 5. Shops & Branches
+    (data.shops || []).forEach((shop) => {
+      addResult({
+        kind: 'shop',
+        type: shop.location_type === 'warehouse' ? 'Warehouse' : 'Shop Branch',
+        title: shop.name,
+        meta: joinUniqueText([shop.area, shop.address, shop.phone], 'Location'),
+        icon: Store,
+        item: shop,
+      }, [shop.name, shop.area, shop.address, shop.phone, shop.location_type]);
+    });
+
     return results;
-  }, [globalQuery, dashboardAvailability, role, data.catalog, data.products, data.reference.brands, data.customers, data.sales, data.shops]);
+  }, [globalQueryTokens, dashboardAvailability, role, data.catalog, data.products, data.reference?.brands, data.reference?.manufacturing_brands, data.customers, data.sales, data.shops]);
 
   if (!authReady) return <SkeletonPage type="dashboard" />;
   if (!session) return <Login onLogin={login} />;
@@ -6105,89 +6189,7 @@ function App() {
             <h1>{currentPageMeta.title}</h1>
             <p>{currentPageMeta.description}</p>
           </div>
-          {showGlobalSearch && (
-            <div className="global-search hidden md:block" onBlur={closeGlobalSearch}>
-              <div className="searchbox topbar-search">
-                <Search size={18} />
-                <input
-                  aria-label="Global search"
-                  placeholder="Search products, customers, sales, shops"
-                  value={globalSearch}
-                  onFocus={() => {
-                    setGlobalSearchFocused(true);
-                    hydrateGlobalSearch();
-                  }}
-                  onChange={(event) => {
-                    setGlobalSearch(event.target.value);
-                    setGlobalSearchFocused(true);
-                  }}
-                />
-                {globalSearch && (
-                  <button
-                    type="button"
-                    className="search-clear cursor-pointer"
-                    aria-label="Clear search"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setGlobalSearch('');
-                      setGlobalSearchFocused(false);
-                      const searchInput = document.querySelector('.global-search input');
-                      if (searchInput) {
-                        searchInput.focus({ preventScroll: true });
-                      }
-                    }}
-                  >
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
-              <AnimatePresence>
-                {globalSearchFocused && globalSearch && (
-                  <motion.div
-                    className="global-search-popover"
-                    initial={{ opacity: 0, y: 8, scale: 0.98 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                    transition={{ duration: 0.16 }}
-                  >
-                    {globalSearchResults.map((result, index) => {
-                       const ResultIcon = result.icon;
-                       return (
-                         <button
-                           type="button"
-                           className="global-search-result"
-                           key={`${result.kind}-${result.item?.id || result.title}-${index}`}
-                           onMouseDown={(event) => {
-                             event.preventDefault();
-                             handleGlobalSearchSelect(result);
-                           }}
-                         >
-                           <span className={`global-result-icon ${result.kind}`}><ResultIcon size={16} /></span>
-                           <span>
-                             <b>{result.title}</b>
-                             <small>{result.meta}</small>
-                           </span>
-                           <em>{result.type}</em>
-                         </button>
-                       );
-                    })}
-                    {!globalSearchResults.length && (
-                      <div className="global-search-empty">
-                        <Search size={16} />
-                        <span>No matching product, customer, sale, or shop found.</span>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          )}
-          <div className={`topbar-actions ${active === 'dashboard' ? 'hidden md:flex' : ''}`}>
+          <div className="topbar-actions">
             {role !== 'customer' && lowStockAlerts.length > 0 && (
               <button
                 type="button"
@@ -6246,6 +6248,14 @@ function App() {
                 onAddProduct={() => setActivePage('stock')}
                 onCreateSale={() => setActivePage('sales')}
                 onImportStock={() => setActivePage('supplier-import')}
+                globalSearch={globalSearch}
+                setGlobalSearch={setGlobalSearch}
+                globalSearchFocused={globalSearchFocused}
+                setGlobalSearchFocused={setGlobalSearchFocused}
+                globalSearchResults={globalSearchResults}
+                handleGlobalSearchSelect={handleGlobalSearchSelect}
+                hydrateGlobalSearch={hydrateGlobalSearch}
+                closeGlobalSearch={closeGlobalSearch}
               />
             </PageWrapper>
           )}

@@ -41,7 +41,10 @@ import {
   Check,
   ChevronDown,
   Eye,
-  EyeOff
+  EyeOff,
+  Search,
+  X,
+  Smartphone
 } from 'lucide-react';
 
 // Animated Number Counter Helper
@@ -516,7 +519,15 @@ const RedesignedDashboard = React.memo(function RedesignedDashboard({
   trendFromValue,
   onAddProduct,
   onCreateSale,
-  onImportStock
+  onImportStock,
+  globalSearch = '',
+  setGlobalSearch = () => {},
+  globalSearchFocused = false,
+  setGlobalSearchFocused = () => {},
+  globalSearchResults = [],
+  handleGlobalSearchSelect = () => {},
+  hydrateGlobalSearch = () => {},
+  closeGlobalSearch = () => {},
 }) {
   const [timeframe, setTimeframe] = useState('Today');
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -560,8 +571,6 @@ const RedesignedDashboard = React.memo(function RedesignedDashboard({
     return () => clearInterval(interval);
   }, []);
 
-
-
   // Personalized Greeting
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -579,7 +588,113 @@ const RedesignedDashboard = React.memo(function RedesignedDashboard({
   const lowStockSparkline = [15, 12, 18, 10, 8, 5, 3, 2];
 
   return (
-    <div className="min-h-[100dvh] space-y-8 pb-12 transition-all">
+    <div className="min-h-[100dvh] space-y-6 pb-12 transition-all">
+      {/* 0. PROMINENT FULL-WIDTH GLOBAL SEARCH BAR */}
+      <section className="relative z-30 w-full" onBlur={closeGlobalSearch}>
+        <div className="relative flex items-center bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-sm hover:shadow-md focus-within:shadow-xl focus-within:border-teal-500 dark:focus-within:border-teal-500 transition-all px-4 sm:px-5 py-3 sm:py-3.5 gap-3.5">
+          <Search className="w-5 h-5 text-teal-600 dark:text-teal-400 shrink-0" />
+          <input
+            id="dashboard-global-search"
+            type="text"
+            className="w-full bg-transparent text-sm sm:text-base font-semibold text-slate-800 dark:text-slate-100 placeholder:text-slate-400 placeholder:font-normal focus:outline-hidden"
+            placeholder="Search by product name, model (e.g. A33 WF), brand (e.g. AS CARE), price, customer, or invoice..."
+            value={globalSearch}
+            onFocus={() => {
+              setGlobalSearchFocused(true);
+              hydrateGlobalSearch();
+            }}
+            onChange={(e) => {
+              setGlobalSearch(e.target.value);
+              setGlobalSearchFocused(true);
+            }}
+          />
+          {globalSearch ? (
+            <button
+              type="button"
+              className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors shrink-0 cursor-pointer"
+              aria-label="Clear search"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setGlobalSearch('');
+                setGlobalSearchFocused(false);
+                const el = document.getElementById('dashboard-global-search');
+                if (el) el.focus();
+              }}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          ) : (
+            <kbd className="hidden sm:inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-extrabold text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 rounded-lg shadow-2xs select-none pointer-events-none shrink-0">
+              <span className="text-xs">⌘</span><span>K</span>
+            </kbd>
+          )}
+        </div>
+
+        {/* SEARCH RESULTS POPOVER */}
+        <AnimatePresence>
+          {globalSearchFocused && globalSearch && (
+            <motion.div
+              initial={{ opacity: 0, y: 8, scale: 0.99 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.99 }}
+              transition={{ duration: 0.16 }}
+              className="absolute left-0 right-0 top-full mt-2 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-800 rounded-2xl sm:rounded-3xl shadow-2xl overflow-hidden z-50 max-h-[480px] overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 p-2"
+            >
+              {globalSearchResults.length > 0 ? (
+                globalSearchResults.map((result, index) => {
+                  const ResultIcon = result.icon || Smartphone;
+                  return (
+                    <button
+                      key={`${result.kind}-${result.item?.id || result.title}-${index}`}
+                      type="button"
+                      className="w-full flex items-center justify-between gap-3 p-3 sm:p-3.5 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/80 transition-colors text-left group cursor-pointer"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        handleGlobalSearchSelect(result);
+                      }}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                          result.kind === 'product' ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 border border-teal-200/50 dark:border-teal-800/50' :
+                          result.kind === 'brand' ? 'bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 border border-purple-200/50 dark:border-purple-800/50' :
+                          result.kind === 'customer' ? 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200/50 dark:border-rose-800/50' :
+                          result.kind === 'sale' ? 'bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/50' :
+                          'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border border-amber-200/50 dark:border-amber-800/50'
+                        }`}>
+                          <ResultIcon className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <strong className="block text-sm font-bold text-slate-800 dark:text-slate-100 group-hover:text-teal-600 dark:group-hover:text-teal-400 truncate">
+                            {result.title}
+                          </strong>
+                          <span className="block text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                            {result.meta}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="shrink-0 px-2.5 py-1 rounded-full text-[10px] font-extrabold tracking-wider uppercase bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 border border-slate-200/60 dark:border-slate-700/60">
+                        {result.type}
+                      </span>
+                    </button>
+                  );
+                })
+              ) : (
+                <div className="flex flex-col items-center justify-center py-8 text-center text-slate-400">
+                  <Search className="w-8 h-8 stroke-[1.5] mb-2 opacity-50" />
+                  <p className="text-sm font-semibold">No matching records found</p>
+                  <p className="text-xs text-slate-400 mt-1">Try searching by model (e.g. "A33 WF"), brand (e.g. "AS CARE"), or price (e.g. "3300")</p>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </section>
+
       {/* HEADER BAR (Relative with proper spacing, not fighting for sticky top spot) */}
       <header className="relative z-20 bg-white/95 dark:bg-slate-900/95 border-b border-slate-200/80 dark:border-slate-800 -mx-4 sm:-mx-8 px-4 sm:px-8 py-4 transition-all safe-area-pt">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
