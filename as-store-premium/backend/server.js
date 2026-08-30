@@ -4132,7 +4132,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
 
       const saleNetInvoiceTotal = Math.max(0, money(currentInvoiceTotal - actualAppliedCredit));
 
-      if (shouldApplyAdvance && availableAdvance > 0) {
+      if (shouldApplyAdvance && availableAdvance > 0 && previousBalance >= 0) {
         advanceDeduction = Math.min(saleNetInvoiceTotal, availableAdvance);
       }
 
@@ -4143,25 +4143,44 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         );
       }
 
+      // If previousBalance is negative (e.g. -100000), it directly represents customer advance credit
+      const advanceFromNegativePrevBal = previousBalance < 0 ? Math.min(saleNetInvoiceTotal, Math.abs(previousBalance)) : 0;
+      const totalAdvanceApplied = money(advanceDeduction + advanceFromNegativePrevBal);
+
       // Net amount to be paid directly after advance deduction
-      const netAfterAdvance = Math.max(0, money(saleNetInvoiceTotal - advanceDeduction));
-      const netPayableAmount = Math.max(money(netAfterAdvance + previousBalance), 0);
+      const netAfterAdvance = Math.max(0, money(saleNetInvoiceTotal - totalAdvanceApplied));
+      const netBalance = money(netAfterAdvance + (previousBalance < 0 ? (previousBalance + advanceFromNegativePrevBal) : previousBalance));
+      const netPayableAmount = Math.max(netBalance, 0);
       const numPaid = money(paid_amount);
+
       if (numPaid < 0) {
         const error = new Error('Paid amount cannot be negative.');
         error.status = 400;
         throw error;
       }
-      if (numPaid > netPayableAmount) {
+      if (netPayableAmount > 0 && numPaid > netPayableAmount) {
         const error = new Error(`Paid amount (₹${numPaid}) cannot exceed the Net Payable amount (₹${netPayableAmount}).`);
         error.status = 400;
         throw error;
       }
-      const closingBalance = Math.max(money(netPayableAmount - numPaid), 0);
+      const closingBalance = money(netBalance - numPaid);
+
+      // If previous balance was negative or closing balance is negative, update customer advance pool
+      if (closingBalance < 0) {
+        await tx.runQuery(
+          'UPDATE customers SET advance_balance = ?, pending = 0 WHERE id = ?',
+          [Math.abs(closingBalance), customer_id]
+        );
+      } else if (previousBalance < 0 && closingBalance >= 0) {
+        await tx.runQuery(
+          'UPDATE customers SET pending = ?, advance_balance = 0 WHERE id = ?',
+          [closingBalance, customer_id]
+        );
+      }
 
       // Portion of direct paid amount covering this sale
       const directPaidForThisSale = Math.min(numPaid, netAfterAdvance);
-      const thisSalePaid = money(advanceDeduction + directPaidForThisSale);
+      const thisSalePaid = money(totalAdvanceApplied + directPaidForThisSale);
       const thisSalePending = Math.max(0, money(saleNetInvoiceTotal - thisSalePaid));
       const excessPaid = Math.max(0, money(numPaid - netAfterAdvance));
 

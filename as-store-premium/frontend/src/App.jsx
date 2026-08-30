@@ -1147,25 +1147,35 @@ function SalesCreationWorkspace({
   // Accounting calculations with manual or auto-fetched previous balance
   const currentInvoiceTotal = productsTotal + extraExpensesTotal;
   const autoFetchedBalance = Number(customerBalanceInfo?.outstanding_balance || 0);
-  const previousBalance = forms.sale?.previous_balance !== undefined && forms.sale?.previous_balance !== ''
-    ? Math.max(0, Number(forms.sale.previous_balance))
-    : autoFetchedBalance;
   const availableCredits = Number(customerBalanceInfo?.available_credits || 0);
   const availableAdvance = Number(customerBalanceInfo?.advance_balance || 0);
-  const maxApplicableCredit = Math.min(availableCredits, currentInvoiceTotal + previousBalance);
+
+  const previousBalance = forms.sale?.previous_balance !== undefined && forms.sale?.previous_balance !== ''
+    ? (isNaN(Number(forms.sale.previous_balance)) ? 0 : Number(forms.sale.previous_balance))
+    : (autoFetchedBalance > 0 ? autoFetchedBalance : (availableAdvance > 0 ? -availableAdvance : 0));
+
+  const maxApplicableCredit = Math.min(availableCredits, Math.max(0, currentInvoiceTotal + Math.max(0, previousBalance)));
 
   const effectiveCreditDeduction = applyCreditNote
     ? Math.min(Math.max(0, Number(appliedCreditInput || 0)), maxApplicableCredit)
     : 0;
 
   const netAfterCredits = Math.max(0, currentInvoiceTotal - effectiveCreditDeduction);
-  const effectiveAdvanceDeduction = (applyAdvanceCredit && availableAdvance > 0)
+  
+  // If previousBalance is negative (e.g. advance entered as previous balance), we don't double-deduct advance
+  const effectiveAdvanceDeduction = (applyAdvanceCredit && availableAdvance > 0 && previousBalance >= 0)
     ? Math.min(netAfterCredits, availableAdvance)
     : 0;
 
-  const netPayable = Math.max(0, netAfterCredits - effectiveAdvanceDeduction + previousBalance);
+  // Net Balance: Current sale total minus credits + previous balance (supports negative advance)
+  const netBalance = (netAfterCredits - effectiveAdvanceDeduction) + previousBalance;
+
+  // Cash/Payment Needed from Customer (cannot be negative)
+  const netPayable = Math.max(0, netBalance);
   const paidAmount = Number(forms.sale?.paid_amount || 0);
-  const closingBalance = Math.max(0, netPayable - paidAmount);
+  
+  // Closing Balance: Net Balance minus any direct cash payment
+  const closingBalance = netBalance - paidAmount;
 
   // Synchronize applied credit & advance selection to form state
   useEffect(() => {
@@ -1180,10 +1190,11 @@ function SalesCreationWorkspace({
   }, [effectiveCreditDeduction, applyAdvanceCredit]);
 
   const getStatusBadge = () => {
-    if (netPayable === 0 && currentInvoiceTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (netPayable === 0 && currentInvoiceTotal === 0 && previousBalance === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (netBalance <= 0) return { label: 'PAID (Covered by Advance Credit)', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
     if (effectiveAdvanceDeduction > 0 && paidAmount === 0 && closingBalance === 0) return { label: 'Paid (Store Credit)', color: 'bg-teal-100 text-teal-800 border-teal-300' };
     if (paidAmount >= netPayable && netPayable > 0) return { label: 'Fully Settled', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
-    if (paidAmount > 0) return { label: `Partial (₹${closingBalance.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
+    if (paidAmount > 0) return { label: `Partial (₹${Math.max(0, closingBalance).toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
     return { label: 'Pending / Unpaid', color: 'bg-rose-100 text-rose-800 border-rose-300' };
   };
 
@@ -1713,18 +1724,22 @@ function SalesCreationWorkspace({
               <div className="flex items-center justify-between text-slate-700">
                 <span className="flex items-center gap-1">
                   <span>Previous Balance</span>
+                  {previousBalance < 0 && (
+                    <span className="px-1.5 py-0.2 rounded bg-cyan-50 text-cyan-800 border border-cyan-200 text-[10px] font-bold">
+                      Advance
+                    </span>
+                  )}
                   {previousBalance > 0 && (
                     <span className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold">
                       {forms.sale.previous_balance !== '' && Number(forms.sale.previous_balance) !== autoFetchedBalance ? 'Manual' : 'Due'}
                     </span>
                   )}
                 </span>
-                <strong className={previousBalance > 0 ? 'text-amber-700 font-bold' : 'text-slate-500'}>
-                  +{currency(previousBalance)}
+                <strong className={previousBalance < 0 ? 'text-cyan-700 font-bold' : previousBalance > 0 ? 'text-amber-700 font-bold' : 'text-slate-500'}>
+                  {previousBalance < 0 ? `${currency(previousBalance)} (Advance)` : previousBalance > 0 ? `+${currency(previousBalance)}` : '+₹0'}
                 </strong>
               </div>
 
-              {/* Credit Note Deduction (if applied) */}
               {/* Credit Note Deduction (if applied) */}
               {effectiveCreditDeduction > 0 && (
                 <div className="flex items-center justify-between text-teal-700 font-bold bg-teal-50/60 px-2 py-1 rounded-lg border border-teal-200/60">
@@ -1745,9 +1760,18 @@ function SalesCreationWorkspace({
               <div className="border-t border-slate-200 pt-2 flex items-center justify-between">
                 <div>
                   <span className="text-sm font-black text-slate-900 block">Final Grand Total</span>
-                  <span className="text-[10px] text-slate-400 font-medium">Net Payable Amount</span>
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    {netBalance < 0 ? 'Net Store Credit Remaining' : 'Net Payable Amount'}
+                  </span>
                 </div>
-                <span className="text-xl font-black text-slate-900">{currency(netPayable)}</span>
+                <div className="text-right">
+                  <span className={`text-xl font-black ${netBalance < 0 ? 'text-emerald-700' : 'text-slate-900'}`}>
+                    {currency(netBalance)}
+                  </span>
+                  {netBalance < 0 && (
+                    <span className="text-[10px] text-emerald-600 font-extrabold block">Covered by Advance Credit</span>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -1838,7 +1862,12 @@ function SalesCreationWorkspace({
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-[11px] font-semibold text-slate-600 flex items-center gap-1.5">
                     <span>Previous Balance (₹)</span>
-                    {autoFetchedBalance > 0 && forms.sale.previous_balance !== '' && Number(forms.sale.previous_balance) !== autoFetchedBalance && (
+                    {Number(forms.sale.previous_balance || 0) < 0 && (
+                      <span className="px-1.5 py-0.2 rounded text-[9.5px] font-bold bg-cyan-100 text-cyan-800 border border-cyan-200">
+                        Advance / Credit
+                      </span>
+                    )}
+                    {autoFetchedBalance > 0 && forms.sale.previous_balance !== '' && Number(forms.sale.previous_balance) !== autoFetchedBalance && Number(forms.sale.previous_balance || 0) >= 0 && (
                       <span className="px-1.5 py-0.2 rounded text-[9.5px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
                         Manual
                       </span>
@@ -1857,11 +1886,14 @@ function SalesCreationWorkspace({
                 </div>
                 <input
                   type="number"
-                  min="0"
-                  placeholder="₹ 0"
+                  placeholder="₹ 0 (e.g. -100000 for advance)"
                   value={forms.sale.previous_balance !== undefined ? forms.sale.previous_balance : ''}
                   onChange={(e) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, previous_balance: e.target.value } }))}
-                  className="w-full h-10 px-3 text-xs font-bold text-amber-800 bg-white border border-slate-200 rounded-xl focus:border-amber-500 focus:outline-none"
+                  className={`w-full h-10 px-3 text-xs font-bold bg-white border rounded-xl focus:outline-none ${
+                    Number(forms.sale.previous_balance || 0) < 0
+                      ? 'text-cyan-800 border-cyan-300 focus:border-cyan-500'
+                      : 'text-amber-800 border-slate-200 focus:border-amber-500'
+                  }`}
                 />
               </div>
 
@@ -1873,7 +1905,7 @@ function SalesCreationWorkspace({
                     onClick={() => setForms((prev) => ({ ...prev, sale: { ...prev.sale, paid_amount: String(netPayable) } }))}
                     className="text-[10px] font-bold text-teal-600 hover:text-teal-800 hover:underline cursor-pointer"
                   >
-                    Pay Full ({currency(netPayable)})
+                    {netPayable > 0 ? `Pay Full (${currency(netPayable)})` : 'Covered by Advance (₹0)'}
                   </button>
                 </div>
                 <input
@@ -1904,8 +1936,8 @@ function SalesCreationWorkspace({
 
               <div className="flex items-center justify-between text-xs pt-1 px-1">
                 <span className="text-slate-500 font-medium">Updated Closing Balance:</span>
-                <strong className={`font-black ${closingBalance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                  {currency(closingBalance)}
+                <strong className={`font-black ${closingBalance < 0 ? 'text-cyan-700' : closingBalance > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                  {closingBalance < 0 ? `${currency(closingBalance)} (Advance with Store)` : closingBalance === 0 ? '₹0 (Settled)' : `${currency(closingBalance)} (Due)`}
                 </strong>
               </div>
             </div>
