@@ -181,15 +181,20 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   doc.line(10, 75, 200, 75);
 
   // 5. Products Table (startY = 75mm)
-  const rawItems = Array.isArray(sale?.items) && sale.items.length > 0
-    ? sale.items
-    : [{
-        product_name: sale?.product_name || sale?.name || 'Product Item',
-        colour: sale?.colour,
-        quantity: sale?.quantity || 1,
-        unit_price: Number(sale?.total_amount || 0) / Math.max(1, Number(sale?.quantity || 1)),
-        total_price: sale?.total_amount || 0,
-      }];
+  const invoiceItems = Array.isArray(sale?.items) && sale.items.length ? sale.items : [sale];
+  const rawItems = invoiceItems.flatMap((item) => {
+    const parentBrand = item?.manufacturing_brand_name || item?.mfg_brand || item?.brand_name || item?.brand || sale?.manufacturing_brand_name || sale?.mfg_brand || sale?.brand_name || sale?.brand || '';
+    if (Array.isArray(item?.items) && item.items.length > 0) {
+      return item.items.map((sub) => ({
+        ...sub,
+        manufacturing_brand_name: sub.manufacturing_brand_name || sub.mfg_brand || sub.brand_name || sub.brand || sub.custom_brand_name || parentBrand,
+      }));
+    }
+    return [{
+      ...item,
+      manufacturing_brand_name: item?.manufacturing_brand_name || item?.mfg_brand || item?.brand_name || item?.brand || item?.custom_brand_name || parentBrand,
+    }];
+  }).filter(Boolean);
 
   const tableRows = rawItems.map((it, idx) => {
     const rate = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? (it.total_amount && it.quantity ? Number(it.total_amount) / Number(it.quantity) : (it.amount && it.quantity ? Number(it.amount) / Number(it.quantity) : 0)));
@@ -270,6 +275,7 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   }, 0));
   const prevBalance = Number(sale?.previous_balance ?? sale?.old_balance ?? 0);
   const appliedCredit = Number(sale?.applied_credit_amount ?? sale?.credit_applied ?? 0);
+  const advanceApplied = Number(sale?.advance_applied ?? sale?.advance_credit ?? 0);
   const grandTotal = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit);
   const paidAmount = Number(sale?.paid_amount ?? sale?.amount_paid ?? 0);
   const balanceDue = Math.max(0, grandTotal - paidAmount);
@@ -287,6 +293,9 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   }
   if (appliedCredit > 0) {
     rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
+  }
+  if (advanceApplied > 0) {
+    rightRows.push({ label: '- STORE CREDIT / ADVANCE', amount: `-${formatMoney(advanceApplied)}`, bold: false, color: [15, 118, 110] });
   }
   rightRows.push({ label: 'Grand Total', amount: formatMoney(grandTotal), bold: true });
   rightRows.push({ label: 'Amount Paid', amount: formatMoney(paidAmount), bold: false });
@@ -336,6 +345,14 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
   doc.text('Terms & Conditions', 13, startY + 34);
   doc.setTextColor(71, 85, 105);
   doc.text('Goods once sold will not be returned or exchanged.', 13, startY + 38);
+
+  const availAdv = Number(customer?.advance_balance ?? sale?.advance_balance ?? 0);
+  if (availAdv > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(15, 118, 110);
+    doc.text(`Available Store Credit / Advance: Rs. ${formatMoney(availAdv)}`, 13, startY + 44);
+  }
 
   // Right Content: Totals Table
   let curY = startY + 5;
@@ -837,6 +854,9 @@ export const formatWhatsAppMessage = ({
     }
 
     msg += `💰 *Invoice Total:* Rs. ${formatMoney(totalAmount)}\n`;
+    if (Number(inv.advance_applied || 0) > 0) {
+      msg += `💳 *Paid via Store Credit / Advance:* Rs. ${formatMoney(inv.advance_applied)}\n`;
+    }
     if (paidAmount > 0) {
       msg += `✅ *Amount Paid:* Rs. ${formatMoney(paidAmount)}\n`;
     }
@@ -844,6 +864,10 @@ export const formatWhatsAppMessage = ({
       msg += `⚠️ *Balance Due:* Rs. ${formatMoney(pendingAmount)}\n`;
     } else {
       msg += `✨ *Payment Status:* Fully Paid\n`;
+    }
+    const availCredit = Number(customer?.advance_balance ?? inv?.advance_balance ?? 0);
+    if (availCredit > 0) {
+      msg += `💼 *Available Store Credit / Advance:* Rs. ${formatMoney(availCredit)}\n`;
     }
 
     if (type === 'invoice_reminder_only' || type === 'reminder_only') {

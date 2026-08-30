@@ -1031,18 +1031,20 @@ function SalesCreationWorkspace({
   const [expensesExpanded, setExpensesExpanded] = useState((forms.sale?.expenses || []).length > 0);
   const [customerBalanceInfo, setCustomerBalanceInfo] = useState({
     outstanding_balance: 0,
+    advance_balance: 0,
     available_credits: 0,
     credit_notes: [],
   });
   const [loadingBalance, setLoadingBalance] = useState(false);
   const [applyCreditNote, setApplyCreditNote] = useState(false);
   const [appliedCreditInput, setAppliedCreditInput] = useState('');
+  const [applyAdvanceCredit, setApplyAdvanceCredit] = useState(true);
 
   // Automatically fetch customer outstanding balance and available credit notes
   useEffect(() => {
     const customerId = forms.sale?.customer_id;
     if (!customerId) {
-      setCustomerBalanceInfo({ outstanding_balance: 0, available_credits: 0, credit_notes: [] });
+      setCustomerBalanceInfo({ outstanding_balance: 0, advance_balance: 0, available_credits: 0, credit_notes: [] });
       setApplyCreditNote(false);
       setAppliedCreditInput('');
       setForms((prev) => ({
@@ -1051,6 +1053,7 @@ function SalesCreationWorkspace({
           ...prev.sale,
           previous_balance: '',
           applied_credit_amount: 0,
+          apply_advance: true,
         },
       }));
       return;
@@ -1064,9 +1067,11 @@ function SalesCreationWorkspace({
           const res = await authedFetch(`/customers/${customerId}/balance`);
           if (isMounted && res) {
             const outBal = Number(res.outstanding_balance || 0);
+            const advBal = Number(res.advance_balance || 0);
             const availCredits = Number(res.available_credits || 0);
             setCustomerBalanceInfo({
               outstanding_balance: outBal,
+              advance_balance: advBal,
               available_credits: availCredits,
               credit_notes: res.credit_notes || [],
             });
@@ -1075,18 +1080,21 @@ function SalesCreationWorkspace({
               sale: {
                 ...prev.sale,
                 previous_balance: outBal,
+                apply_advance: true,
               },
             }));
           }
         } else {
           const cust = (data.customers || []).find((c) => String(c.id) === String(customerId));
           const outBal = Number(cust?.pending || 0);
-          setCustomerBalanceInfo({ outstanding_balance: outBal, available_credits: 0, credit_notes: [] });
+          const advBal = Number(cust?.advance_balance || 0);
+          setCustomerBalanceInfo({ outstanding_balance: outBal, advance_balance: advBal, available_credits: 0, credit_notes: [] });
           setForms((prev) => ({
             ...prev,
             sale: {
               ...prev.sale,
               previous_balance: outBal,
+              apply_advance: true,
             },
           }));
         }
@@ -1115,34 +1123,37 @@ function SalesCreationWorkspace({
     ? Math.max(0, Number(forms.sale.previous_balance))
     : autoFetchedBalance;
   const availableCredits = Number(customerBalanceInfo?.available_credits || 0);
+  const availableAdvance = Number(customerBalanceInfo?.advance_balance || 0);
   const maxApplicableCredit = Math.min(availableCredits, currentInvoiceTotal + previousBalance);
 
   const effectiveCreditDeduction = applyCreditNote
     ? Math.min(Math.max(0, Number(appliedCreditInput || 0)), maxApplicableCredit)
     : 0;
 
-  const netPayable = Math.max(0, currentInvoiceTotal + previousBalance - effectiveCreditDeduction);
+  const netAfterCredits = Math.max(0, currentInvoiceTotal - effectiveCreditDeduction);
+  const effectiveAdvanceDeduction = (applyAdvanceCredit && availableAdvance > 0)
+    ? Math.min(netAfterCredits, availableAdvance)
+    : 0;
+
+  const netPayable = Math.max(0, netAfterCredits - effectiveAdvanceDeduction + previousBalance);
   const paidAmount = Number(forms.sale?.paid_amount || 0);
   const closingBalance = Math.max(0, netPayable - paidAmount);
 
-  // Synchronize applied credit snapshot to form state
+  // Synchronize applied credit & advance selection to form state
   useEffect(() => {
-    setForms((prev) => {
-      if (prev.sale.applied_credit_amount === effectiveCreditDeduction) {
-        return prev;
-      }
-      return {
-        ...prev,
-        sale: {
-          ...prev.sale,
-          applied_credit_amount: effectiveCreditDeduction,
-        },
-      };
-    });
-  }, [effectiveCreditDeduction]);
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        applied_credit_amount: effectiveCreditDeduction,
+        apply_advance: applyAdvanceCredit,
+      },
+    }));
+  }, [effectiveCreditDeduction, applyAdvanceCredit]);
 
   const getStatusBadge = () => {
     if (netPayable === 0 && currentInvoiceTotal === 0) return { label: 'Empty Bill', color: 'bg-slate-100 text-slate-600 border-slate-200' };
+    if (effectiveAdvanceDeduction > 0 && paidAmount === 0 && closingBalance === 0) return { label: 'Paid (Store Credit)', color: 'bg-teal-100 text-teal-800 border-teal-300' };
     if (paidAmount >= netPayable && netPayable > 0) return { label: 'Fully Settled', color: 'bg-emerald-100 text-emerald-800 border-emerald-300' };
     if (paidAmount > 0) return { label: `Partial (₹${closingBalance.toLocaleString('en-IN')} Due)`, color: 'bg-amber-100 text-amber-800 border-amber-300' };
     return { label: 'Pending / Unpaid', color: 'bg-rose-100 text-rose-800 border-rose-300' };
@@ -1219,6 +1230,12 @@ function SalesCreationWorkspace({
                   }`}>
                     {currency(previousBalance)}
                   </span>
+
+                  {availableAdvance > 0 && (
+                    <span className="px-2 py-0.5 rounded-full font-bold text-[11px] bg-cyan-50 text-cyan-800 border border-cyan-200 flex items-center gap-1 shadow-2xs">
+                      <span>Available Store Credit: {currency(availableAdvance)}</span>
+                    </span>
+                  )}
 
                   {availableCredits > 0 && (
                     <span className="px-2 py-0.5 rounded-full font-bold text-[11px] bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1">
@@ -1680,10 +1697,19 @@ function SalesCreationWorkspace({
               </div>
 
               {/* Credit Note Deduction (if applied) */}
+              {/* Credit Note Deduction (if applied) */}
               {effectiveCreditDeduction > 0 && (
                 <div className="flex items-center justify-between text-teal-700 font-bold bg-teal-50/60 px-2 py-1 rounded-lg border border-teal-200/60">
                   <span>Credit Note Deduction</span>
                   <span>-{currency(effectiveCreditDeduction)}</span>
+                </div>
+              )}
+
+              {/* Store Credit / Advance Deduction (if applied) */}
+              {effectiveAdvanceDeduction > 0 && (
+                <div className="flex items-center justify-between text-cyan-700 font-bold bg-cyan-50/70 px-2 py-1 rounded-lg border border-cyan-200/70">
+                  <span>Store Credit / Advance</span>
+                  <span>-{currency(effectiveAdvanceDeduction)}</span>
                 </div>
               )}
 
@@ -1746,6 +1772,33 @@ function SalesCreationWorkspace({
                       Deducted from Grand Total before calculating final closing balance.
                     </p>
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Auto-apply Customer Store Credit / Advance Widget */}
+            {availableAdvance > 0 && (
+              <div className="p-3 bg-cyan-50/70 border border-cyan-200/90 rounded-xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={applyAdvanceCredit}
+                      onChange={(e) => setApplyAdvanceCredit(e.target.checked)}
+                      className="w-4 h-4 text-cyan-600 rounded cursor-pointer accent-cyan-600"
+                    />
+                    <span className="text-xs font-bold text-cyan-950">Auto-apply customer store credit</span>
+                  </label>
+                  <span className="text-[10.5px] font-extrabold text-cyan-800 bg-white px-2 py-0.5 rounded-md border border-cyan-200">
+                    Avail: {currency(availableAdvance)}
+                  </span>
+                </div>
+                {applyAdvanceCredit && (
+                  <p className="text-[10.5px] text-cyan-700 leading-tight">
+                    {effectiveAdvanceDeduction >= currentInvoiceTotal
+                      ? 'Entire sale total covered by customer\'s available store credit.'
+                      : `₹${effectiveAdvanceDeduction.toLocaleString('en-IN')} will be deducted from customer's available advance pool.`}
+                  </p>
                 )}
               </div>
             )}
@@ -4218,6 +4271,7 @@ function App() {
           customer_id: customerId,
           paid_amount: String(Number(forms.sale.paid_amount || 0)),
           applied_credit_amount: Number(forms.sale.applied_credit_amount || 0),
+          apply_advance: forms.sale.apply_advance !== false,
           previous_balance: Number(forms.sale.previous_balance || 0),
           invoice_date: forms.sale.invoice_date || getTodayIso(),
           payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 15),
@@ -5496,6 +5550,12 @@ function App() {
                   <div class="total-line" style="color: #0f766e; font-weight: 600;">
                     <span>- CREDIT NOTE</span>
                     <span>-Rs.${formatAmount(appliedCredit)}</span>
+                  </div>
+                ` : ''}
+                ${Number(sale.advance_applied || 0) > 0 ? `
+                  <div class="total-line" style="color: #0f766e; font-weight: 600;">
+                    <span>- STORE CREDIT / ADVANCE</span>
+                    <span>-Rs.${formatAmount(sale.advance_applied)}</span>
                   </div>
                 ` : ''}
                 <div class="total-line grand"><span>Grand Total</span><span>Rs.${formatAmount(grandTotal)}</span></div>
