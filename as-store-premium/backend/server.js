@@ -3816,13 +3816,72 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
       const nextSeq = (Number(lastCn?.id || 0)) + 1;
       const creditNoteNumber = `CN-${String(nextSeq).padStart(6, '0')}`;
 
-      // 5. Insert Credit Note
+      // 5. Deduct Return Amount from Pending Invoices
+      let remainingReturnToApply = totalAmount;
+      let usedAmount = 0;
+
+      // 5a. If specific sale_id provided, prioritize deducting from that invoice first
+      if (originalSale && money(originalSale.pending_amount) > 0) {
+        const alloc = Math.min(remainingReturnToApply, money(originalSale.pending_amount));
+        if (alloc > 0) {
+          const newPaid = money(money(originalSale.paid_amount) + alloc);
+          const newPending = Math.max(money(money(originalSale.total_amount) - newPaid), 0);
+          await tx.runQuery(
+            'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+            [newPaid, newPending, newPending <= 0 ? 'paid' : 'open', originalSale.id]
+          );
+          await tx.runQuery(
+            'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
+            [originalSale.id, alloc, returnDateStr, 'credit_note', `Deducted via Sales Return (${creditNoteNumber})`]
+          );
+          remainingReturnToApply = money(remainingReturnToApply - alloc);
+          usedAmount = money(usedAmount + alloc);
+        }
+      }
+
+      // 5b. If return value remains, allocate FIFO to any other open pending invoices for this customer
+      if (remainingReturnToApply > 0) {
+        const otherPendingSales = await tx.allRecords(
+          `SELECT * FROM sales WHERE customer_id = ? AND pending_amount > 0 ${sale_id ? 'AND id != ?' : ''} ORDER BY due_date ASC, id ASC FOR UPDATE`,
+          sale_id ? [customer_id, sale_id] : [customer_id]
+        );
+        for (const os of otherPendingSales) {
+          if (remainingReturnToApply <= 0) break;
+          const alloc = Math.min(remainingReturnToApply, money(os.pending_amount));
+          if (alloc > 0) {
+            const newPaid = money(money(os.paid_amount) + alloc);
+            const newPending = Math.max(money(money(os.total_amount) - newPaid), 0);
+            await tx.runQuery(
+              'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+              [newPaid, newPending, newPending <= 0 ? 'paid' : 'open', os.id]
+            );
+            await tx.runQuery(
+              'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
+              [os.id, alloc, returnDateStr, 'credit_note', `Deducted via Sales Return (${creditNoteNumber})`]
+            );
+            remainingReturnToApply = money(remainingReturnToApply - alloc);
+            usedAmount = money(usedAmount + alloc);
+          }
+        }
+      }
+
+      // 5c. If excess return amount remains after fully clearing all pending dues, credit to customer's advance_balance!
+      if (remainingReturnToApply > 0) {
+        await tx.runQuery(
+          'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
+          [remainingReturnToApply, customer_id]
+        );
+      }
+
+      const creditNoteStatus = remainingReturnToApply <= 0 ? 'redeemed' : (usedAmount > 0 ? 'partially_used' : 'active');
+
+      // 6. Insert Credit Note
       const cnInsert = await tx.runQuery(
         `INSERT INTO credit_notes (
           credit_note_number, shop_id, customer_id, sale_id, amount, used_amount, balance_amount,
           reason, status, return_date, created_by
-        ) VALUES (?, ?, ?, ?, ?, 0.00, ?, ?, 'active', ?, ?)`,
-        [creditNoteNumber, shopId, customer_id, sale_id || null, totalAmount, totalAmount, reason || 'Sales return', returnDateStr, req.user.id]
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [creditNoteNumber, shopId, customer_id, sale_id || null, totalAmount, usedAmount, remainingReturnToApply, reason || 'Sales return', creditNoteStatus, returnDateStr, req.user.id]
       );
       const creditNoteId = cnInsert.id;
 

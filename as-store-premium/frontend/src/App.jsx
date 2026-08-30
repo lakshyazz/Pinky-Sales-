@@ -8774,7 +8774,14 @@ function App() {
             currency={currency}
             formatDateDMY={formatDateDMY}
             onSuccess={async () => {
-              await loadTab(active, shopId);
+              await Promise.all([
+                loadTab('sales', shopId),
+                loadTab('customers', shopId),
+                loadTab('payments', shopId),
+                loadTab('dashboard', shopId),
+                loadTab('stock', shopId),
+                loadCore(),
+              ]);
               if (selectedPaymentCustomer) {
                 const updatedCust = (data.customers || []).find((c) => String(c.id) === String(selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id));
                 if (updatedCust) {
