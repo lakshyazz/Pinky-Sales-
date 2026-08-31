@@ -161,11 +161,16 @@ const isSessionError = (error) => (
   error?.status === 401
   || (error?.status === 403 && /session expired|invalid token|login again/i.test(error.message))
 );
-const inferToastTone = (message) => (
-  /unable|failed|error|wrong|invalid|required|cannot|choose|select|enter|no matching|not found|already in use|not enough|stock|exceed|must be|denied|unauthorized|forbidden|rejected/i.test(String(message || ''))
-    ? 'error'
-    : 'success'
-);
+const inferToastTone = (message) => {
+  const str = String(message || '');
+  if (/downloaded|saved|updated|created|added|transferred|cleared|shared|success|copied|received|generated|approved|completed|done|reset/i.test(str)) {
+    return 'success';
+  }
+  if (/unable|failed|error|wrong|invalid|cannot reach|denied|unauthorized|forbidden|rejected|not found|not enough|out of stock|already in use|must be/i.test(str)) {
+    return 'error';
+  }
+  return 'success';
+};
 
 const normalizeSession = (session) => {
   if (!session) return session;
@@ -6331,16 +6336,23 @@ function App() {
         <AnimatePresence>
           {toast && (
             <motion.div 
-              initial={{ opacity: 0, y: -20, scale: 0.97 }}
+              initial={{ opacity: 0, y: -24, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -20, scale: 0.97 }}
-              transition={{ duration: 0.2 }}
+              exit={{ opacity: 0, y: -20, scale: 0.95 }}
+              transition={{ type: 'spring', stiffness: 450, damping: 30 }}
               className={`toast ${toast.tone}`}
               role="status"
               aria-live="polite"
+              onClick={() => setToast(null)}
+              style={{ cursor: 'pointer' }}
+              title="Click to dismiss"
             >
-              {toast.tone === 'error' ? <AlertTriangle size={18} /> : <ShieldCheck size={18} />}
-              <span>{toast.message}</span>
+              {toast.tone === 'error' ? (
+                <AlertTriangle size={18} className="shrink-0 text-rose-600" />
+              ) : (
+                <CheckCircle2 size={18} className="shrink-0 text-emerald-600" />
+              )}
+              <span className="truncate max-w-xs sm:max-w-md md:max-w-xl">{toast.message}</span>
             </motion.div>
           )}
         </AnimatePresence>

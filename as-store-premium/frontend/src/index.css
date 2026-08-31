@@ -3840,18 +3840,25 @@ button:disabled {
 }
 
 .toast {
-  position: sticky;
-  top: 104px;
-  z-index: 12;
-  display: flex;
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 99999;
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  margin-bottom: 14px;
-  color: #166534;
-  background: rgba(220, 252, 231, 0.92);
-  border: 1px solid rgba(187, 247, 208, 0.88);
-  box-shadow: 0 14px 30px rgba(22, 101, 52, 0.12);
-  backdrop-filter: blur(10px);
+  gap: 10px;
+  padding: 10px 20px;
+  border-radius: 9999px;
+  font-size: 13.5px;
+  font-weight: 800;
+  color: #065f46;
+  background: rgba(236, 253, 245, 0.96);
+  border: 1.5px solid #a7f3d0;
+  box-shadow: 0 20px 35px -5px rgba(5, 150, 105, 0.25), 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+  backdrop-filter: blur(12px);
+  max-width: 90vw;
+  pointer-events: auto;
 }
 
 .toast svg {
@@ -3862,8 +3869,8 @@ button:disabled {
 .toast.error {
   color: #9f1239;
   background: rgba(255, 241, 242, 0.96);
-  border-color: rgba(253, 164, 175, 0.72);
-  box-shadow: 0 14px 30px rgba(159, 18, 57, 0.12);
+  border-color: #fecdd3;
+  box-shadow: 0 20px 35px -5px rgba(225, 29, 72, 0.25), 0 10px 15px -3px rgba(0, 0, 0, 0.05);
 }
 
 @keyframes toast-icon-in {
