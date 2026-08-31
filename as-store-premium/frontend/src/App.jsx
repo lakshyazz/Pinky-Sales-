@@ -2351,7 +2351,7 @@ function App() {
   const deferredPendingFilters = useDeferredValue(pendingFilters);
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
-  const [productPager, setProductPager] = useState(() => createPager(50));
+  const [productPager, setProductPager] = useState(() => createPager(5000));
   const [stockPager, setStockPager] = useState(() => createPager(50));
   const [customerPager, setCustomerPager] = useState(() => createPager(50));
   const [salesPager, setSalesPager] = useState(() => createPager(50));
@@ -3016,7 +3016,7 @@ function App() {
     try {
       const params = new URLSearchParams({
         page: String(page),
-        limit: String(productPager.limit),
+        limit: String(Math.max(productPager.limit || 5000, 5000)),
       });
       if (currentShop) {
         params.set('shop_id', String(currentShop));
@@ -5749,7 +5749,11 @@ function App() {
     try {
       showToast('Generating complete account statement...');
       const custId = customer.customer_id || customer.id;
-      const targetShop = currentShop || activeShop || { name: 'PINKY SALES', address: 'C-314, Pratik Arcade, Surat', phone: '+91 90995 69700' };
+      const targetShop = data.shops?.find(s => String(s.id) === String(customer.shop_id || shopId)) || { 
+        name: 'PINKY SALES', 
+        address: 'C-314, Pratik Arcade, Surat', 
+        phone: '+91 90995 69700' 
+      };
       
       let salesData = [];
       let customerData = customer;
@@ -5848,10 +5852,15 @@ function App() {
 
   const modelItems = role === 'customer' 
     ? data.catalog.filter((item) => matchesProductSearch(item, modelSearch)) 
-    : productPageItems;
+    : (modelSearch 
+        ? productPageItems.filter((item) => matchesProductSearch(item, modelSearch))
+        : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+
   const priceItems = role === 'customer' 
     ? data.catalog.filter((item) => matchesProductSearch(item, priceSearch)) 
-    : productPageItems;
+    : (priceSearch 
+        ? productPageItems.filter((item) => matchesProductSearch(item, priceSearch))
+        : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
 
   const allCategoryPool = role === 'customer' ? data.catalog : (data.products || []);
 

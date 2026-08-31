@@ -21,7 +21,7 @@ import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
 import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
 
-export function getProductStockCount(product) {
+function getProductStockCount(product) {
   if (!product) return 0;
   
   // 1. Direct computed numbers or string numbers
@@ -360,8 +360,61 @@ export default function PricesPage({
   else if (stockAdjustmentMode === 'deduct') calculatedResultStock = Math.max(0, currentStockForModal - numStockQty);
   else calculatedResultStock = numStockQty;
 
+  // Computed KPI Metrics for Stock & Prices
+  const totalStockUnits = useMemo(() => {
+    if (Array.isArray(stock) && stock.length > 0) {
+      return stock.reduce((sum, item) => sum + Number(item.quantity ?? item.available_stock ?? item.stock ?? item.warehouse_stock ?? 0), 0);
+    }
+    return consolidatedItems.reduce((sum, item) => sum + getEffectiveStock(item), 0);
+  }, [stock, consolidatedItems, stockOverrides]);
+
+  const stockRowsCount = Number(pager?.total || items?.length || consolidatedItems.length);
+  const catalogModelsCount = consolidatedItems.length || stockRowsCount;
+
+  const lowStockCount = useMemo(() => {
+    return consolidatedItems.filter((item) => {
+      const qty = getEffectiveStock(item);
+      return qty > 0 && qty <= 4;
+    }).length;
+  }, [consolidatedItems, stockOverrides]);
+
+  const outOfStockCount = useMemo(() => {
+    return consolidatedItems.filter((item) => getEffectiveStock(item) === 0).length;
+  }, [consolidatedItems, stockOverrides]);
+
   return (
-    <div className="space-y-6 animate-fadeIn pb-12">
+    <div className="space-y-5 animate-fadeIn pb-12">
+      {/* Floating KPI Stat Chips Bar */}
+      <div className="kpi-chip-group">
+        <div className="kpi-chip">
+          <span className="w-2 h-2 rounded-full bg-teal-500 animate-pulse"></span>
+          <span className="value">{totalStockUnits.toLocaleString('en-IN')}</span>
+          <span className="label">Total Units</span>
+        </div>
+        <div className="kpi-chip">
+          <span className="value">{stockRowsCount.toLocaleString('en-IN')}</span>
+          <span className="label">Stock Rows</span>
+        </div>
+        {catalogModelsCount > 0 && (
+          <div className="kpi-chip">
+            <span className="value">{catalogModelsCount.toLocaleString('en-IN')}</span>
+            <span className="label">Catalog Models</span>
+          </div>
+        )}
+        {lowStockCount > 0 && (
+          <div className="kpi-chip border-amber-200 bg-amber-50/60">
+            <span className="value text-amber-700">{lowStockCount}</span>
+            <span className="label text-amber-800">Low Stock</span>
+          </div>
+        )}
+        {outOfStockCount > 0 && (
+          <div className="kpi-chip border-rose-200 bg-rose-50/60">
+            <span className="value text-rose-700">{outOfStockCount}</span>
+            <span className="label text-rose-800">Out of Stock</span>
+          </div>
+        )}
+      </div>
+
       {/* Search and Action Bar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm">
         <div className="relative w-full sm:w-80">

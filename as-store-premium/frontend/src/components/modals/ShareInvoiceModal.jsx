@@ -12,7 +12,8 @@ import {
   ChevronRight,
   Phone,
   RotateCcw,
-  Sparkles
+  Sparkles,
+  Download
 } from 'lucide-react';
 import { 
   shareToWhatsAppService, 
@@ -40,6 +41,7 @@ export default function ShareInvoiceModal({
   formatDateDMY = (d) => d ? new Date(d).toLocaleDateString('en-GB') : 'N/A',
 }) {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('all');
+  const [docType, setDocType] = useState('invoice'); // 'invoice' | 'statement'
   const [copied, setCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [editableMessage, setEditableMessage] = useState('');
@@ -63,9 +65,10 @@ export default function ShareInvoiceModal({
     return rawList.filter(Boolean);
   }, [target]);
 
-  // Set initial selected invoice whenever target opens or changes
+  // Set initial selected invoice and default document type whenever modal opens
   useEffect(() => {
     if (target) {
+      setDocType('invoice');
       if (target.mode === 'single_invoice' && target.sale) {
         setSelectedInvoiceId(String(target.sale.id));
       } else if (invoices.length === 1) {
@@ -90,8 +93,53 @@ export default function ShareInvoiceModal({
   const totalPaidAll = invoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
   const totalPendingAll = Number(customer.pending_amount ?? invoices.reduce((acc, inv) => acc + Number(inv.pending_amount || 0), 0));
 
-  // Determine message type
-  const shareType = isAllSelected ? 'pending_summary' : 'single_invoice';
+  // Build Consolidated Sale object for multi-invoice tax invoice generation
+  const consolidatedSale = useMemo(() => {
+    if (!isAllSelected) return activeInvoice;
+    const allCustomerItems = [];
+    const allCustomerExpenses = [];
+    let totalCredit = 0;
+    let totalPaid = 0;
+    let totalPending = 0;
+
+    invoices.forEach((sale) => {
+      if (Array.isArray(sale.items)) {
+        allCustomerItems.push(...sale.items);
+      }
+      if (Array.isArray(sale.expenses)) {
+        allCustomerExpenses.push(...sale.expenses);
+      }
+      totalCredit += Number(sale.applied_credit_amount || 0);
+      totalPaid += Number(sale.paid_amount || 0);
+      totalPending += Number(sale.pending_amount || 0);
+    });
+
+    const firstSale = invoices[0] || {};
+    const lastSale = invoices[invoices.length - 1] || {};
+
+    return {
+      ...lastSale,
+      id: lastSale.id,
+      invoice_number: lastSale.invoice_number,
+      customer_id: customer.customer_id || customer.id || lastSale.customer_id,
+      customer_name: customerDisplayName,
+      mobile: customerMobile,
+      address: customer.address || lastSale.address,
+      gstin: customer.gstin || lastSale.gstin,
+      shop_id: shop?.id || lastSale.shop_id,
+      shop_name: shop?.name || lastSale.shop_name,
+      items: allCustomerItems,
+      expenses: allCustomerExpenses,
+      previous_balance: Number(firstSale.previous_balance || 0),
+      applied_credit_amount: totalCredit,
+      paid_amount: totalPaid,
+      pending_amount: totalPending,
+      consolidated: true,
+    };
+  }, [isAllSelected, activeInvoice, invoices, customer, customerDisplayName, customerMobile, shop]);
+
+  // Determine WhatsApp template message type
+  const shareType = isAllSelected ? (docType === 'statement' ? 'pending_summary' : 'single_invoice') : 'single_invoice';
 
   // Live formatted WhatsApp default message
   const defaultFormattedMessage = useMemo(() => {
@@ -103,13 +151,13 @@ export default function ShareInvoiceModal({
         total_amount: totalBilledAll,
         paid_amount: totalPaidAll,
       },
-      sale: activeInvoice,
+      sale: isAllSelected ? consolidatedSale : activeInvoice,
       shop,
       type: shareType,
     });
-  }, [customer, invoices, totalPendingAll, totalBilledAll, totalPaidAll, activeInvoice, shop, shareType]);
+  }, [customer, invoices, totalPendingAll, totalBilledAll, totalPaidAll, isAllSelected, consolidatedSale, activeInvoice, shop, shareType]);
 
-  // Synchronize default message & phone into editable state when switching selection
+  // Synchronize default message & phone into editable state when switching selection or docType
   useEffect(() => {
     setEditableMessage(defaultFormattedMessage);
   }, [defaultFormattedMessage]);
@@ -149,13 +197,13 @@ export default function ShareInvoiceModal({
    * 1. Native URI Scheme: whatsapp://send?phone=${cleanPhoneNumber}&text=${encodedMessage}
    * 2. Prevent Blank Tabs: Direct routing via window.location.href
    * 3. Data Formatting: Stripped clean digits + encodeURIComponent()
+   * 4. Downloads selected Document Type (Tax Invoice by default or Account Statement)
    */
   const handleShareWhatsAppAndPdf = async () => {
     const rawPhone = editablePhone || customerMobile || '';
     const cleanPhone = parseCleanPhoneNumber(rawPhone);
     const messagePayload = (editableMessage || defaultFormattedMessage || '').trim();
 
-    // Validation: ensure both phone number and message exist before proceeding
     if (!cleanPhone) {
       if (showToast) {
         showToast('⚠️ Missing phone number: Please provide a valid customer mobile number.');
@@ -170,28 +218,29 @@ export default function ShareInvoiceModal({
       return;
     }
 
-    // 1 & 3. Construct Native WhatsApp URL with clean digits and encodeURIComponent
     const encodedMessage = encodeURIComponent(messagePayload);
     const nativeWaUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedMessage}`;
 
     try {
       setSharing(true);
 
-      // Generate & Download PDF Document
+      // Generate & Download PDF Document based on user's docType selection
       let doc = null;
       let filename = '';
 
-      if (isAllSelected) {
+      if (docType === 'statement') {
         doc = generateStatementPDFDoc(
           { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
           invoices,
           shop
         );
         filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
-      } else if (activeInvoice) {
-        const invNo = activeInvoice.invoice_number || `INV-${String(activeInvoice.id || '1').padStart(6, '0')}`;
-        doc = generateInvoicePDFDoc(activeInvoice, customer, shop);
-        filename = `Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
+      } else {
+        // Default: Generate Tax Invoice PDF (Consolidated or Single)
+        const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
+        const invNo = saleToUse?.invoice_number || (isAllSelected ? 'Consolidated' : `INV-${String(saleToUse?.id || '1').padStart(6, '0')}`);
+        doc = generateInvoicePDFDoc(saleToUse, customer, shop);
+        filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
       }
 
       if (doc) {
@@ -208,7 +257,7 @@ export default function ShareInvoiceModal({
         }
       } catch {}
 
-      // 2. Prevent Blank Tabs: Trigger native app directly via window.location.href
+      // Trigger native WhatsApp directly without blank tab
       window.location.href = nativeWaUrl;
 
       // Record audit log
@@ -216,7 +265,7 @@ export default function ShareInvoiceModal({
         authedFetch('/audit', {
           method: 'POST',
           body: JSON.stringify({
-            action: `Shared ${shareType} via Native WhatsApp & PDF`,
+            action: `Shared ${docType} via Native WhatsApp & PDF`,
             entity_type: 'customer',
             entity_id: customer?.customer_id || customer?.id || activeInvoice?.customer_id || 0,
             details: `Sent to ${cleanPhone}`,
@@ -233,24 +282,38 @@ export default function ShareInvoiceModal({
     }
   };
 
-  const handleDownloadPdfOnly = () => {
+  /**
+   * Direct Download Tax Invoice PDF
+   */
+  const handleDownloadInvoicePdf = () => {
     try {
-      if (isAllSelected) {
-        const doc = generateStatementPDFDoc(
-          { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
-          invoices,
-          shop
-        );
-        doc.save(`Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`);
-        if (showToast) showToast('Statement PDF downloaded!');
-      } else if (activeInvoice) {
-        const invNo = activeInvoice.invoice_number || `INV-${String(activeInvoice.id || '1').padStart(6, '0')}`;
-        const doc = generateInvoicePDFDoc(activeInvoice, customer, shop);
-        doc.save(`Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`);
-        if (showToast) showToast(`Invoice ${invNo} PDF downloaded!`);
-      }
+      const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
+      if (!saleToUse) return;
+      const invNo = saleToUse.invoice_number || (isAllSelected ? 'Consolidated' : `INV-${String(saleToUse.id || '1').padStart(6, '0')}`);
+      const doc = generateInvoicePDFDoc(saleToUse, customer, shop);
+      const filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
+      doc.save(filename);
+      if (showToast) showToast(`📄 ${filename} downloaded!`);
     } catch (err) {
-      if (showToast) showToast(`PDF download failed: ${err.message || 'Error'}`);
+      if (showToast) showToast(`Invoice download failed: ${err.message || 'Error'}`);
+    }
+  };
+
+  /**
+   * Direct Download Account Statement PDF
+   */
+  const handleDownloadStatementPdf = () => {
+    try {
+      const doc = generateStatementPDFDoc(
+        { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
+        invoices,
+        shop
+      );
+      const filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+      doc.save(filename);
+      if (showToast) showToast(`📑 ${filename} downloaded!`);
+    } catch (err) {
+      if (showToast) showToast(`Statement download failed: ${err.message || 'Error'}`);
     }
   };
 
@@ -273,7 +336,6 @@ export default function ShareInvoiceModal({
 
     try {
       setSharing(true);
-      // Trigger native WhatsApp directly without blank tab
       window.location.href = nativeWaUrl;
       onClose();
     } catch (err) {
@@ -303,7 +365,7 @@ export default function ShareInvoiceModal({
             <div className="min-w-0 space-y-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-emerald-700">
-                  Send payment details
+                  Send Invoice & Payment Details
                 </span>
                 {invoices.length > 1 && (
                   <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-200">
@@ -360,15 +422,48 @@ export default function ShareInvoiceModal({
         {/* 2. Scrollable Body */}
         <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
           
+          {/* Document Type Selector: Invoice vs Statement */}
+          <section className="flex items-center justify-between gap-3 p-2 bg-slate-50 border border-slate-200/80 rounded-2xl flex-wrap">
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold text-slate-700 ml-1">Document Format:</span>
+            </div>
+            <div className="flex items-center gap-1.5 p-1 bg-white border border-slate-200 rounded-xl shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setDocType('invoice')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  docType === 'invoice'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <FileText size={13} />
+                <span>📄 Tax Invoice</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDocType('statement')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  docType === 'statement'
+                    ? 'bg-teal-700 text-white shadow-xs'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                }`}
+              >
+                <ReceiptText size={13} />
+                <span>📑 Account Statement</span>
+              </button>
+            </div>
+          </section>
+
           {/* Invoice Selector (Tabs/Dropdown if multiple invoices exist) */}
           {invoices.length > 1 && (
             <section className="space-y-3 rounded-2xl border border-slate-200 bg-slate-50/70 p-3.5">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                  <Layers size={14} className="text-emerald-600" /> What would you like to share?
+                  <Layers size={14} className="text-emerald-600" /> Choose Invoices:
                 </span>
-                <span className="text-[11px] text-slate-500">
-                  {isAllSelected ? 'Statement' : 'Individual invoice'}
+                <span className="text-[11px] text-slate-500 font-medium">
+                  {isAllSelected ? (docType === 'invoice' ? 'All Invoices (Consolidated)' : 'Complete Statement') : 'Single Invoice'}
                 </span>
               </div>
 
@@ -424,10 +519,10 @@ export default function ShareInvoiceModal({
             <section className="overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-lg shadow-slate-900/10">
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
                 <span className="text-[10px] text-slate-300 font-bold uppercase tracking-[0.14em]">
-                  Outstanding statement
+                  {docType === 'invoice' ? 'Consolidated Tax Invoice' : 'Outstanding Account Statement'}
                 </span>
                 <span className="text-[11px] text-emerald-300 font-bold">
-                  {invoices.length} Pending Invoices
+                  {invoices.length} Invoices Selected
                 </span>
               </div>
               <div className="grid grid-cols-3 divide-x divide-white/10 px-2 py-4 text-center">
@@ -551,15 +646,25 @@ export default function ShareInvoiceModal({
         {/* 4. Footer Actions */}
         <div className="p-3.5 sm:p-4 border-t border-slate-100 bg-slate-50/90 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
           
-          <div className="flex items-center gap-2">
-            {/* Download PDF Only */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Download Tax Invoice PDF */}
             <button
               type="button"
-              onClick={handleDownloadPdfOnly}
-              className="flex-1 sm:flex-none px-3 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-              title="Download PDF document directly"
+              onClick={handleDownloadInvoicePdf}
+              className="px-3 py-2.5 bg-white hover:bg-emerald-50 text-emerald-800 border border-slate-200 hover:border-emerald-300 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+              title="Download official Tax Invoice PDF directly"
             >
-              <FileText size={14} /> PDF Only
+              <FileText size={14} className="text-emerald-600" /> Invoice PDF
+            </button>
+
+            {/* Download Statement PDF */}
+            <button
+              type="button"
+              onClick={handleDownloadStatementPdf}
+              className="px-3 py-2.5 bg-white hover:bg-teal-50 text-teal-800 border border-slate-200 hover:border-teal-300 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+              title="Download complete chronological statement PDF directly"
+            >
+              <ReceiptText size={14} className="text-teal-600" /> Statement PDF
             </button>
 
             {/* Reminder Text Only */}
@@ -567,10 +672,10 @@ export default function ShareInvoiceModal({
               type="button"
               onClick={handleSendTextReminderOnly}
               disabled={sharing}
-              className="flex-1 sm:flex-none px-3 py-2.5 bg-white hover:bg-emerald-50 text-emerald-800 border border-slate-200 hover:border-emerald-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+              className="px-3 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
               title="Open WhatsApp with message text without generating PDF"
             >
-              <Send size={14} className="text-emerald-600" /> Text Only
+              <Send size={14} className="text-slate-500" /> Text Only
             </button>
           </div>
 
@@ -582,7 +687,7 @@ export default function ShareInvoiceModal({
             className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-black shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
           >
             <Send size={15} />
-            <span>{sharing ? 'Preparing Document...' : 'Share via WhatsApp & PDF'}</span>
+            <span>{sharing ? 'Preparing Document...' : `Share via WhatsApp & ${docType === 'invoice' ? 'Invoice' : 'Statement'}`}</span>
             {!sharing && <ChevronRight size={14} />}
           </button>
         </div>

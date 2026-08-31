@@ -423,9 +423,31 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
 
   // Keep ALL invoices in statement so complete history of customer purchases remains!
   const validInvoices = Array.isArray(invoices) && invoices.length > 0 ? invoices : [];
-  const totalBilled = validInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0) + openingBal;
+  const firstInvoice = validInvoices[0];
+  const lastInvoice = validInvoices[validInvoices.length - 1];
+
+  const totalBilled = validInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0) + (openingBal > 0 ? openingBal : 0);
   const totalPaid = validInvoices.reduce((s, inv) => s + Number(inv.paid_amount || 0), 0);
-  const totalDue = Number(customer?.pending_amount ?? (validInvoices.reduce((s, inv) => s + Number(inv.pending_amount || 0), 0) + openingBal));
+  const totalDue = Number(customer?.pending_amount ?? (validInvoices.reduce((s, inv) => s + Number(inv.pending_amount || 0), 0) + (openingBal > 0 ? openingBal : 0)));
+
+  // Calculate customer's remaining available advance / store credit balance
+  const prevBal = Number(firstInvoice?.previous_balance ?? firstInvoice?.old_balance ?? 0);
+  const rawCustomerAdvance = Number(customer?.advance_balance ?? customer?.advance ?? lastInvoice?.customer_advance_balance ?? lastInvoice?.advance_balance ?? 0);
+
+  let availableCreditBalance = rawCustomerAdvance;
+  if (lastInvoice?.closing_balance !== undefined && Number(lastInvoice.closing_balance) < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(Number(lastInvoice.closing_balance)));
+  } else if (prevBal < 0 && (totalBilled + prevBal) < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(totalBilled + prevBal));
+  } else if (prevBal < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(prevBal));
+  } else if (totalDue < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(totalDue));
+  } else if (openingBal < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(openingBal));
+  }
+
+  const hasCreditBalance = availableCreditBalance > 0;
 
   // 1. Outer Border Box
   doc.setDrawColor(119, 119, 119);
@@ -500,6 +522,14 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.text(':', 142, 42);
   doc.text(`${validInvoices.length} Invoices`, 145, 42);
 
+  if (hasCreditBalance) {
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 118, 110);
+    doc.text('Available Credit', 108, 47);
+    doc.text(':', 142, 47);
+    doc.text(`Rs. ${formatMoney(availableCreditBalance)} Cr`, 145, 47);
+  }
+
   // Divider after Meta
   doc.line(10, 52, 200, 52);
 
@@ -512,38 +542,72 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.text('Customer Purchase & Balance Summary', 13, 56.3);
   doc.line(10, 58, 200, 58);
 
-  // 3 Metric Blocks (58 to 72mm)
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(71, 85, 105);
-  doc.text('TOTAL INVOICED', 20, 63);
-  doc.text('TOTAL PAID / REPAID', 85, 63);
-  doc.text('TOTAL OUTSTANDING DUE', 145, 63);
+  // Summary Metrics Blocks (58 to 72mm)
+  if (hasCreditBalance) {
+    // 4 Column Layout: Invoiced, Paid, Outstanding Due, Remaining Credit
+    doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text('TOTAL INVOICED', 14, 63);
+    doc.text('TOTAL PAID / REPAID', 62, 63);
+    doc.text('OUTSTANDING DUE', 112, 63);
+    doc.text('REMAINING CREDIT / ADVANCE', 155, 63);
 
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(17, 17, 17);
-  doc.text(`Rs. ${formatMoney(totalBilled)}`, 20, 69);
-  doc.setTextColor(15, 118, 110);
-  doc.text(`Rs. ${formatMoney(totalPaid)}`, 85, 69);
-  doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
-  doc.text(`Rs. ${formatMoney(totalDue)}`, 145, 69);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(17, 17, 17);
+    doc.text(`Rs. ${formatMoney(totalBilled)}`, 14, 69);
+    doc.setTextColor(15, 118, 110);
+    doc.text(`Rs. ${formatMoney(totalPaid)}`, 62, 69);
+    doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
+    doc.text(totalDue > 0 ? `Rs. ${formatMoney(totalDue)}` : 'Rs. 0', 112, 69);
+    doc.setTextColor(15, 118, 110);
+    doc.text(`Rs. ${formatMoney(availableCreditBalance)} Cr`, 155, 69);
+  } else {
+    // 3 Column Layout
+    doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(71, 85, 105);
+    doc.text('TOTAL INVOICED', 20, 63);
+    doc.text('TOTAL PAID / REPAID', 85, 63);
+    doc.text('TOTAL OUTSTANDING DUE', 145, 63);
+
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(17, 17, 17);
+    doc.text(`Rs. ${formatMoney(totalBilled)}`, 20, 69);
+    doc.setTextColor(15, 118, 110);
+    doc.text(`Rs. ${formatMoney(totalPaid)}`, 85, 69);
+    doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
+    doc.text(`Rs. ${formatMoney(totalDue)}`, 145, 69);
+  }
 
   doc.line(10, 72, 200, 72);
 
   // Build Chronological Statement containing all purchases (with item breakdown) AND all payments (with dates)
   const chronologicalEvents = [];
 
-  // Opening Balance event
+  // Opening Balance event (Debit if pending, Credit if advance)
   if (openingBal > 0) {
     chronologicalEvents.push({
       date: '2026-01-01',
       dateFormatted: 'Opening',
       ref: 'OPENING BAL',
       type: 'Opening Balance',
-      particulars: 'Carry Forward (Opening) Balance',
+      particulars: 'Carry Forward (Opening) Debit Balance',
       debit: openingBal,
       credit: 0,
+    });
+  } else if (prevBal < 0 || openingBal < 0) {
+    const openingCredit = Math.abs(prevBal < 0 ? prevBal : openingBal);
+    chronologicalEvents.push({
+      date: '2026-01-01',
+      dateFormatted: 'Opening',
+      ref: 'ADVANCE BAL',
+      type: 'Advance Deposit',
+      particulars: 'Previous Advance / Store Credit Balance Remaining with Shop',
+      debit: 0,
+      credit: openingCredit,
     });
   }
 
@@ -631,6 +695,10 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   let runningBalance = 0;
   const statementRows = chronologicalEvents.map((evt, idx) => {
     runningBalance = runningBalance + evt.debit - evt.credit;
+    const balanceDisplay = runningBalance < 0 
+      ? `Rs. ${formatMoney(Math.abs(runningBalance))} Cr`
+      : (runningBalance > 0 ? `Rs. ${formatMoney(runningBalance)}` : 'Rs. 0');
+
     return [
       idx + 1,
       evt.dateFormatted,
@@ -638,7 +706,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
       evt.particulars,
       evt.debit > 0 ? `Rs. ${formatMoney(evt.debit)}` : '-',
       evt.credit > 0 ? `Rs. ${formatMoney(evt.credit)}` : '-',
-      `Rs. ${formatMoney(runningBalance)}`,
+      balanceDisplay,
     ];
   });
 
@@ -668,7 +736,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
       3: { cellWidth: 'auto' },
       4: { cellWidth: 26, halign: 'right', fontStyle: 'bold' },
       5: { cellWidth: 26, halign: 'right', fontStyle: 'bold', textColor: [15, 118, 110] },
-      6: { cellWidth: 28, halign: 'right', fontStyle: 'bold', textColor: [225, 29, 72] },
+      6: { cellWidth: 28, halign: 'right', fontStyle: 'bold', textColor: [15, 118, 110] },
     },
     didDrawPage: (data) => {
       // Re-draw outer border on subsequent pages
@@ -683,15 +751,25 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   const finalY = (doc.lastAutoTable?.finalY || 150) + 6;
   const currentY = Math.min(finalY, 260);
 
+  let summaryLine = `Total Invoiced: Rs. ${formatMoney(totalBilled)}   |   Total Paid: Rs. ${formatMoney(totalPaid)}`;
+  if (totalDue > 0) {
+    summaryLine += `   |   Net Outstanding Due: Rs. ${formatMoney(totalDue)}`;
+  } else {
+    summaryLine += `   |   Net Balance Due: Rs. 0`;
+  }
+  if (hasCreditBalance) {
+    summaryLine += `   |   Available Credit Balance: Rs. ${formatMoney(availableCreditBalance)} Cr`;
+  }
+
   doc.setFontSize(8);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
-  doc.text(`Total Invoiced: Rs. ${formatMoney(totalBilled)}   |   Total Paid: Rs. ${formatMoney(totalPaid)}   |   Net Closing Balance Due: Rs. ${formatMoney(runningBalance)}`, 13, currentY);
+  doc.text(summaryLine, 13, currentY);
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
   doc.setFontSize(7.5);
-  doc.text('This is an official computer-generated statement of customer purchases, bought items, and repayment receipts.', 13, currentY + 4);
+  doc.text('This is an official computer-generated statement of customer purchases, bought items, repayments, and remaining credit.', 13, currentY + 4);
   doc.text('Please verify all entries. Thank you for your business.', 13, currentY + 8);
 
   const sigY = Math.min(currentY + 18, 276);
