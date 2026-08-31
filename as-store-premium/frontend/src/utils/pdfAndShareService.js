@@ -445,10 +445,10 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.text(`Phone: ${shopPhone}`, 13, 25.5);
   doc.text('Gujarat, India', 13, 29.5);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(20);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(16);
   doc.setTextColor(17, 17, 17);
-  doc.text('ACCOUNT STATEMENT', 197, 19, { align: 'right' });
+  doc.text('COMPLETE ACCOUNT STATEMENT', 197, 19, { align: 'right' });
 
   // Divider after Header
   doc.setDrawColor(153, 153, 153);
@@ -498,7 +498,7 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(17, 17, 17);
   doc.text(':', 142, 42);
-  doc.text(String(validInvoices.length), 145, 42);
+  doc.text(`${validInvoices.length} Invoices`, 145, 42);
 
   // Divider after Meta
   doc.line(10, 52, 200, 52);
@@ -531,155 +531,175 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
 
   doc.line(10, 72, 200, 72);
 
-  // Invoices Table
-  const tableRows = validInvoices.map((inv, idx) => {
-    const invNo = inv.invoice_number || `INV-${String(inv.id || idx + 1).padStart(6, '0')}`;
-    const invDate = formatDMY(inv.invoice_date || inv.sale_date);
-    const isCash = String(inv.payment_mode || '').trim().toLowerCase() === 'cash';
-    const dueDate = isCash ? 'Immediate (Cash)' : (inv.due_date ? formatDMY(inv.due_date) : 'On Receipt');
-    const itemsCount = inv.items?.length || inv.quantity || 1;
-    const invTotal = Number(inv.total_amount || 0);
-    const invPaid = Number(inv.paid_amount || 0);
-    const invPending = Number(inv.pending_amount || 0);
-    const isPaid = invPending <= 0;
+  // Build Chronological Statement containing all purchases (with item breakdown) AND all payments (with dates)
+  const chronologicalEvents = [];
 
+  // Opening Balance event
+  if (openingBal > 0) {
+    chronologicalEvents.push({
+      date: '2026-01-01',
+      dateFormatted: 'Opening',
+      ref: 'OPENING BAL',
+      type: 'Opening Balance',
+      particulars: 'Carry Forward (Opening) Balance',
+      debit: openingBal,
+      credit: 0,
+    });
+  }
+
+  // Purchases events
+  validInvoices.forEach((inv, idx) => {
+    const invNo = inv.invoice_number || `INV-${String(inv.id || idx + 1).padStart(6, '0')}`;
+    const invDate = inv.invoice_date || inv.sale_date || '';
+    
+    // Format list of items bought
+    let itemsText = '';
+    if (Array.isArray(inv.items) && inv.items.length > 0) {
+      itemsText = inv.items.map((it) => {
+        const q = it.quantity || 1;
+        const r = Number(it.rate || it.unit_price || (it.total_price ? it.total_price / q : 0));
+        const name = it.custom_product_name || it.short_name || it.product_name || it.name || 'Item';
+        const brand = it.custom_brand_name || it.brand_name || it.brand || '';
+        const brandStr = brand ? ` [${brand}]` : '';
+        const colStr = it.colour ? ` (${it.colour})` : '';
+        return `• ${name}${brandStr}${colStr} - ${q} pcs @ Rs. ${formatMoney(r)}`;
+      }).join('\n');
+    } else {
+      const prodName = inv.product_name || inv.short_name || 'Purchase Items';
+      itemsText = `• ${prodName} (${inv.quantity || 1} pcs)`;
+    }
+
+    if (Array.isArray(inv.expenses) && inv.expenses.length > 0) {
+      const expText = inv.expenses.map(e => `• Extra: ${e.expense_name || e.expense_type} (+Rs. ${formatMoney(e.amount)})`).join('\n');
+      itemsText += `\n${expText}`;
+    }
+
+    chronologicalEvents.push({
+      date: invDate,
+      dateFormatted: formatDMY(invDate),
+      ref: invNo,
+      type: 'Purchase',
+      particulars: `Purchase: ${invNo}\n${itemsText}`,
+      debit: Number(inv.total_amount || 0),
+      credit: 0,
+    });
+
+    // Credit Note / Applied Credit
+    if (Number(inv.applied_credit_amount || 0) > 0) {
+      chronologicalEvents.push({
+        date: invDate,
+        dateFormatted: formatDMY(invDate),
+        ref: invNo,
+        type: 'Credit Note',
+        particulars: `Credit Note / Advance Adjusted on ${invNo}`,
+        debit: 0,
+        credit: Number(inv.applied_credit_amount || 0),
+      });
+    }
+
+    // Payment Events
+    if (Array.isArray(inv.payments) && inv.payments.length > 0) {
+      inv.payments.forEach((pm) => {
+        const pmDate = pm.payment_date || invDate;
+        chronologicalEvents.push({
+          date: pmDate,
+          dateFormatted: formatDMY(pmDate),
+          ref: invNo,
+          type: 'Payment',
+          particulars: `Payment received via ${String(pm.payment_mode || 'Cash').toUpperCase()}${pm.note ? ` (${pm.note})` : ''} on ${invNo}`,
+          debit: 0,
+          credit: Number(pm.amount || 0),
+        });
+      });
+    } else if (Number(inv.paid_amount || 0) > 0) {
+      const isCash = String(inv.payment_mode || '').trim().toLowerCase() === 'cash';
+      chronologicalEvents.push({
+        date: invDate,
+        dateFormatted: formatDMY(invDate),
+        ref: invNo,
+        type: 'Payment',
+        particulars: `Payment received via ${isCash ? 'CASH' : (inv.payment_mode || 'DIRECT')} on ${invNo}`,
+        debit: 0,
+        credit: Number(inv.paid_amount || 0),
+      });
+    }
+  });
+
+  // Sort chronological events by date ascending
+  chronologicalEvents.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  let runningBalance = 0;
+  const statementRows = chronologicalEvents.map((evt, idx) => {
+    runningBalance = runningBalance + evt.debit - evt.credit;
     return [
       idx + 1,
-      invNo,
-      invDate,
-      dueDate,
-      `${itemsCount} items`,
-      formatMoney(invTotal),
-      formatMoney(invPaid),
-      isPaid ? '0 (PAID)' : formatMoney(invPending),
+      evt.dateFormatted,
+      evt.ref,
+      evt.particulars,
+      evt.debit > 0 ? `Rs. ${formatMoney(evt.debit)}` : '-',
+      evt.credit > 0 ? `Rs. ${formatMoney(evt.credit)}` : '-',
+      `Rs. ${formatMoney(runningBalance)}`,
     ];
   });
 
-  if (openingBal > 0) {
-    tableRows.push([
-      tableRows.length + 1,
-      'OPENING BAL',
-      '-',
-      'Immediate',
-      'Carry Forward Balance',
-      formatMoney(openingBal),
-      '0',
-      formatMoney(openingBal),
-    ]);
-  }
-
   autoTable(doc, {
-    startY: 72,
+    startY: 74,
     margin: { left: 10, right: 10 },
-    head: [['#', 'Invoice No', 'Date', 'Due Date', 'Products', 'Total', 'Paid', 'Pending Balance']],
-    body: tableRows,
-    theme: 'plain',
+    head: [['#', 'Date', 'Ref / Inv', 'Bought Items & Payment Details', 'Debit (Billed)', 'Credit (Paid)', 'Running Balance']],
+    body: statementRows,
+    theme: 'grid',
     headStyles: {
-      fillColor: [242, 242, 242],
-      textColor: [17, 17, 17],
-      fontSize: 8.5,
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontSize: 8,
       fontStyle: 'bold',
-      lineWidth: 0.25,
-      lineColor: [153, 153, 153],
       cellPadding: 2,
     },
     bodyStyles: {
       textColor: [17, 17, 17],
-      fontSize: 8,
-      lineWidth: 0.25,
-      lineColor: [153, 153, 153],
+      fontSize: 7.5,
       cellPadding: 2,
+      lineColor: [226, 232, 240],
     },
     columnStyles: {
-      0: { cellWidth: 10, halign: 'center' },
-      1: { cellWidth: 26, fontStyle: 'bold' },
-      2: { cellWidth: 22 },
-      3: { cellWidth: 26 },
-      4: { cellWidth: 22, halign: 'center' },
-      5: { cellWidth: 28, halign: 'right' },
-      6: { cellWidth: 26, halign: 'right' },
-      7: { cellWidth: 30, halign: 'right', fontStyle: 'bold' },
+      0: { cellWidth: 8, halign: 'center' },
+      1: { cellWidth: 20 },
+      2: { cellWidth: 22, fontStyle: 'bold' },
+      3: { cellWidth: 'auto' },
+      4: { cellWidth: 26, halign: 'right', fontStyle: 'bold' },
+      5: { cellWidth: 26, halign: 'right', fontStyle: 'bold', textColor: [15, 118, 110] },
+      6: { cellWidth: 28, halign: 'right', fontStyle: 'bold', textColor: [225, 29, 72] },
     },
+    didDrawPage: (data) => {
+      // Re-draw outer border on subsequent pages
+      if (data.pageNumber > 1) {
+        doc.setDrawColor(119, 119, 119);
+        doc.setLineWidth(0.3);
+        doc.rect(10, 10, 190, 277);
+      }
+    }
   });
 
-  // Extract all repayment events across invoices to display exact repayment dates
-  const allPayments = validInvoices.flatMap((inv) => {
-    const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
-    const pms = Array.isArray(inv.payments) ? inv.payments : [];
-    return pms.map((pm) => ({
-      date: pm.payment_date || inv.invoice_date || inv.sale_date,
-      invoiceNo,
-      mode: pm.payment_mode || 'Cash',
-      note: pm.note || 'Repayment received',
-      amount: Number(pm.amount || 0),
-    }));
-  }).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const finalY = (doc.lastAutoTable?.finalY || 150) + 6;
+  const currentY = Math.min(finalY, 260);
 
-  let currentY = (doc.lastAutoTable?.finalY || 150) + 6;
-
-  if (allPayments.length > 0 && currentY < 230) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(15, 118, 110);
-    doc.text('Repayments & Collections Received', 13, currentY);
-    currentY += 2;
-
-    const paymentRows = allPayments.map((p, pIdx) => [
-      pIdx + 1,
-      formatDMY(p.date),
-      p.invoiceNo,
-      String(p.mode).toUpperCase(),
-      p.note,
-      `Rs. ${formatMoney(p.amount)}`
-    ]);
-
-    autoTable(doc, {
-      startY: currentY,
-      margin: { left: 10, right: 10 },
-      head: [['#', 'Payment Date', 'Invoice Ref', 'Mode', 'Particulars / Note', 'Amount Paid']],
-      body: paymentRows,
-      theme: 'plain',
-      headStyles: {
-        fillColor: [240, 253, 244],
-        textColor: [22, 101, 52],
-        fontSize: 8,
-        fontStyle: 'bold',
-        lineWidth: 0.2,
-        lineColor: [187, 247, 208],
-        cellPadding: 1.8,
-      },
-      bodyStyles: {
-        textColor: [17, 17, 17],
-        fontSize: 7.5,
-        lineWidth: 0.2,
-        lineColor: [226, 232, 240],
-        cellPadding: 1.8,
-      },
-      columnStyles: {
-        0: { cellWidth: 10, halign: 'center' },
-        1: { cellWidth: 26 },
-        2: { cellWidth: 26, fontStyle: 'bold' },
-        3: { cellWidth: 22 },
-        4: { cellWidth: 'auto' },
-        5: { cellWidth: 30, halign: 'right', fontStyle: 'bold', textColor: [22, 101, 52] },
-      },
-    });
-
-    currentY = (doc.lastAutoTable?.finalY || currentY) + 6;
-  }
-
-  const finalY = Math.min(currentY, 260);
   doc.setFontSize(8);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Total Invoiced: Rs. ${formatMoney(totalBilled)}   |   Total Paid: Rs. ${formatMoney(totalPaid)}   |   Net Closing Balance Due: Rs. ${formatMoney(runningBalance)}`, 13, currentY);
+
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(100, 116, 139);
-  doc.text('This is an official computer-generated statement of customer purchases and repayments.', 13, finalY);
-  doc.text('Please verify all entries. Thank you for your business.', 13, finalY + 4);
+  doc.setFontSize(7.5);
+  doc.text('This is an official computer-generated statement of customer purchases, bought items, and repayment receipts.', 13, currentY + 4);
+  doc.text('Please verify all entries. Thank you for your business.', 13, currentY + 8);
 
-  const sigY = Math.min(finalY + 16, 275);
+  const sigY = Math.min(currentY + 18, 276);
   doc.setDrawColor(153, 153, 153);
   doc.setLineWidth(0.25);
   doc.line(135, sigY, 195, sigY);
-  doc.text('Authorized Signatory', 165, sigY + 5, { align: 'center' });
+  doc.setFontSize(8);
+  doc.text('Authorized Signatory', 165, sigY + 4, { align: 'center' });
 
   return doc;
 };
@@ -838,50 +858,14 @@ export const formatWhatsAppMessage = ({
     const paidAmount = Number(inv.paid_amount || 0);
     const pendingAmount = Number(inv.pending_amount ?? (totalAmount - paidAmount));
     
-    // Extract Items
-    const items = Array.isArray(inv.items) && inv.items.length > 0
-      ? inv.items
-      : [{
-          product_name: inv.product_name || inv.name || inv.short_name || 'Product Item',
-          quantity: inv.quantity || 1,
-          unit_price: Number(inv.total_amount || 0) / Math.max(1, Number(inv.quantity || 1)),
-          total_price: inv.total_amount || 0,
-        }];
+    let msg = `Dear ${custName},\n\nGreetings from *${shopName}*!\n\n📄 *TAX INVOICE: ${invNo}*\n📅 *Invoice Date:* ${invDate}\n${termsStr}⏰ *Due Date:* ${dueDate}\n\n`;
 
-    const itemsSummary = items.map((it, idx) => {
-      const q = Number(it.quantity ?? it.qty ?? 1);
-      const r = Number(it.rate ?? it.unit_price ?? it.selling_price ?? (it.total_price ? Number(it.total_price) / q : 0));
-      const lineTot = Number(it.total_price ?? it.total_amount ?? it.amount ?? (r * q));
-      const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || `Item ${idx + 1}`;
-      const shortName = String(rawShort).split('/')[0].split(',')[0].trim();
-      const brandName = getBrandName(it, inv);
-      const brandStr = brandName ? ` [${brandName}]` : '';
-      const colourStr = it.colour && String(it.colour).trim()
-        ? (String(it.colour).trim().startsWith('[') ? String(it.colour).trim() : `[ ${String(it.colour).trim()} ]`)
-        : '';
-      return `  • ${shortName}${colourStr ? ` ${colourStr}` : ''}${brandStr ? ` ${brandStr}` : ''} (Qty: ${q} pcs) - Rs. ${formatMoney(lineTot)}`;
-    }).join('\n');
-
-    let msg = `Dear ${custName},\n\nGreetings from *${shopName}*!\n\n📄 *TAX INVOICE: ${invNo}*\n📅 *Invoice Date:* ${invDate}\n${termsStr}⏰ *Due Date:* ${dueDate}\n\n*Items Purchased:*\n${itemsSummary}\n\n`;
-    
-    const expenses = Array.isArray(inv.expenses) ? inv.expenses : [];
-    if (expenses.length > 0) {
-      const expList = expenses.map(e => `  • ${e.expense_name || e.expense_type}: Rs. ${formatMoney(e.amount)}`).join('\n');
-      msg += `*Extra Expenses:*\n${expList}\n\n`;
-    }
-
-    msg += `💰 *Invoice Total:* Rs. ${formatMoney(totalAmount)}\n`;
-    if (Number(inv.advance_applied || 0) > 0) {
-      msg += `💳 *Paid via Store Credit / Advance:* Rs. ${formatMoney(inv.advance_applied)}\n`;
-    }
-    if (paidAmount > 0) {
-      msg += `✅ *Amount Paid:* Rs. ${formatMoney(paidAmount)}\n`;
-    }
     if (pendingAmount > 0) {
       msg += `⚠️ *Balance Due:* Rs. ${formatMoney(pendingAmount)}\n`;
     } else {
       msg += `✨ *Payment Status:* Fully Paid\n`;
     }
+
     const prevBal = Number(inv?.previous_balance ?? inv?.old_balance ?? 0);
     const remainingCredit = (inv.closing_balance !== undefined && Number(inv.closing_balance) < 0)
       ? Math.abs(Number(inv.closing_balance))
@@ -952,6 +936,21 @@ export const formatWhatsAppMessage = ({
 
 
 /**
+ * Clean and parse customer phone number to contain only digits.
+ * If 10 digits without country code, prepends standard Indian country code 91.
+ */
+export const parseCleanPhoneNumber = (rawPhone) => {
+  if (!rawPhone) return '';
+  // Strip all non-numeric characters (spaces, dashes, plus signs, brackets, parentheses)
+  const digitsOnly = String(rawPhone).replace(/\D/g, '');
+  if (!digitsOnly) return '';
+  if (digitsOnly.length === 10) {
+    return `91${digitsOnly}`;
+  }
+  return digitsOnly;
+};
+
+/**
  * 5. WHATSAPP + INVOICE ATTACHMENT SHARING SERVICE
  */
 export const shareToWhatsAppService = async ({
@@ -959,14 +958,15 @@ export const shareToWhatsAppService = async ({
   type = 'invoice_and_reminder', // 'single_invoice' | 'invoice_and_reminder' | 'invoice_pdf' | 'invoice_reminder_only' | 'pending_summary' | 'statement' | 'ledger' | 'reminder_only' | 'pending_reminder_only'
   sale = null,
   shop = {},
+  customMessage = '',
+  customPhone = '',
+  preOpenedWindow = null,
   authedFetch,
   showToast,
 }) => {
   const custName = customer?.customer_name || customer?.name || sale?.customer_name || 'Customer';
-  const rawMobile = String(customer?.mobile || sale?.mobile || '').replace(/\D/g, '');
-  const cleanMobile = rawMobile.startsWith('91') && rawMobile.length > 10
-    ? rawMobile
-    : (rawMobile.length === 10 ? `91${rawMobile}` : rawMobile);
+  const rawMobile = customPhone || customer?.mobile || sale?.mobile || '';
+  const cleanMobile = parseCleanPhoneNumber(rawMobile);
 
   const isSingle = Boolean(
     sale || 
@@ -980,10 +980,25 @@ export const shareToWhatsAppService = async ({
   const invNo = primaryInvoice?.invoice_number || `INV-${String(primaryInvoice?.id || '000001').padStart(6, '0')}`;
   const totalPending = Number(customer?.pending_amount ?? sale?.pending_amount ?? 0);
 
-  // 1. Build Formatted WhatsApp Message
-  const message = formatWhatsAppMessage({ customer, sale, shop, type });
+  // 1. Build or Use Formatted WhatsApp Message
+  const message = (customMessage && customMessage.trim()) 
+    ? customMessage.trim() 
+    : formatWhatsAppMessage({ customer, sale, shop, type });
 
-  // 2. Generate Corresponding PDF Document
+  // 2. Validate phone number and message
+  if (!cleanMobile) {
+    if (preOpenedWindow && !preOpenedWindow.closed) preOpenedWindow.close();
+    if (showToast) showToast('Missing phone number: Please provide a valid customer phone number.');
+    return;
+  }
+
+  if (!message) {
+    if (preOpenedWindow && !preOpenedWindow.closed) preOpenedWindow.close();
+    if (showToast) showToast('Missing message: Message content cannot be empty.');
+    return;
+  }
+
+  // 3. Generate Corresponding PDF Document
   let doc = null;
   let filename = '';
 
@@ -1000,7 +1015,11 @@ export const shareToWhatsAppService = async ({
     filename = `Invoice_${invNo}_${custName.replace(/\s+/g, '_')}.pdf`;
   }
 
-  // 3. Native File Sharing (Web Share API) or WhatsApp Web Fallback
+  // 4. Encode message payload and construct Native WhatsApp URL
+  const encodedMessage = encodeURIComponent(message);
+  const nativeWaUrl = `whatsapp://send?phone=${cleanMobile}&text=${encodedMessage}`;
+
+  // 5. Handle File Generation and Native Sharing or Native WhatsApp Trigger
   try {
     if (doc) {
       const pdfBlob = doc.output('blob');
@@ -1027,12 +1046,14 @@ export const shareToWhatsAppService = async ({
           }
           return;
         } catch (err) {
-          if (err.name === 'AbortError') return;
+          if (err.name === 'AbortError') {
+            return;
+          }
           console.warn('Native share failed, proceeding with fallback download:', err);
         }
       }
 
-      // Fallback: Automatic Download + WhatsApp Web Trigger
+      // Fallback: Automatic Download + WhatsApp Trigger
       doc.save(filename);
       if (showToast) {
         showToast(`📄 ${filename} downloaded! Attach in WhatsApp.`);
@@ -1046,22 +1067,8 @@ export const shareToWhatsAppService = async ({
       }
     } catch {}
 
-    // 4. Open WhatsApp with pre-filled message
-    const waUrl = cleanMobile
-      ? `https://wa.me/${cleanMobile}?text=${encodeURIComponent(message)}`
-      : `https://wa.me/?text=${encodeURIComponent(message)}`;
-
-    const newWindow = window.open(waUrl, '_blank');
-    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
-      // If popup was blocked by browser
-      const link = document.createElement('a');
-      link.href = waUrl;
-      link.target = '_blank';
-      link.rel = 'noreferrer';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
+    // 6. Direct routing to native WhatsApp application without spawning blank tabs
+    window.location.href = nativeWaUrl;
 
     if (authedFetch) {
       authedFetch('/audit', {

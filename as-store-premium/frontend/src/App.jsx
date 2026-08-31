@@ -5738,6 +5738,60 @@ function App() {
     }
   };
 
+  /**
+   * Generates and opens the Complete Account Statement PDF detailing:
+   * 1. All purchases & exact bought items with quantities and line totals
+   * 2. All payment receipts with exact payment dates, modes, and reference notes
+   * 3. Date-by-date running balance progression
+   */
+  const printCustomerStatementPDF = async (customer) => {
+    if (!customer) return;
+    try {
+      showToast('Generating complete account statement...');
+      const custId = customer.customer_id || customer.id;
+      const targetShop = currentShop || activeShop || { name: 'PINKY SALES', address: 'C-314, Pratik Arcade, Surat', phone: '+91 90995 69700' };
+      
+      let salesData = [];
+      let customerData = customer;
+      let shopData = targetShop;
+
+      try {
+        const params = new URLSearchParams({
+          customerId: String(custId),
+          shopId: String(customer.shop_id || shopId || targetShop.id || 1),
+        });
+        const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
+        if (resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
+          salesData = resp.sales;
+          if (resp.customer) customerData = { ...customer, ...resp.customer };
+          if (resp.shop) shopData = { ...targetShop, ...resp.shop };
+        }
+      } catch (err) {
+        console.warn('Backend customer invoice fetch error, falling back to local records:', err);
+      }
+
+      if (!salesData.length) {
+        salesData = Array.isArray(customer.items) && customer.items.length > 0 
+          ? customer.items 
+          : (Array.isArray(customer.invoices) && customer.invoices.length > 0 ? customer.invoices : (customer.sale ? [customer.sale] : [customer]));
+      }
+
+      if (!salesData.length || (salesData.length === 1 && !salesData[0]?.id && !salesData[0]?.total_amount)) {
+        showToast('No purchase or payment history found for this customer');
+        return;
+      }
+
+      const doc = generateStatementPDFDoc(customerData, salesData, shopData);
+      const pdfBlob = doc.output('blob');
+      const blobUrl = URL.createObjectURL(pdfBlob);
+      window.open(blobUrl, '_blank');
+      showToast('Complete Statement opened in new tab!');
+    } catch (error) {
+      console.error('Failed to generate statement:', error);
+      showToast(error.message || 'Unable to prepare complete statement');
+    }
+  };
+
   const productPageItems = role === 'customer'
     ? data.catalog
     : productPager.loaded
@@ -6915,6 +6969,27 @@ function App() {
                                 </td>
                                 <td className="py-3.5 px-4 text-right">
                                   <div className="flex items-center justify-end gap-1.5">
+                                    {/* Get Statement Button */}
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const custRecord = {
+                                          ...customer,
+                                          customer_id: customer.id,
+                                          customer_name: customer.name,
+                                          items: allCustomerSales,
+                                          pending_amount: pendingVal,
+                                          total_amount: allCustomerSales.reduce((s, a) => s + Number(a.total_amount || 0), 0),
+                                          paid_amount: allCustomerSales.reduce((s, a) => s + Number(a.paid_amount || 0), 0),
+                                        };
+                                        printCustomerStatementPDF(custRecord);
+                                      }}
+                                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 transition-colors cursor-pointer shadow-2xs"
+                                      title="Download / View Complete Customer Statement (All Purchases & Payments with Dates)"
+                                    >
+                                      <ReceiptText size={13} /> Get Statement
+                                    </button>
+
                                     {/* View Detail Button */}
                                     <button
                                       type="button"
@@ -7627,7 +7702,7 @@ function App() {
                                     {/* Customer Invoice Statement Print */}
                                     <button
                                       type="button"
-                                      onClick={() => printCustomerInvoicePDF(item)}
+                                      onClick={() => printCustomerStatementPDF(item)}
                                       className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl transition-all cursor-pointer"
                                       title="Print Complete Statement"
                                     >
@@ -7693,9 +7768,14 @@ function App() {
                             <h3 className="text-lg font-black text-slate-900">
                               {selectedPaymentCustomer.customer_name}
                             </h3>
-                            <span className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-teal-50 text-teal-700 border border-teal-200">
+                            <button
+                              type="button"
+                              onClick={() => printCustomerStatementPDF(selectedPaymentCustomer)}
+                              className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-all flex items-center gap-1 cursor-pointer"
+                              title="Download / View Complete Customer Ledger Statement"
+                            >
                               Customer Ledger
-                            </span>
+                            </button>
                             <button
                               type="button"
                               onClick={() => openSalesReturnModal(selectedPaymentCustomer)}
@@ -7805,7 +7885,7 @@ function App() {
                                 </h4>
                                 <button
                                   type="button"
-                                  onClick={() => printCustomerInvoicePDF(selectedPaymentCustomer)}
+                                  onClick={() => printCustomerStatementPDF(selectedPaymentCustomer)}
                                   className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer"
                                 >
                                   <ReceiptText size={13} /> Complete Statement

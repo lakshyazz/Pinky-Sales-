@@ -9,11 +9,15 @@ import {
   Share2, 
   Layers,
   MessageCircle,
-  ChevronRight
+  ChevronRight,
+  Phone,
+  RotateCcw,
+  Sparkles
 } from 'lucide-react';
 import { 
   shareToWhatsAppService, 
   formatWhatsAppMessage, 
+  parseCleanPhoneNumber,
   generateInvoicePDFDoc, 
   generateStatementPDFDoc,
   getBrandName
@@ -38,6 +42,9 @@ export default function ShareInvoiceModal({
   const [selectedInvoiceId, setSelectedInvoiceId] = useState('all');
   const [copied, setCopied] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [editableMessage, setEditableMessage] = useState('');
+  const [editablePhone, setEditablePhone] = useState('');
+  const [isEditingPhone, setIsEditingPhone] = useState(false);
 
   // Extract customer and invoices list
   const customer = target?.customer || {};
@@ -70,8 +77,6 @@ export default function ShareInvoiceModal({
     }
   }, [target, invoices]);
 
-  if (!isOpen || !target) return null;
-
   const isAllSelected = selectedInvoiceId === 'all';
   const activeInvoice = isAllSelected 
     ? null 
@@ -88,24 +93,47 @@ export default function ShareInvoiceModal({
   // Determine message type
   const shareType = isAllSelected ? 'pending_summary' : 'single_invoice';
 
-  // Live formatted WhatsApp message
-  const previewMessage = formatWhatsAppMessage({
-    customer: {
-      ...customer,
-      items: invoices,
-      pending_amount: totalPendingAll,
-      total_amount: totalBilledAll,
-      paid_amount: totalPaidAll,
-    },
-    sale: activeInvoice,
-    shop,
-    type: shareType,
-  });
+  // Live formatted WhatsApp default message
+  const defaultFormattedMessage = useMemo(() => {
+    return formatWhatsAppMessage({
+      customer: {
+        ...customer,
+        items: invoices,
+        pending_amount: totalPendingAll,
+        total_amount: totalBilledAll,
+        paid_amount: totalPaidAll,
+      },
+      sale: activeInvoice,
+      shop,
+      type: shareType,
+    });
+  }, [customer, invoices, totalPendingAll, totalBilledAll, totalPaidAll, activeInvoice, shop, shareType]);
+
+  // Synchronize default message & phone into editable state when switching selection
+  useEffect(() => {
+    setEditableMessage(defaultFormattedMessage);
+  }, [defaultFormattedMessage]);
+
+  useEffect(() => {
+    if (customerMobile) {
+      setEditablePhone(customerMobile);
+    }
+  }, [customerMobile]);
+
+  if (!isOpen || !target) return null;
+
+  const cleanPhoneNumber = parseCleanPhoneNumber(editablePhone || customerMobile);
+
+  const handleResetMessage = () => {
+    setEditableMessage(defaultFormattedMessage);
+    if (showToast) showToast('Reset to default message template');
+  };
 
   const handleCopyMessage = async () => {
     try {
+      const messageToCopy = editableMessage || defaultFormattedMessage;
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        await navigator.clipboard.writeText(previewMessage);
+        await navigator.clipboard.writeText(messageToCopy);
       }
       setCopied(true);
       if (showToast) showToast('Message text copied to clipboard!');
@@ -115,25 +143,90 @@ export default function ShareInvoiceModal({
     }
   };
 
+  /**
+   * Primary Action: Share via WhatsApp & PDF
+   * Adheres to:
+   * 1. Native URI Scheme: whatsapp://send?phone=${cleanPhoneNumber}&text=${encodedMessage}
+   * 2. Prevent Blank Tabs: Direct routing via window.location.href
+   * 3. Data Formatting: Stripped clean digits + encodeURIComponent()
+   */
   const handleShareWhatsAppAndPdf = async () => {
+    const rawPhone = editablePhone || customerMobile || '';
+    const cleanPhone = parseCleanPhoneNumber(rawPhone);
+    const messagePayload = (editableMessage || defaultFormattedMessage || '').trim();
+
+    // Validation: ensure both phone number and message exist before proceeding
+    if (!cleanPhone) {
+      if (showToast) {
+        showToast('⚠️ Missing phone number: Please provide a valid customer mobile number.');
+      }
+      return;
+    }
+
+    if (!messagePayload) {
+      if (showToast) {
+        showToast('⚠️ Missing message: The WhatsApp message content cannot be empty.');
+      }
+      return;
+    }
+
+    // 1 & 3. Construct Native WhatsApp URL with clean digits and encodeURIComponent
+    const encodedMessage = encodeURIComponent(messagePayload);
+    const nativeWaUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedMessage}`;
+
     try {
       setSharing(true);
-      await shareToWhatsAppService({
-        customer: {
-          ...customer,
-          items: invoices,
-          pending_amount: totalPendingAll,
-          total_amount: totalBilledAll,
-          paid_amount: totalPaidAll,
-        },
-        sale: activeInvoice,
-        shop,
-        type: isAllSelected ? 'pending_summary' : 'single_invoice',
-        authedFetch,
-        showToast,
-      });
+
+      // Generate & Download PDF Document
+      let doc = null;
+      let filename = '';
+
+      if (isAllSelected) {
+        doc = generateStatementPDFDoc(
+          { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
+          invoices,
+          shop
+        );
+        filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+      } else if (activeInvoice) {
+        const invNo = activeInvoice.invoice_number || `INV-${String(activeInvoice.id || '1').padStart(6, '0')}`;
+        doc = generateInvoicePDFDoc(activeInvoice, customer, shop);
+        filename = `Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
+      }
+
+      if (doc) {
+        doc.save(filename);
+        if (showToast) {
+          showToast(`📄 ${filename} downloaded! Attach in WhatsApp.`);
+        }
+      }
+
+      // Copy text to clipboard for extra convenience
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(messagePayload);
+        }
+      } catch {}
+
+      // 2. Prevent Blank Tabs: Trigger native app directly via window.location.href
+      window.location.href = nativeWaUrl;
+
+      // Record audit log
+      if (authedFetch) {
+        authedFetch('/audit', {
+          method: 'POST',
+          body: JSON.stringify({
+            action: `Shared ${shareType} via Native WhatsApp & PDF`,
+            entity_type: 'customer',
+            entity_id: customer?.customer_id || customer?.id || activeInvoice?.customer_id || 0,
+            details: `Sent to ${cleanPhone}`,
+          }),
+        }).catch(() => {});
+      }
+
       onClose();
     } catch (err) {
+      console.error('Share via WhatsApp & PDF failed:', err);
       if (showToast) showToast(`Share failed: ${err.message || 'Unknown error'}`);
     } finally {
       setSharing(false);
@@ -162,25 +255,29 @@ export default function ShareInvoiceModal({
   };
 
   const handleSendTextReminderOnly = async () => {
+    const rawPhone = editablePhone || customerMobile || '';
+    const cleanPhone = parseCleanPhoneNumber(rawPhone);
+    const messagePayload = (editableMessage || defaultFormattedMessage || '').trim();
+
+    if (!cleanPhone) {
+      if (showToast) showToast('⚠️ Missing phone number: Please provide a valid customer mobile number.');
+      return;
+    }
+    if (!messagePayload) {
+      if (showToast) showToast('⚠️ Missing message: The WhatsApp message content cannot be empty.');
+      return;
+    }
+
+    const encodedMessage = encodeURIComponent(messagePayload);
+    const nativeWaUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedMessage}`;
+
     try {
       setSharing(true);
-      await shareToWhatsAppService({
-        customer: {
-          ...customer,
-          items: invoices,
-          pending_amount: totalPendingAll,
-          total_amount: totalBilledAll,
-          paid_amount: totalPaidAll,
-        },
-        sale: activeInvoice,
-        shop,
-        type: isAllSelected ? 'pending_reminder_only' : 'invoice_reminder_only',
-        authedFetch,
-        showToast,
-      });
+      // Trigger native WhatsApp directly without blank tab
+      window.location.href = nativeWaUrl;
       onClose();
     } catch (err) {
-      if (showToast) showToast(`Share failed: ${err.message || 'Unknown error'}`);
+      if (showToast) showToast(`Failed to open WhatsApp: ${err.message || 'Error'}`);
     } finally {
       setSharing(false);
     }
@@ -204,21 +301,49 @@ export default function ShareInvoiceModal({
               <Share2 size={18} />
             </div>
             <div className="min-w-0 space-y-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-emerald-700">Send payment details</span>
-              {invoices.length > 1 && (
-                <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-200">
-                  {invoices.length} invoices
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-emerald-700">
+                  Send payment details
                 </span>
-              )}
-            </div>
-            <h2 className="truncate text-base sm:text-lg font-black text-slate-900 leading-snug">
-              {customerDisplayName}
-            </h2>
-            <p className="text-xs text-slate-500 font-medium truncate">
-              {customerMobile ? `WhatsApp · ${customerMobile}` : 'No WhatsApp number provided'}
-              {customer.shop_name ? `  ·  ${customer.shop_name}` : ''}
-            </p>
+                {invoices.length > 1 && (
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-slate-500 ring-1 ring-slate-200">
+                    {invoices.length} invoices
+                  </span>
+                )}
+              </div>
+              <h2 className="truncate text-base sm:text-lg font-black text-slate-900 leading-snug">
+                {customerDisplayName}
+              </h2>
+              
+              {/* Phone number display & edit */}
+              <div className="flex items-center gap-2 text-xs text-slate-500 font-medium flex-wrap">
+                <div className="flex items-center gap-1.5 bg-slate-100/80 px-2 py-0.5 rounded-lg border border-slate-200/60">
+                  <Phone size={11} className="text-emerald-600" />
+                  {isEditingPhone ? (
+                    <input
+                      type="text"
+                      value={editablePhone}
+                      onChange={(e) => setEditablePhone(e.target.value)}
+                      placeholder="e.g. 9826060394"
+                      className="bg-white px-1.5 py-0.5 rounded text-xs font-semibold text-slate-800 border border-slate-300 focus:outline-emerald-500 w-32"
+                    />
+                  ) : (
+                    <span className="font-semibold text-slate-800">
+                      {cleanPhoneNumber ? `+${cleanPhoneNumber}` : 'No phone number'}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingPhone(!isEditingPhone)}
+                    className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer ml-1"
+                  >
+                    {isEditingPhone ? 'Done' : 'Edit'}
+                  </button>
+                </div>
+                {customer.shop_name && (
+                  <span className="text-slate-400">· {customer.shop_name}</span>
+                )}
+              </div>
             </div>
           </div>
 
@@ -233,7 +358,7 @@ export default function ShareInvoiceModal({
         </div>
 
         {/* 2. Scrollable Body */}
-        <div className="p-4 sm:p-5 overflow-y-auto space-y-5 flex-1">
+        <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1">
           
           {/* Invoice Selector (Tabs/Dropdown if multiple invoices exist) */}
           {invoices.length > 1 && (
@@ -350,62 +475,14 @@ export default function ShareInvoiceModal({
                 </div>
               </div>
 
-              {/* Items List in this invoice */}
-              <div className="space-y-1 text-xs">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Invoice Items
-                </span>
-                {(() => {
-                  const itemsList = Array.isArray(activeInvoice.items) && activeInvoice.items.length > 0
-                    ? activeInvoice.items
-                    : [{
-                        product_name: activeInvoice.product_name || 'Item',
-                        quantity: activeInvoice.quantity || 1,
-                        unit_price: Number(activeInvoice.total_amount || 0) / Math.max(1, Number(activeInvoice.quantity || 1)),
-                        total_price: activeInvoice.total_amount,
-                        colour: activeInvoice.colour
-                      }];
-                  return itemsList.map((it, idx) => {
-                    const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
-                    const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
-                    const brandName = getBrandName(it, activeInvoice);
-
-                    return (
-                      <div key={idx} className="flex items-center justify-between text-slate-700 py-0.5">
-                        <span className="flex items-center gap-1.5 flex-wrap">
-                          <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
-                          <span className="font-semibold">{shortName}</span>
-                          {brandName && (
-                            <span className="text-[10px] text-slate-500 font-bold">
-                              ({brandName})
-                            </span>
-                          )}
-                          {it.colour && (
-                            <span className="text-[10px] text-teal-700 bg-teal-50 px-1 rounded border border-teal-200 font-bold">
-                              {it.colour}
-                            </span>
-                          )}
-                          <span className="text-slate-400 font-normal">x {it.quantity || 1}</span>
-                        </span>
-                        <strong className="text-slate-900 font-bold">
-                          {currency(it.total_price || (Number(it.unit_price || 0) * Number(it.quantity || 1)))}
-                        </strong>
-                      </div>
-                    );
-                  });
-                })()}
-
-                {/* Extra expenses if any */}
-                {Array.isArray(activeInvoice.expenses) && activeInvoice.expenses.length > 0 && (
-                  <div className="pt-1.5 border-t border-slate-200/60 text-[11px] text-teal-800 space-y-0.5">
-                    {activeInvoice.expenses.map((e, idx) => (
-                      <div key={idx} className="flex justify-between">
-                        <span>+ {e.expense_name || e.expense_type}</span>
-                        <span>{currency(e.amount)}</span>
-                      </div>
-                    ))}
+              {/* Items & Expenses breakdown */}
+              <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
+                {Array.isArray(activeInvoice.items) && activeInvoice.items.map((item, idx) => (
+                  <div key={idx} className="flex justify-between text-xs text-slate-700 py-0.5">
+                    <span className="truncate pr-2">{item.product_name || `Item #${idx + 1}`} ({item.quantity} {item.unit || 'pcs'})</span>
+                    <span className="font-semibold shrink-0">{currency(item.total_price || item.price * item.quantity)}</span>
                   </div>
-                )}
+                ))}
               </div>
 
               {/* Financial line */}
@@ -417,33 +494,56 @@ export default function ShareInvoiceModal({
             </section>
           ) : null}
 
-          {/* 3. Live Message Preview Box */}
+          {/* 3. Editable Message Area */}
           <section className="space-y-2">
             <div className="flex items-center justify-between text-xs">
               <span className="font-bold text-slate-700 flex items-center gap-1.5">
-                <MessageCircle size={14} className="text-emerald-600" /> WhatsApp message
+                <MessageCircle size={14} className="text-emerald-600" /> Editable WhatsApp Message
               </span>
-              <button
-                type="button"
-                onClick={handleCopyMessage}
-                className="rounded-lg px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 flex items-center gap-1 transition-colors cursor-pointer"
-              >
-                {copied ? (
-                  <>
-                    <Check size={13} className="text-emerald-600" />
-                    <span className="text-emerald-600">Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy size={13} />
-                    <span>Copy Text</span>
-                  </>
-                )}
-              </button>
+              
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetMessage}
+                  className="rounded-lg px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-800 flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Reset to original template"
+                >
+                  <RotateCcw size={12} />
+                  <span>Reset</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyMessage}
+                  className="rounded-lg px-2 py-1 text-xs font-bold text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800 flex items-center gap-1 transition-colors cursor-pointer"
+                >
+                  {copied ? (
+                    <>
+                      <Check size={13} className="text-emerald-600" />
+                      <span className="text-emerald-600">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={13} />
+                      <span>Copy</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
-            <div className="bg-slate-950 text-slate-100 p-3.5 rounded-2xl font-mono text-[11px] sm:text-xs leading-relaxed whitespace-pre-wrap max-h-44 overflow-y-auto border border-slate-800 shadow-inner selection:bg-emerald-500 selection:text-white">
-              {previewMessage}
+            {/* Message Textarea with full editing capabilities */}
+            <div className="relative">
+              <textarea
+                value={editableMessage}
+                onChange={(e) => setEditableMessage(e.target.value)}
+                rows={5}
+                placeholder="Type your WhatsApp message here..."
+                className="w-full bg-slate-950 text-emerald-300 p-3.5 rounded-2xl font-mono text-[11px] sm:text-xs leading-relaxed border border-slate-800 shadow-inner focus:outline-none focus:ring-2 focus:ring-emerald-500 selection:bg-emerald-500 selection:text-white resize-y"
+              />
+              <div className="text-[10px] text-slate-400 text-right pr-2">
+                {editableMessage.length} characters
+              </div>
             </div>
           </section>
         </div>
@@ -474,7 +574,7 @@ export default function ShareInvoiceModal({
             </button>
           </div>
 
-          {/* Primary Action: Share WhatsApp & PDF */}
+          {/* Primary Action: Share via WhatsApp & PDF */}
           <button
             type="button"
             onClick={handleShareWhatsAppAndPdf}
