@@ -4009,22 +4009,32 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
 
     const result = await runTransaction(async (tx) => {
       // Lock customer record for race-condition safe balance tracking
-      const customer = await tx.getRecord('SELECT id, name, mobile FROM customers WHERE id = ? FOR UPDATE', [customer_id]);
+      const customer = await tx.getRecord('SELECT id, name, mobile, COALESCE(opening_balance, 0) AS opening_balance, COALESCE(advance_balance, 0) AS advance_balance FROM customers WHERE id = ? FOR UPDATE', [customer_id]);
       if (!customer) {
         const error = new Error('Selected customer not found.');
         error.status = 404;
         throw error;
       }
 
-      // Fetch live previous outstanding balance for this customer
+      // Fetch live previous outstanding balance for this customer (open sales pending + customer opening balance)
       const prevBalRow = await tx.getRecord(
         'SELECT COALESCE(SUM(pending_amount), 0) AS prev_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
         [customer_id]
       );
-      const livePrevBalance = money(prevBalRow?.prev_balance || 0);
+      const customerOpeningBal = money(customer.opening_balance || 0);
+      const livePrevBalance = money((prevBalRow?.prev_balance || 0) + customerOpeningBal);
       const previousBalance = (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance)))
         ? money(req.body.previous_balance)
         : livePrevBalance;
+
+      // If manual previous_balance was entered and differs from livePrevBalance, adjust customer's opening_balance so future invoices carry it forward permanently
+      const prevBalDiff = money(previousBalance - livePrevBalance);
+      if (prevBalDiff !== 0) {
+        await tx.runQuery(
+          'UPDATE customers SET opening_balance = COALESCE(opening_balance, 0) + ? WHERE id = ?',
+          [prevBalDiff, customer_id]
+        );
+      }
 
       const preparedItems = [];
       const reservedByBatch = new Map();
@@ -4594,12 +4604,12 @@ const handleUpdateSale = async (req, res) => {
 
       const paidAmount = Number(sale.paid_amount || 0);
       const pendingAmount = expensesUpdated
-        ? Math.max(money(netPayableAmount - paidAmount), 0)
-        : Number(sale.pending_amount || Math.max(netPayableAmount - paidAmount, 0));
+        ? Math.max(money(currentInvoiceTotal - paidAmount), 0)
+        : Number(sale.pending_amount !== undefined && sale.pending_amount !== null ? sale.pending_amount : Math.max(currentInvoiceTotal - paidAmount, 0));
 
       const closingBalance = expensesUpdated
-        ? pendingAmount
-        : Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : pendingAmount);
+        ? Math.max(money(netPayableAmount - paidAmount), 0)
+        : Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : Math.max(money(netPayableAmount - paidAmount), 0));
 
       const status = pendingAmount > 0 ? 'open' : 'paid';
 
@@ -5435,19 +5445,9 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
         query += ' ORDER BY s.due_date ASC, s.id ASC';
 
         const sales = await tx.allRecords(query, params);
-        const totalPending = sales.reduce((sum, sale) => sum + money(sale.pending_amount), 0);
+        const totalSalesPending = sales.reduce((sum, sale) => sum + money(sale.pending_amount), 0);
         let remainingPayment = paymentAmount;
         let excessAdvance = 0;
-
-        if (!sales.length) {
-          // No open invoices: Entire payment is credited directly to advance_balance!
-          excessAdvance = paymentAmount;
-          await tx.runQuery(
-            'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
-            [excessAdvance, customer_id]
-          );
-          return { pending_amount: 0, advance_balance: excessAdvance, excess_credited: excessAdvance };
-        }
 
         for (const sale of sales) {
           if (remainingPayment <= 0) break;
@@ -5462,6 +5462,19 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
           remainingPayment -= allocated;
         }
 
+        const custRec = await tx.getRecord('SELECT COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?', [customer_id]);
+        let currentOpeningBal = money(custRec?.opening_balance || 0);
+
+        if (remainingPayment > 0 && currentOpeningBal > 0) {
+          const openingDeduction = Math.min(remainingPayment, currentOpeningBal);
+          await tx.runQuery(
+            'UPDATE customers SET opening_balance = opening_balance - ? WHERE id = ?',
+            [openingDeduction, customer_id]
+          );
+          currentOpeningBal -= openingDeduction;
+          remainingPayment -= openingDeduction;
+        }
+
         if (remainingPayment > 0) {
           excessAdvance = money(remainingPayment);
           await tx.runQuery(
@@ -5470,8 +5483,8 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
           );
         }
 
-        const remainingPending = Math.max(0, totalPending - paymentAmount);
-        return { pending_amount: remainingPending, excess_credited: excessAdvance };
+        const remainingTotalPending = Math.max(0, money((totalSalesPending + currentOpeningBal) - paymentAmount));
+        return { pending_amount: remainingTotalPending, excess_credited: excessAdvance };
       });
       await audit(req, 'Recorded customer payment', 'customer', customer_id, `Paid ${paymentAmount} on ${payDate} via ${payMode}, remaining ${result.pending_amount}${result.excess_credited ? `, credited ₹${result.excess_credited} to advance balance` : ''}`);
       return res.json({ success: true, pending_amount: result.pending_amount, excess_credited: result.excess_credited });
@@ -5498,11 +5511,23 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
   );
   await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale_id]);
 
+  let excessAdvance = 0;
   if (excessPayment > 0 && sale.customer_id) {
-    await runQuery(
-      'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
-      [excessPayment, sale.customer_id]
-    );
+    const custRec = await getRecord('SELECT COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?', [sale.customer_id]);
+    let currentOpeningBal = money(custRec?.opening_balance || 0);
+    let remainingExcess = excessPayment;
+    if (currentOpeningBal > 0) {
+      const deduction = Math.min(remainingExcess, currentOpeningBal);
+      await runQuery('UPDATE customers SET opening_balance = opening_balance - ? WHERE id = ?', [deduction, sale.customer_id]);
+      remainingExcess -= deduction;
+    }
+    if (remainingExcess > 0) {
+      excessAdvance = remainingExcess;
+      await runQuery(
+        'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
+        [excessAdvance, sale.customer_id]
+      );
+    }
   }
 
   await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${paymentAmount} on ${payDate} via ${payMode}, remaining ${newPending}${excessPayment > 0 ? `, credited ₹${excessPayment} to advance balance` : ''}`);
