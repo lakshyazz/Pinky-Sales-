@@ -3135,18 +3135,28 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
     const shopId = requireScopedShopId(req, req.body.shop_id);
     const { name, mobile, address, notes, gstin, customer_type } = req.body;
     if (!name || !mobile) return res.status(400).json({ error: 'Customer name and mobile are required.' });
-    const existing = await getRecord('SELECT * FROM customers WHERE shop_id = ? AND mobile = ?', [shopId, mobile]);
+    
+    const cleanName = String(name).trim();
+    const cleanMobile = String(mobile).trim();
+    const cleanAddress = String(address || '').trim();
+    const cleanGstin = gstin ? String(gstin).trim().toUpperCase() : null;
+    const cleanType = (customer_type && String(customer_type).trim().toLowerCase() === 'wholesaler') ? 'wholesaler' : 'retailer';
+
+    // Only reuse existing customer if shop, name, mobile, AND address are all identical
+    const existing = await getRecord(
+      'SELECT * FROM customers WHERE shop_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?)) AND TRIM(mobile) = TRIM(?) AND LOWER(TRIM(COALESCE(address, \'\'))) = LOWER(TRIM(?))',
+      [shopId, cleanName, cleanMobile, cleanAddress]
+    );
     if (existing) {
       return res.status(200).json(existing);
     }
-    const cleanGstin = gstin ? String(gstin).trim().toUpperCase() : null;
-    const cleanType = (customer_type && String(customer_type).trim().toLowerCase() === 'wholesaler') ? 'wholesaler' : 'retailer';
+
     const result = await runQuery(
       'INSERT INTO customers (shop_id, name, mobile, address, notes, gstin, customer_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [shopId, name, mobile, address || '', notes || '', cleanGstin, cleanType, req.user.id]
+      [shopId, cleanName, cleanMobile, cleanAddress, notes || '', cleanGstin, cleanType, req.user.id]
     );
-    await audit(req, 'Created customer', 'customer', result.id, name);
-    res.status(201).json({ id: result.id, shop_id: shopId, name, mobile, address, notes, gstin: cleanGstin, customer_type: cleanType });
+    await audit(req, 'Created customer', 'customer', result.id, cleanName);
+    res.status(201).json({ id: result.id, shop_id: shopId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes, gstin: cleanGstin, customer_type: cleanType });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create customer.' });
   }
@@ -5596,25 +5606,26 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       GROUP BY sale_id
     ) pm ON pm.sale_id = sa.id
     WHERE ${where.join(' AND ')}
-    GROUP BY sa.shop_id, COALESCE(c.mobile, c.id::TEXT)
+    GROUP BY sa.shop_id, c.id, c.name, c.mobile, c.address, sh.id, sh.name, sh.area, sh.address, sh.phone
   `;
   const rows = await runPaginatedList({
     dataSql: `
     SELECT
-      'customer-' || sa.shop_id || ':' || COALESCE(c.mobile, c.id::TEXT) AS id,
-      (ARRAY_AGG(c.id ORDER BY ${groupOrderSql}))[1] AS customer_id,
+      'customer-' || sa.shop_id || ':' || c.id AS id,
+      c.id AS customer_id,
       sa.shop_id,
-      (ARRAY_AGG(c.name ORDER BY ${groupOrderSql}))[1] AS customer_name,
-      (ARRAY_AGG(c.mobile ORDER BY ${groupOrderSql}))[1] AS mobile,
-      (ARRAY_AGG(c.address ORDER BY ${groupOrderSql}))[1] AS address,
-      (ARRAY_AGG(sh.name ORDER BY ${groupOrderSql}))[1] AS shop_name,
-      (ARRAY_AGG(sh.area ORDER BY ${groupOrderSql}))[1] AS shop_area,
-      (ARRAY_AGG(sh.address ORDER BY ${groupOrderSql}))[1] AS shop_address,
-      (ARRAY_AGG(sh.phone ORDER BY ${groupOrderSql}))[1] AS shop_phone,
+      c.name AS customer_name,
+      c.mobile AS mobile,
+      c.address AS address,
+      sh.name AS shop_name,
+      sh.area AS shop_area,
+      sh.address AS shop_address,
+      sh.phone AS shop_phone,
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
       COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0) AS pending_amount,
-      (ARRAY_AGG(COALESCE(c.opening_balance, 0) ORDER BY ${groupOrderSql}))[1] AS opening_balance,
+      COALESCE(MAX(c.opening_balance), 0) AS opening_balance,
+      COALESCE(MAX(c.advance_balance), 0) AS advance_balance,
       (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}))[1] AS due_date,
       JSON_AGG(JSON_BUILD_OBJECT(
         'id', sa.id,

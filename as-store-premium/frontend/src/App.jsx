@@ -758,7 +758,7 @@ const initialForms = {
   sale: {
     product_id: '',
     customer_id: '',
-    quantity: 1,
+    quantity: 0,
     selling_price: '',
     original_total: '',
     final_total_amount: '',
@@ -776,7 +776,7 @@ const initialForms = {
     notes: '',
     previous_balance: 0,
     applied_credit_amount: 0,
-    items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
+    items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '' }],
     expenses: [],
   },
   payment: { sale_id: '', amount: '', note: '' },
@@ -1289,9 +1289,9 @@ function SalesCreationWorkspace({
             <SearchableCombobox
               value={forms.sale.customer_id}
               onChange={(v) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: v } }))}
-              options={(data.customers || []).map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}`])}
+              options={(data.customers || []).map((c) => [c.id, `${c.name}${c.mobile ? ` (${c.mobile})` : ''}${c.address ? ` - ${c.address}` : ''}`])}
               placeholder="Search or select customer..."
-              searchPlaceholder="Search by name or phone..."
+              searchPlaceholder="Search by name, phone, or address..."
               className="w-full"
             />
 
@@ -1437,8 +1437,9 @@ function SalesCreationWorkspace({
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">Qty</label>
                         <input
                           type="number"
-                          min="1"
-                          value={item.quantity}
+                          min="0"
+                          placeholder="0"
+                          value={item.quantity !== undefined && item.quantity !== '' ? item.quantity : 0}
                           onChange={(e) => updateSaleItemQuantity(idx, e.target.value)}
                           disabled={!item.product_id || activeBreakdown.length > 1}
                           title={activeBreakdown.length > 1 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
@@ -4067,10 +4068,10 @@ function App() {
   };
 
   const updateSaleItemProduct = (index, productId) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '', color_breakdown: [] }])];
     const defaultPrice = getProductDefaultPrice(productId);
-    const qty = Math.max(Number(currentItems[index]?.quantity || 1), 1);
-    const total = defaultPrice !== '' ? String(Number(defaultPrice) * qty) : '';
+    const qty = Number(currentItems[index]?.quantity ?? 0);
+    const total = (defaultPrice !== '' && qty > 0) ? String(Number(defaultPrice) * qty) : '0';
 
     const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(productId)) 
       || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(productId))
@@ -4108,7 +4109,7 @@ function App() {
       sale: {
         ...prev.sale,
         product_id: currentItems[0]?.product_id || '',
-        quantity: currentItems[0]?.quantity || 1,
+        quantity: currentItems[0]?.quantity || 0,
         ...totals,
         items: currentItems,
       },
@@ -4116,12 +4117,12 @@ function App() {
   };
 
   const updateSaleItemPriceType = (index, priceType) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '' }])];
     const item = currentItems[index] || {};
     const unitPrice = sellingPriceFor(item.product_id, priceType);
-    const quantity = Math.max(Number(item.quantity || 1), 1);
+    const quantity = Number(item.quantity ?? 0);
     const priceVal = unitPrice > 0 ? String(unitPrice) : (item.selling_price || '');
-    const total = priceVal !== '' ? String(Number(priceVal) * quantity) : '';
+    const total = (priceVal !== '' && quantity > 0) ? String(Number(priceVal) * quantity) : '0';
 
     currentItems[index] = {
       ...item,
@@ -4135,11 +4136,11 @@ function App() {
   };
 
   const updateSaleItemSellingPrice = (index, priceVal) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '' }])];
     const item = currentItems[index] || {};
-    const qty = Number(item.quantity || 1);
+    const qty = Number(item.quantity ?? 0);
     const numericPrice = priceVal === '' ? '' : Number(priceVal);
-    const total = (priceVal !== '' && !isNaN(numericPrice)) ? String(numericPrice * qty) : '';
+    const total = (priceVal !== '' && !isNaN(numericPrice) && qty > 0) ? String(numericPrice * qty) : '0';
 
     currentItems[index] = {
       ...item,
@@ -4160,11 +4161,11 @@ function App() {
   };
 
   const updateSaleItemQuantity = (index, quantityVal) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '' }])];
     const item = currentItems[index] || {};
     const numericPrice = Number(item.selling_price || 0);
     const numericQty = quantityVal === '' ? '' : Number(quantityVal);
-    const total = (quantityVal !== '' && !isNaN(numericQty) && numericPrice > 0) ? String(numericPrice * numericQty) : (item.total_amount || '');
+    const total = (quantityVal !== '' && !isNaN(numericQty) && numericPrice > 0) ? String(numericPrice * numericQty) : (item.total_amount || '0');
 
     const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(item.product_id)) 
       || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(item.product_id))
@@ -4179,7 +4180,7 @@ function App() {
 
     currentItems[index] = {
       ...item,
-      quantity: quantityVal,
+      quantity: quantityVal === '' ? '' : numericQty,
       total_amount: total,
       color_breakdown: breakdown,
     };
@@ -4190,7 +4191,7 @@ function App() {
       ...prev,
       sale: {
         ...prev.sale,
-        quantity: currentItems[0]?.quantity || 1,
+        quantity: currentItems[0]?.quantity || 0,
         ...totals,
         items: currentItems,
       },
@@ -4218,7 +4219,7 @@ function App() {
     item.color_breakdown = breakdown;
 
     const totalColorQty = breakdown.reduce((sum, b) => sum + (Number(b.qty) || 0), 0);
-    const newQty = breakdown.length > 0 ? (totalColorQty || 1) : item.quantity;
+    const newQty = breakdown.length > 0 ? (totalColorQty || 0) : item.quantity;
     item.quantity = newQty;
 
     const unitPrice = Number(item.selling_price || 0);
@@ -4231,7 +4232,7 @@ function App() {
       ...prev,
       sale: {
         ...prev.sale,
-        quantity: currentItems[0]?.quantity || 1,
+        quantity: currentItems[0]?.quantity || 0,
         ...totals,
         items: currentItems,
       },
@@ -4242,7 +4243,7 @@ function App() {
     const currentItems = [...(forms.sale.items || [])];
     const item = { ...currentItems[itemIndex] };
     item.selected_colour = colorName;
-    item.color_breakdown = [{ color: colorName, qty: Number(item.quantity || 1) }];
+    item.color_breakdown = [{ color: colorName, qty: Number(item.quantity || 0) }];
     currentItems[itemIndex] = item;
     setForms((prev) => ({
       ...prev,
@@ -4268,7 +4269,7 @@ function App() {
     item.color_breakdown = breakdown;
     const totalColorQty = breakdown.reduce((sum, b) => sum + (Number(b.qty) || 0), 0);
     if (breakdown.length > 0) {
-      item.quantity = Math.max(totalColorQty, 1);
+      item.quantity = totalColorQty;
       item.selected_colour = breakdown.length === 1 ? breakdown[0].color : '__split__';
     }
 
@@ -4282,7 +4283,7 @@ function App() {
       ...prev,
       sale: {
         ...prev.sale,
-        quantity: currentItems[0]?.quantity || 1,
+        quantity: currentItems[0]?.quantity || 0,
         ...totals,
         items: currentItems,
       },
@@ -4290,8 +4291,8 @@ function App() {
   };
 
   const addSaleItem = () => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' }])];
-    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' });
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' }])];
+    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' });
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -4322,9 +4323,9 @@ function App() {
   };
 
   const removeSaleItem = (index) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '', color_breakdown: [] }])];
     if (currentItems.length <= 1) {
-      currentItems[0] = { product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' };
+      currentItems[0] = { product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' };
     } else {
       currentItems.splice(index, 1);
     }
@@ -4334,7 +4335,7 @@ function App() {
       sale: {
         ...prev.sale,
         product_id: currentItems[0]?.product_id || '',
-        quantity: currentItems[0]?.quantity || 1,
+        quantity: currentItems[0]?.quantity || 0,
         ...totals,
         items: currentItems,
       },
@@ -4420,7 +4421,7 @@ function App() {
         due_date: calculateDueDate(getTodayIso(), 7),
         previous_balance: '',
         applied_credit_amount: 0,
-        items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
+        items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '' }],
         expenses: [],
         editing_sale_id: null,
         editing_invoice_number: null,
@@ -4621,7 +4622,7 @@ function App() {
           due_date: calculateDueDate(getTodayIso(), 7),
           previous_balance: 0,
           applied_credit_amount: 0,
-          items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
+          items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 0, total_amount: '' }],
           expenses: [],
           editing_sale_id: null,
           editing_invoice_number: null,
@@ -7919,13 +7920,20 @@ function App() {
                                       {(item.customer_name || 'C').charAt(0).toUpperCase()}
                                     </div>
                                     <div>
-                                      <h4 
-                                        className="font-bold text-slate-900 text-sm hover:text-teal-700 transition-colors cursor-pointer"
-                                        onClick={() => setSelectedPaymentCustomer(item)}
-                                      >
-                                        {item.customer_name}
-                                      </h4>
-                                      <p className="text-[11.5px] text-slate-500">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <h4 
+                                          className="font-bold text-slate-900 text-sm hover:text-teal-700 transition-colors cursor-pointer"
+                                          onClick={() => setSelectedPaymentCustomer(item)}
+                                        >
+                                          {item.customer_name}
+                                        </h4>
+                                        {(item.address || (data.customers || []).find(c => String(c.id) === String(item.customer_id || item.id))?.address) && (
+                                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 inline-flex items-center gap-0.5" title="Customer Address">
+                                            📍 {item.address || (data.customers || []).find(c => String(c.id) === String(item.customer_id || item.id))?.address}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[11.5px] text-slate-500 mt-0.5">
                                         {item.mobile || 'No phone'} {item.shop_name ? `· ${item.shop_name}` : ''}
                                       </p>
                                     </div>
