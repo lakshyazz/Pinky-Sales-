@@ -4487,6 +4487,7 @@ app.get(['/api/public/invoice/:token', '/public/invoice/:token', '/api/invoice/p
     const sale = await getRecord(`
       SELECT sa.*, 
         c.name AS customer_name, c.mobile AS customer_mobile, c.address AS customer_address, c.gstin AS customer_gstin,
+        COALESCE(c.advance_balance, 0) AS customer_advance_balance,
         sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
       FROM sales sa
       JOIN shops sh ON sh.id = sa.shop_id

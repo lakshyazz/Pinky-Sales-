@@ -5388,6 +5388,24 @@ function App() {
                 <span>Balance Due</span>
                 <span>₹${Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : sale.pending_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
               </div>
+              ${(() => {
+                const customerObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id))
+                  || (data.pending || []).find(c => String(c.customer_id || c.id) === String(sale.customer_id))
+                  || sale.customer
+                  || {};
+                const customerAdvanceBal = Number(customerObj.advance_balance ?? sale.customer_advance_balance ?? sale.advance_balance ?? 0);
+                const remainingCredit = (sale.closing_balance !== undefined && Number(sale.closing_balance) < 0)
+                  ? Math.abs(Number(sale.closing_balance))
+                  : (Number(sale.previous_balance || 0) < 0 && (prodTotal + expensesTotal + Number(sale.previous_balance || 0)) < 0
+                    ? Math.abs(prodTotal + expensesTotal + Number(sale.previous_balance || 0))
+                    : customerAdvanceBal);
+                return remainingCredit > 0 ? `
+                  <div class="summary-row" style="color: #0f766e; font-weight: 700; border-top: 1px dashed #0f766e; margin-top: 4px; padding-top: 4px;">
+                    <span>Available Credit</span>
+                    <span>₹${Number(remainingCredit).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Cr</span>
+                  </div>
+                ` : '';
+              })()}
             </div>
 
             <div class="footer">
@@ -5565,12 +5583,19 @@ function App() {
     const balanceDue = Math.max(0, grandTotal - paidAmount);
     const quantity = expandedItems.reduce((sum, item) => sum + Number(item.quantity ?? item.qty ?? 1), 0);
 
+    // Look up customer advance balance / store credit
+    const customerObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id))
+      || (data.pending || []).find(c => String(c.customer_id || c.id) === String(sale.customer_id))
+      || sale.customer
+      || {};
+    const customerAdvanceBal = Number(customerObj.advance_balance ?? sale.customer_advance_balance ?? sale.advance_balance ?? 0);
+
     // Calculate customer's remaining available advance / store credit balance
     const remainingCredit = (sale.closing_balance !== undefined && Number(sale.closing_balance) < 0)
       ? Math.abs(Number(sale.closing_balance))
       : (prevBalance < 0 && (productsSubtotal + courier + prevBalance) < 0
         ? Math.abs(productsSubtotal + courier + prevBalance)
-        : Number(sale.customer_advance_balance ?? sale.advance_balance ?? 0));
+        : customerAdvanceBal);
 
     printWindow.document.open();
     printWindow.document.write(`
