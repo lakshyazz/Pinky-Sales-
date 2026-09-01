@@ -4022,11 +4022,22 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         'SELECT COALESCE(SUM(pending_amount), 0) AS prev_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
         [customer_id]
       );
+      const existingSalesPending = money(prevBalRow?.prev_balance || 0);
       const customerOpeningBal = money(customer.opening_balance || 0);
-      const livePrevBalance = money((prevBalRow?.prev_balance || 0) + customerOpeningBal);
+      const livePrevBalance = money(existingSalesPending + customerOpeningBal);
+
       const previousBalance = (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance)))
         ? money(req.body.previous_balance)
         : livePrevBalance;
+
+      // Synchronize customer opening_balance so customer ledger, sales, pending, and future invoices always carry forward this exact balance:
+      const newOpeningBalance = Math.max(0, money(previousBalance - existingSalesPending));
+      if (Math.abs(newOpeningBalance - customerOpeningBal) > 0.001) {
+        await tx.runQuery(
+          'UPDATE customers SET opening_balance = ? WHERE id = ?',
+          [newOpeningBalance, customer_id]
+        );
+      }
 
       const preparedItems = [];
       const reservedByBatch = new Map();
