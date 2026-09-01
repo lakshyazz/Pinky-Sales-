@@ -4,6 +4,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
+import crypto from 'crypto';
 import { initDatabase, runQuery, getRecord, allRecords, runTransaction, executeTransaction } from './database.js';
 import { uploadImageToR2, deleteImageFromR2, isR2Configured, getImageBufferFromStorage } from './r2Storage.js';
 
@@ -4270,6 +4271,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       }).filter(Boolean);
       const overallColourStr = colourSummaries.length ? colourSummaries.join(', ') : null;
 
+      const publicToken = crypto.randomUUID();
+
       // 5. Insert SINGLE sales record representing the entire invoice with snapshots
       const insertResult = await tx.runQuery(
         `INSERT INTO sales (
@@ -4277,8 +4280,9 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           due_date, sale_date, invoice_date, payment_terms_days, products_total, extra_expenses_total,
           notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount,
           discount_amount, discount_percentage, colour,
-          previous_balance, current_invoice_total, applied_credit_amount, net_payable_amount, closing_balance, advance_applied
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          previous_balance, current_invoice_total, applied_credit_amount, net_payable_amount, closing_balance, advance_applied,
+          public_token
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           shopId, 
           primaryProduct.product_id, 
@@ -4308,7 +4312,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           actualAppliedCredit,
           netPayableAmount,
           closingBalance,
-          advanceDeduction
+          advanceDeduction,
+          publicToken
         ]
       );
 
@@ -4439,6 +4444,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         id: saleId,
         ids: [saleId], 
         invoice_number: `INV-${String(saleId).padStart(6, '0')}`,
+        public_token: publicToken,
+        public_url: `/invoice/public/${publicToken}`,
         pending_amount: thisSalePending, 
         total_amount: saleNetInvoiceTotal, 
         products_total: productsTotal,
@@ -4463,6 +4470,55 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
     res.status(201).json(result);
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create sale.' });
+  }
+});
+
+// Public invoice retrieval endpoint via secure public_token
+app.get(['/api/public/invoice/:token', '/public/invoice/:token', '/api/invoice/public/:token', '/invoice/public/:token'], async (req, res) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    if (!token) return res.status(400).json({ error: 'Invoice token is required.' });
+
+    const sale = await getRecord(`
+      SELECT sa.*, 
+        c.name AS customer_name, c.mobile AS customer_mobile, c.address AS customer_address, c.gstin AS customer_gstin,
+        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
+      FROM sales sa
+      JOIN shops sh ON sh.id = sa.shop_id
+      LEFT JOIN customers c ON c.id = sa.customer_id
+      WHERE sa.public_token = ?
+    `, [token]);
+
+    if (!sale) return res.status(404).json({ error: 'Invoice not found or invalid link.' });
+
+    const items = await allRecords(`
+      SELECT si.*, 
+        COALESCE(si.custom_product_name, p.short_name, p.name) AS product_name,
+        p.brand, p.category, p.model, p.full_model_list
+      FROM sale_items si
+      LEFT JOIN products p ON p.id = si.product_id
+      WHERE si.sale_id = ?
+      ORDER BY si.id ASC
+    `, [sale.id]);
+
+    const expenses = await allRecords(`
+      SELECT * FROM sale_expenses WHERE sale_id = ? ORDER BY id ASC
+    `, [sale.id]);
+
+    const payments = await allRecords(`
+      SELECT * FROM payments WHERE sale_id = ? ORDER BY payment_date ASC, id ASC
+    `, [sale.id]);
+
+    res.json({
+      sale: {
+        ...sale,
+        items,
+        expenses,
+        payments
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Unable to load public invoice.' });
   }
 });
 

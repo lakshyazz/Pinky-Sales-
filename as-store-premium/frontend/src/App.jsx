@@ -2491,6 +2491,41 @@ function App() {
     }
   };
 
+  const openCustomerLedgerDrawer = async (customer) => {
+    if (!customer) return;
+    const custId = customer.id || customer.customer_id;
+    const localSales = (data.sales || []).filter((s) => Number(s.customer_id) === Number(custId));
+    const pendingVal = Number(customer.pending_amount ?? localSales.reduce((s, a) => s + Number(a.pending_amount || 0), 0));
+    const custRecord = {
+      ...customer,
+      customer_id: custId,
+      customer_name: customer.name || customer.customer_name,
+      items: customer.items || localSales,
+      pending_amount: pendingVal,
+      total_amount: customer.total_amount ?? localSales.reduce((s, a) => s + Number(a.total_amount || 0), 0),
+      paid_amount: customer.paid_amount ?? localSales.reduce((s, a) => s + Number(a.paid_amount || 0), 0),
+    };
+    setSelectedPaymentCustomer(custRecord);
+
+    try {
+      const res = await authedFetch(`/sales/customer/${custId}`);
+      if (res && res.sales) {
+        setSelectedPaymentCustomer((prev) => {
+          if (!prev || (Number(prev.customer_id || prev.id) !== Number(custId))) return prev;
+          return {
+            ...prev,
+            items: res.sales,
+            total_amount: res.summary?.total_amount ?? prev.total_amount,
+            paid_amount: res.summary?.paid_amount ?? prev.paid_amount,
+            pending_amount: res.summary?.pending_amount ?? prev.pending_amount,
+          };
+        });
+      }
+    } catch {
+      // Keep localSales as fallback
+    }
+  };
+
   const openInvoiceShareModal = (sale, customer = null) => {
     const custObj = customer || {
       id: sale.customer_id,
@@ -7014,18 +7049,7 @@ function App() {
                                     {/* View Detail Button */}
                                     <button
                                       type="button"
-                                      onClick={() => {
-                                        const custRecord = {
-                                          ...customer,
-                                          customer_id: customer.id,
-                                          customer_name: customer.name,
-                                          items: allCustomerSales,
-                                          pending_amount: pendingVal,
-                                          total_amount: allCustomerSales.reduce((s, a) => s + Number(a.total_amount || 0), 0),
-                                          paid_amount: allCustomerSales.reduce((s, a) => s + Number(a.paid_amount || 0), 0),
-                                        };
-                                        setSelectedPaymentCustomer(custRecord);
-                                      }}
+                                      onClick={() => openCustomerLedgerDrawer(customer)}
                                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-colors cursor-pointer shadow-2xs"
                                       title="View Complete Customer Details & Purchases"
                                     >
@@ -7760,575 +7784,6 @@ function App() {
                   onPageSizeChange={(limit) => setPendingPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
                 />
               </section>
-
-              {/* 3. CUSTOMER DETAIL RIGHT-SIDE DRAWER (500px) */}
-              <AnimatePresence>
-                {selectedPaymentCustomer && (
-                  <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
-                    {/* Backdrop */}
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      onClick={() => setSelectedPaymentCustomer(null)}
-                      className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
-                    />
-
-                    {/* Sliding Drawer */}
-                    <motion.div
-                      initial={{ x: '100%' }}
-                      animate={{ x: 0 }}
-                      exit={{ x: '100%' }}
-                      transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-                      className="relative w-full max-w-md md:max-w-lg bg-white h-full shadow-2xl z-10 flex flex-col"
-                    >
-                      {/* Drawer Header */}
-                      <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h3 className="text-lg font-black text-slate-900">
-                              {selectedPaymentCustomer.customer_name}
-                            </h3>
-                            <button
-                              type="button"
-                              onClick={() => printCustomerStatementPDF(selectedPaymentCustomer)}
-                              className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-all flex items-center gap-1 cursor-pointer"
-                              title="Download / View Complete Customer Ledger Statement"
-                            >
-                              Customer Ledger
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openSalesReturnModal(selectedPaymentCustomer)}
-                              className="px-2 py-0.5 text-[10.5px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-full transition-all flex items-center gap-1 cursor-pointer"
-                              title="Issue Credit Note / Sales Return for this customer"
-                            >
-                              <RotateCcw size={10} /> Return / Credit Note
-                            </button>
-                          </div>
-                          <p className="text-xs text-slate-500 mt-0.5">
-                            {selectedPaymentCustomer.mobile || 'No phone'} · {selectedPaymentCustomer.shop_name}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedPaymentCustomer(null)}
-                          className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
-                        >
-                          <X size={18} />
-                        </button>
-                      </div>
-
-                      {/* Drawer Body */}
-                      <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-                        {/* Financial Balance Summary Card */}
-                        <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-sm space-y-3">
-                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                            Total Outstanding Due
-                          </span>
-                          <div className="text-2xl font-black text-teal-400">
-                            {currency(selectedPaymentCustomer.pending_amount)}
-                          </div>
-                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60 text-xs">
-                            <div>
-                              <span className="text-slate-400 block text-[10.5px]">Total Invoiced</span>
-                              <strong className="text-slate-200 font-bold">{currency(selectedPaymentCustomer.total_amount)}</strong>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 block text-[10.5px]">Total Paid</span>
-                              <strong className="text-emerald-400 font-bold">{currency(selectedPaymentCustomer.paid_amount)}</strong>
-                            </div>
-                          </div>
-                          <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-xs">
-                            <div>
-                              <span className="text-slate-400 block text-[10.5px]">Carry Forward (Opening) Balance</span>
-                              <strong className="text-amber-300 font-bold">
-                                {currency(selectedPaymentCustomer.opening_balance || 0)}
-                              </strong>
-                            </div>
-                            {!editingOpeningBalance ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpeningBalanceInput(String(selectedPaymentCustomer.opening_balance || 0));
-                                  setEditingOpeningBalance(true);
-                                }}
-                                className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
-                              >
-                                <Pencil size={11} /> Edit Balance
-                              </button>
-                            ) : (
-                              <div className="flex items-center gap-1.5">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="0.01"
-                                  value={openingBalanceInput}
-                                  onChange={(e) => setOpeningBalanceInput(e.target.value)}
-                                  className="w-24 px-2 py-0.5 text-xs bg-slate-800 border border-slate-600 rounded text-white outline-none font-bold"
-                                  placeholder="0.00"
-                                />
-                                <button
-                                  type="button"
-                                  disabled={savingOpeningBalance}
-                                  onClick={handleSaveOpeningBalance}
-                                  className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold disabled:opacity-50 cursor-pointer"
-                                >
-                                  {savingOpeningBalance ? 'Saving...' : 'Save'}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setEditingOpeningBalance(false)}
-                                  className="px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded text-[11px] cursor-pointer"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Invoices List with Complete Purchase & Payment Retention */}
-                        {(() => {
-                          const allCustomerInvoices = selectedPaymentCustomer.items || [selectedPaymentCustomer];
-                          const unpaidInvoices = allCustomerInvoices.filter(sale => Number(sale.pending_amount || 0) > 0);
-                          const paidInvoices = allCustomerInvoices.filter(sale => Number(sale.pending_amount || 0) <= 0);
-
-                          const displayedInvoices = customerDrawerTab === 'pending'
-                            ? unpaidInvoices
-                            : (customerDrawerTab === 'paid' ? paidInvoices : allCustomerInvoices);
-
-                          return (
-                            <div>
-                              <div className="flex items-center justify-between mb-2.5">
-                                <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                                  Purchase & Payment History ({allCustomerInvoices.length})
-                                </h4>
-                                <button
-                                  type="button"
-                                  onClick={() => printCustomerStatementPDF(selectedPaymentCustomer)}
-                                  className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer"
-                                >
-                                  <ReceiptText size={13} /> Complete Statement
-                                </button>
-                              </div>
-
-                              {/* Tab Filter: All / Pending / Paid */}
-                              <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl mb-3">
-                                <button
-                                  type="button"
-                                  onClick={() => setCustomerDrawerTab('all')}
-                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                                    customerDrawerTab === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
-                                  }`}
-                                >
-                                  All ({allCustomerInvoices.length})
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setCustomerDrawerTab('pending')}
-                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                                    customerDrawerTab === 'pending' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
-                                  }`}
-                                >
-                                  Pending ({unpaidInvoices.length})
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setCustomerDrawerTab('paid')}
-                                  className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                                    customerDrawerTab === 'paid' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
-                                  }`}
-                                >
-                                  Paid in Full ({paidInvoices.length})
-                                </button>
-                              </div>
-
-                              {displayedInvoices.length === 0 ? (
-                                <div className="p-4 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
-                                  {customerDrawerTab === 'pending' ? 'No pending invoices for this customer.' : 'No invoices in this category.'}
-                                </div>
-                              ) : (
-                                <div className="space-y-2.5">
-                                  {displayedInvoices.map((sale) => {
-                                    const isPaid = Number(sale.pending_amount || 0) <= 0;
-                                    const saleDueInfo = getDueDateInfo(sale.due_date);
-                                    const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
-                                    
-                                    return (
-                                      <div key={sale.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2.5 hover:border-slate-300 transition-all">
-                                        <div className="flex items-center justify-between">
-                                          <div>
-                                            <span className="font-mono font-black text-slate-900 text-xs">
-                                              {invNumber}
-                                            </span>
-                                            <span className="text-[11px] text-slate-500 ml-2">
-                                              Bought on {formatDateDMY(sale.sale_date || sale.invoice_date)}
-                                            </span>
-                                          </div>
-                                          {isPaid ? (
-                                            <span className="px-2 py-0.5 rounded-full text-[10.5px] border bg-emerald-50 text-emerald-800 border-emerald-200 font-bold">
-                                              ✓ Paid in Full
-                                            </span>
-                                          ) : (
-                                            <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
-                                              {saleDueInfo.label}
-                                            </span>
-                                          )}
-                                        </div>
-
-                                        <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
-                                          <div>
-                                            {isPaid ? (
-                                              <span className="text-emerald-700 font-bold text-[11.5px]">
-                                                Paid in Full
-                                              </span>
-                                            ) : (
-                                              <>
-                                                <span className="text-slate-500 text-[11px]">Pending: </span>
-                                                <strong className="font-bold text-rose-600">{currency(sale.pending_amount)}</strong>
-                                              </>
-                                            )}
-                                            <span className="text-slate-400 text-[10.5px] ml-1.5">(Total: {currency(sale.total_amount)})</span>
-                                          </div>
-
-                                          <div className="flex items-center gap-1.5">
-                                            <button
-                                              type="button"
-                                              onClick={() => printTaxInvoicePDF(sale)}
-                                              className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
-                                            >
-                                              <ReceiptText size={12} /> Invoice
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => openInvoiceShareModal(sale, selectedPaymentCustomer)}
-                                              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
-                                              title="Share this invoice via WhatsApp & PDF"
-                                            >
-                                              <Send size={12} /> Share
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => openSalesReturnModal(sale)}
-                                              className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                                              title="Return items from this invoice"
-                                            >
-                                              <RotateCcw size={12} /> Return
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => openEditSaleModal(sale)}
-                                              className="px-2 py-1 bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 hover:border-sky-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
-                                              title="Edit invoice dates, payment terms, expenses & remarks"
-                                            >
-                                              <Pencil size={12} /> Edit
-                                            </button>
-                                            {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
-                                              <button
-                                                type="button"
-                                                onClick={() => deleteSale(sale)}
-                                                className="p-1 text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors"
-                                                title="Delete invoice and restore stock"
-                                              >
-                                                <Trash2 size={12} />
-                                              </button>
-                                            )}
-                                          </div>
-                                        </div>
-
-                                        {/* Payments / Repayments history on this invoice */}
-                                        {Array.isArray(sale.payments) && sale.payments.length > 0 && (
-                                          <div className="bg-emerald-50/60 p-2 rounded-lg border border-emerald-100 text-[11px] text-emerald-900 space-y-1">
-                                            <span className="font-bold block text-[10px] uppercase tracking-wider text-emerald-700">
-                                              Repayment Details:
-                                            </span>
-                                            {sale.payments.map((pm, pidx) => (
-                                              <div key={pm.id || pidx} className="flex items-center justify-between">
-                                                <span>
-                                                  Repaid on <strong>{formatDateDMY(pm.payment_date)}</strong> via <strong className="capitalize">{pm.payment_mode || 'Cash'}</strong>{pm.note ? ` (${pm.note})` : ''}
-                                                </span>
-                                                <strong className="font-bold text-emerald-800">{currency(pm.amount)}</strong>
-                                              </div>
-                                            ))}
-                                          </div>
-                                        )}
-
-                                        {/* Multi-product line items in this invoice */}
-                                        {(() => {
-                                          const invoiceProducts = Array.isArray(sale.items) && sale.items.length > 0
-                                            ? sale.items
-                                            : [{
-                                                id: 0,
-                                                product_name: sale.product_name || productName(sale),
-                                                quantity: sale.quantity || 1,
-                                                unit_price: Number(sale.total_amount || 0) / Math.max(1, Number(sale.quantity || 1)),
-                                                total_price: sale.total_amount,
-                                                colour: sale.colour
-                                              }];
-                                          const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
-
-                                          return (
-                                            <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 space-y-1.5">
-                                              <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400 tracking-wider">
-                                                <span>Invoice Items ({invoiceProducts.length})</span>
-                                                <span>Line Total</span>
-                                              </div>
-                                              {invoiceProducts.map((it, itIdx) => {
-                                                const itemQty = Number(it.quantity || 1);
-                                                const itemUnit = Number(it.unit_price || 0) || (Number(it.total_price || 0) / Math.max(1, itemQty));
-                                                const itemLineTotal = Number(it.total_price || (itemUnit * itemQty));
-
-                                                return (
-                                                  <div key={it.id || itIdx} className="flex items-center justify-between text-xs py-1 border-b border-slate-100 last:border-0">
-                                                    <div>
-                                                      <div className="flex items-center gap-1.5 flex-wrap">
-                                                        <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
-                                                        <span className="font-bold">{it.product_name || it.name || productName(it)}</span>
-
-                                                        {getBrandName(it, sale) && (
-                                                          <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
-                                                            {getBrandName(it, sale)}
-                                                          </span>
-                                                        )}
-                                                        {it.colour && (
-                                                          <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
-                                                            ● {it.colour}
-                                                          </span>
-                                                        )}
-                                                      </div>
-                                                      <div className="text-[11px] text-slate-400 pl-3">
-                                                        Qty: {itemQty} pcs · Rate: {currency(itemUnit)}
-                                                      </div>
-                                                    </div>
-                                                    <strong className="text-slate-900 font-bold text-xs shrink-0 ml-2">
-                                                      {currency(itemLineTotal)}
-                                                    </strong>
-                                                  </div>
-                                                );
-                                              })}
-
-                                              {expensesList.length > 0 && (
-                                                <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[11px]">
-                                                  <span className="text-[10px] font-bold text-teal-700 uppercase">Extra Expenses:</span>
-                                                  {expensesList.map((exp, expIdx) => (
-                                                    <div key={exp.id || expIdx} className="flex justify-between text-teal-800 font-medium">
-                                                      <span>+ {exp.expense_name || exp.expense_type}</span>
-                                                      <span>{currency(exp.amount)}</span>
-                                                    </div>
-                                                  ))}
-                                                </div>
-                                              )}
-                                            </div>
-                                          );
-                                        })()}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })()}
-                      </div>
-
-                      {/* Drawer Sticky Footer Actions */}
-                      <div className="p-4 border-t border-slate-200 bg-slate-50/90 flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setPaymentModalTarget(selectedPaymentCustomer);
-                            setPaymentModalForm({
-                              amount: String(selectedPaymentCustomer.pending_amount || ''),
-                              mode: 'cash',
-                              reference_no: '',
-                              note: '',
-                            });
-                          }}
-                          className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs shadow-2xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                        >
-                          <CreditCard size={15} /> Record Payment
-                        </button>
-                        {/* Drawer Share Button */}
-                        <button
-                          type="button"
-                          onClick={() => openPendingShareModal(selectedPaymentCustomer)}
-                          className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
-                        >
-                          <Send size={15} /> Share
-                        </button>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
-              </AnimatePresence>
-
-              {/* 6. RECORD PAYMENT MODAL */}
-              <AnimatePresence>
-                {paymentModalTarget && (
-                  <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
-                    {/* Modal Backdrop */}
-                    <motion.div 
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      onClick={() => setPaymentModalTarget(null)}
-                      className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs transition-opacity"
-                    />
-
-                    {/* Modal Content */}
-                    <motion.div
-                      initial={{ scale: 0.95, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0.95, opacity: 0 }}
-                      className="relative bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 z-10 space-y-4"
-                    >
-                      <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                        <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
-                            <CreditCard size={16} />
-                          </div>
-                          <div>
-                            <h3 className="text-base font-black text-slate-900">Record Payment</h3>
-                            <p className="text-xs text-slate-500">Collect customer dues safely</p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setPaymentModalTarget(null)}
-                          className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-                        >
-                          <X size={18} />
-                        </button>
-                      </div>
-
-                      {/* Customer & Due Details */}
-                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
-                        <div>
-                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Customer</span>
-                          <strong className="text-sm font-bold text-slate-800">{paymentModalTarget.customer_name}</strong>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Pending Balance</span>
-                          <strong className="text-sm font-black text-rose-600">{currency(paymentModalTarget.pending_amount)}</strong>
-                        </div>
-                      </div>
-
-                      <form onSubmit={submitRecordPaymentModal} className="space-y-3.5">
-                        {/* Payment Amount Input & Quick Fill */}
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            Payment Amount (₹) <span className="text-rose-500">*</span>
-                          </label>
-                          <input
-                            type="number"
-                            step="any"
-                            min="1"
-                            max={paymentModalTarget.pending_amount}
-                            required
-                            autoFocus
-                            placeholder="Enter amount"
-                            className="w-full text-base font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-900"
-                            value={paymentModalForm.amount}
-                            onChange={(e) => setPaymentModalForm({ ...paymentModalForm, amount: e.target.value })}
-                          />
-
-                          {/* Quick Chips */}
-                          <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                            <button
-                              type="button"
-                              onClick={() => setPaymentModalForm({ ...paymentModalForm, amount: String(paymentModalTarget.pending_amount) })}
-                              className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-colors"
-                            >
-                              Full ({currency(paymentModalTarget.pending_amount)})
-                            </button>
-                            {Number(paymentModalTarget.pending_amount) > 1000 && (
-                              <button
-                                type="button"
-                                onClick={() => setPaymentModalForm({ ...paymentModalForm, amount: String(Math.round(Number(paymentModalTarget.pending_amount) / 2)) })}
-                                className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors"
-                              >
-                                50% ({currency(Math.round(Number(paymentModalTarget.pending_amount) / 2))})
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Payment Date, Mode & Reference No */}
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1">
-                              Payment Date <span className="text-rose-500">*</span>
-                            </label>
-                            <input
-                              type="date"
-                              required
-                              className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
-                              value={paymentModalForm.date || today()}
-                              onChange={(e) => setPaymentModalForm({ ...paymentModalForm, date: e.target.value })}
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-xs font-bold text-slate-700 mb-1">Payment Mode</label>
-                            <select
-                              className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
-                              value={paymentModalForm.mode}
-                              onChange={(e) => setPaymentModalForm({ ...paymentModalForm, mode: e.target.value })}
-                            >
-                              <option value="cash">Cash</option>
-                              <option value="upi">UPI / GPay</option>
-                              <option value="bank">Bank Transfer</option>
-                              <option value="cheque">Cheque</option>
-                            </select>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">Reference No (Optional)</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. UPI Ref / Txn ID"
-                            className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
-                            value={paymentModalForm.reference_no}
-                            onChange={(e) => setPaymentModalForm({ ...paymentModalForm, reference_no: e.target.value })}
-                          />
-                        </div>
-
-                        {/* Notes */}
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">Payment Notes (Optional)</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Received by store manager"
-                            className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
-                            value={paymentModalForm.note}
-                            onChange={(e) => setPaymentModalForm({ ...paymentModalForm, note: e.target.value })}
-                          />
-                        </div>
-
-                        {/* Submit Button */}
-                        <div className="pt-2 flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setPaymentModalTarget(null)}
-                            className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="submit"
-                            disabled={saving}
-                            className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Check size={14} /> {saving ? 'Recording...' : 'Save Payment'}
-                          </button>
-                        </div>
-                      </form>
-                    </motion.div>
-                  </div>
-                )}
-              </AnimatePresence>
             </PageWrapper>
           )}
 
@@ -8940,6 +8395,579 @@ function App() {
           onCancel={() => setConfirmDialog(null)}
           onConfirm={runConfirmedAction}
         />
+
+        {/* ========================================================= */}
+        {/* GLOBAL: CUSTOMER DETAIL RIGHT-SIDE DRAWER (500px) */}
+        {/* ========================================================= */}
+        <AnimatePresence>
+          {selectedPaymentCustomer && (
+            <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
+              {/* Backdrop */}
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setSelectedPaymentCustomer(null)}
+                className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+              />
+
+              {/* Sliding Drawer */}
+              <motion.div
+                initial={{ x: '100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '100%' }}
+                transition={{ type: 'spring', damping: 25, stiffness: 220 }}
+                className="relative w-full max-w-md md:max-w-lg bg-white h-full shadow-2xl z-10 flex flex-col"
+              >
+                {/* Drawer Header */}
+                <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-lg font-black text-slate-900">
+                        {selectedPaymentCustomer.customer_name || selectedPaymentCustomer.name}
+                      </h3>
+                      <button
+                        type="button"
+                        onClick={() => printCustomerStatementPDF(selectedPaymentCustomer)}
+                        className="px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-all flex items-center gap-1 cursor-pointer"
+                        title="Download / View Complete Customer Ledger Statement"
+                      >
+                        Customer Ledger
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openSalesReturnModal(selectedPaymentCustomer)}
+                        className="px-2 py-0.5 text-[10.5px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-full transition-all flex items-center gap-1 cursor-pointer"
+                        title="Issue Credit Note / Sales Return for this customer"
+                      >
+                        <RotateCcw size={10} /> Return / Credit Note
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {selectedPaymentCustomer.mobile || 'No phone'} {selectedPaymentCustomer.shop_name ? `· ${selectedPaymentCustomer.shop_name}` : ''}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPaymentCustomer(null)}
+                    className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Drawer Body */}
+                <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+                  {/* Financial Balance Summary Card */}
+                  <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-sm space-y-3">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                      Total Outstanding Due
+                    </span>
+                    <div className="text-2xl font-black text-teal-400">
+                      {currency(selectedPaymentCustomer.pending_amount)}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60 text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[10.5px]">Total Invoiced</span>
+                        <strong className="text-slate-200 font-bold">{currency(selectedPaymentCustomer.total_amount)}</strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10.5px]">Total Paid</span>
+                        <strong className="text-emerald-400 font-bold">{currency(selectedPaymentCustomer.paid_amount)}</strong>
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-slate-400 block text-[10.5px]">Carry Forward (Opening) Balance</span>
+                        <strong className="text-amber-300 font-bold">
+                          {currency(selectedPaymentCustomer.opening_balance || 0)}
+                        </strong>
+                      </div>
+                      {!editingOpeningBalance ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpeningBalanceInput(String(selectedPaymentCustomer.opening_balance || 0));
+                            setEditingOpeningBalance(true);
+                          }}
+                          className="px-2 py-1 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-[11px] font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                        >
+                          <Pencil size={11} /> Edit Balance
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={openingBalanceInput}
+                            onChange={(e) => setOpeningBalanceInput(e.target.value)}
+                            className="w-24 px-2 py-0.5 text-xs bg-slate-800 border border-slate-600 rounded text-white outline-none font-bold"
+                            placeholder="0.00"
+                          />
+                          <button
+                            type="button"
+                            disabled={savingOpeningBalance}
+                            onClick={handleSaveOpeningBalance}
+                            className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-[11px] font-bold disabled:opacity-50 cursor-pointer"
+                          >
+                            {savingOpeningBalance ? 'Saving...' : 'Save'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingOpeningBalance(false)}
+                            className="px-1.5 py-0.5 bg-slate-700 text-slate-300 rounded text-[11px] cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Invoices List with Complete Purchase & Payment Retention */}
+                  {(() => {
+                    const allCustomerInvoices = selectedPaymentCustomer.items || [selectedPaymentCustomer];
+                    const unpaidInvoices = allCustomerInvoices.filter(sale => Number(sale.pending_amount || 0) > 0);
+                    const paidInvoices = allCustomerInvoices.filter(sale => Number(sale.pending_amount || 0) <= 0);
+
+                    const displayedInvoices = customerDrawerTab === 'pending'
+                      ? unpaidInvoices
+                      : (customerDrawerTab === 'paid' ? paidInvoices : allCustomerInvoices);
+
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between mb-2.5">
+                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                            Purchase & Payment History ({allCustomerInvoices.length})
+                          </h4>
+                          <button
+                            type="button"
+                            onClick={() => printCustomerStatementPDF(selectedPaymentCustomer)}
+                            className="text-xs font-bold text-teal-700 hover:text-teal-800 flex items-center gap-1 cursor-pointer"
+                          >
+                            <ReceiptText size={13} /> Complete Statement
+                          </button>
+                        </div>
+
+                        {/* Tab Filter: All / Pending / Paid */}
+                        <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-xl mb-3">
+                          <button
+                            type="button"
+                            onClick={() => setCustomerDrawerTab('all')}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                              customerDrawerTab === 'all' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                            }`}
+                          >
+                            All ({allCustomerInvoices.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCustomerDrawerTab('pending')}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                              customerDrawerTab === 'pending' ? 'bg-white text-rose-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                            }`}
+                          >
+                            Pending ({unpaidInvoices.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCustomerDrawerTab('paid')}
+                            className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                              customerDrawerTab === 'paid' ? 'bg-white text-emerald-700 shadow-2xs' : 'text-slate-500 hover:text-slate-800'
+                            }`}
+                          >
+                            Paid in Full ({paidInvoices.length})
+                          </button>
+                        </div>
+
+                        {displayedInvoices.length === 0 ? (
+                          <div className="p-4 text-center text-xs text-slate-400 bg-slate-50 rounded-xl border border-slate-200">
+                            {customerDrawerTab === 'pending' ? 'No pending invoices for this customer.' : 'No invoices in this category.'}
+                          </div>
+                        ) : (
+                          <div className="space-y-2.5">
+                            {displayedInvoices.map((sale) => {
+                              const isPaid = Number(sale.pending_amount || 0) <= 0;
+                              const saleDueInfo = getDueDateInfo(sale.due_date);
+                              const invNumber = sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`;
+                              
+                              return (
+                                <div key={sale.id} className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2.5 hover:border-slate-300 transition-all">
+                                  <div className="flex items-center justify-between">
+                                    <div>
+                                      <span className="font-mono font-black text-slate-900 text-xs">
+                                        {invNumber}
+                                      </span>
+                                      <span className="text-[11px] text-slate-500 ml-2">
+                                        Bought on {formatDateDMY(sale.sale_date || sale.invoice_date)}
+                                      </span>
+                                    </div>
+                                    {isPaid ? (
+                                      <span className="px-2 py-0.5 rounded-full text-[10.5px] border bg-emerald-50 text-emerald-800 border-emerald-200 font-bold">
+                                        ✓ Paid in Full
+                                      </span>
+                                    ) : (
+                                      <span className={`px-2 py-0.5 rounded-full text-[10.5px] border ${saleDueInfo.badgeClass}`}>
+                                        {saleDueInfo.label}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-200/60">
+                                    <div>
+                                      {isPaid ? (
+                                        <span className="text-emerald-700 font-bold text-[11.5px]">
+                                          Paid in Full
+                                        </span>
+                                      ) : (
+                                        <>
+                                          <span className="text-slate-500 text-[11px]">Pending: </span>
+                                          <strong className="font-bold text-rose-600">{currency(sale.pending_amount)}</strong>
+                                        </>
+                                      )}
+                                      <span className="text-slate-400 text-[10.5px] ml-1.5">(Total: {currency(sale.total_amount)})</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => printTaxInvoicePDF(sale)}
+                                        className="px-2 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1"
+                                      >
+                                        <ReceiptText size={12} /> Invoice
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openInvoiceShareModal(sale, selectedPaymentCustomer)}
+                                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shadow-2xs"
+                                        title="Share this invoice via WhatsApp & PDF"
+                                      >
+                                        <Send size={12} /> Share
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openSalesReturnModal(sale)}
+                                        className="px-2 py-1 bg-white hover:bg-amber-50 text-amber-800 border border-slate-200 hover:border-amber-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                        title="Return items from this invoice"
+                                      >
+                                        <RotateCcw size={12} /> Return
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => openEditSaleModal(sale)}
+                                        className="px-2 py-1 bg-white hover:bg-sky-50 text-sky-800 border border-slate-200 hover:border-sky-300 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                                        title="Edit invoice dates, payment terms, expenses & remarks"
+                                      >
+                                        <Pencil size={12} /> Edit
+                                      </button>
+                                      {(role === 'superadmin' || Number(sale.created_by) === Number(session?.id)) && (
+                                        <button
+                                          type="button"
+                                          onClick={() => deleteSale(sale)}
+                                          className="p-1 text-rose-500 hover:text-rose-700 bg-white hover:bg-rose-50 rounded-lg border border-slate-200 transition-colors"
+                                          title="Delete invoice and restore stock"
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Payments / Repayments history on this invoice */}
+                                  {Array.isArray(sale.payments) && sale.payments.length > 0 && (
+                                    <div className="bg-emerald-50/60 p-2 rounded-lg border border-emerald-100 text-[11px] text-emerald-900 space-y-1">
+                                      <span className="font-bold block text-[10px] uppercase tracking-wider text-emerald-700">
+                                        Repayment Details:
+                                      </span>
+                                      {sale.payments.map((pm, pidx) => (
+                                        <div key={pm.id || pidx} className="flex items-center justify-between">
+                                          <span>
+                                            Repaid on <strong>{formatDateDMY(pm.payment_date)}</strong> via <strong className="capitalize">{pm.payment_mode || 'Cash'}</strong>{pm.note ? ` (${pm.note})` : ''}
+                                          </span>
+                                          <strong className="font-bold text-emerald-800">{currency(pm.amount)}</strong>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+
+                                  {/* Multi-product line items in this invoice */}
+                                  {(() => {
+                                    const invoiceProducts = Array.isArray(sale.items) && sale.items.length > 0
+                                      ? sale.items
+                                      : [{
+                                          id: 0,
+                                          product_name: sale.product_name || productName(sale),
+                                          quantity: sale.quantity || 1,
+                                          unit_price: Number(sale.total_amount || 0) / Math.max(1, Number(sale.quantity || 1)),
+                                          total_price: sale.total_amount,
+                                          colour: sale.colour
+                                        }];
+                                    const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
+
+                                    return (
+                                      <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 space-y-1.5">
+                                        <div className="flex items-center justify-between text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                                          <span>Invoice Items ({invoiceProducts.length})</span>
+                                          <span>Line Total</span>
+                                        </div>
+                                        {invoiceProducts.map((it, itIdx) => {
+                                          const itemQty = Number(it.quantity || 1);
+                                          const itemUnit = Number(it.unit_price || 0) || (Number(it.total_price || 0) / Math.max(1, itemQty));
+                                          const itemLineTotal = Number(it.total_price || (itemUnit * itemQty));
+
+                                          return (
+                                            <div key={it.id || itIdx} className="flex items-center justify-between text-xs py-1 border-b border-slate-100 last:border-0">
+                                              <div>
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                  <span className="w-1.5 h-1.5 rounded-full bg-teal-500"></span>
+                                                  <span className="font-bold">{it.product_name || it.name || productName(it)}</span>
+
+                                                  {getBrandName(it, sale) && (
+                                                    <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold">
+                                                      {getBrandName(it, sale)}
+                                                    </span>
+                                                  )}
+                                                  {it.colour && (
+                                                    <span className="px-1.5 py-0.2 rounded bg-teal-50 text-teal-700 border border-teal-200 text-[10px] font-bold">
+                                                      ● {it.colour}
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="text-[11px] text-slate-400 pl-3">
+                                                  Qty: {itemQty} pcs · Rate: {currency(itemUnit)}
+                                                </div>
+                                              </div>
+                                              <strong className="text-slate-900 font-bold text-xs shrink-0 ml-2">
+                                                {currency(itemLineTotal)}
+                                              </strong>
+                                            </div>
+                                          );
+                                        })}
+
+                                        {expensesList.length > 0 && (
+                                          <div className="pt-1.5 border-t border-slate-100 space-y-1 text-[11px]">
+                                            <span className="text-[10px] font-bold text-teal-700 uppercase">Extra Expenses:</span>
+                                            {expensesList.map((exp, expIdx) => (
+                                              <div key={exp.id || expIdx} className="flex justify-between text-teal-800 font-medium">
+                                                <span>+ {exp.expense_name || exp.expense_type}</span>
+                                                <span>{currency(exp.amount)}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })()}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Drawer Sticky Footer Actions */}
+                <div className="p-4 border-t border-slate-200 bg-slate-50/90 flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaymentModalTarget(selectedPaymentCustomer);
+                      setPaymentModalForm({
+                        amount: String(selectedPaymentCustomer.pending_amount || ''),
+                        mode: 'cash',
+                        reference_no: '',
+                        note: '',
+                      });
+                    }}
+                    className="flex-1 py-2.5 bg-teal-600 hover:bg-teal-700 text-white rounded-xl font-bold text-xs shadow-2xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <CreditCard size={15} /> Record Payment
+                  </button>
+                  {/* Drawer Share Button */}
+                  <button
+                    type="button"
+                    onClick={() => openPendingShareModal(selectedPaymentCustomer)}
+                    className="px-3.5 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  >
+                    <Send size={15} /> Share
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* ========================================================= */}
+        {/* GLOBAL: RECORD PAYMENT MODAL */}
+        {/* ========================================================= */}
+        <AnimatePresence>
+          {paymentModalTarget && (
+            <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-4">
+              {/* Modal Backdrop */}
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setPaymentModalTarget(null)}
+                className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs transition-opacity"
+              />
+
+              {/* Modal Content */}
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="relative bg-white rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-2xl border border-slate-200 z-10 space-y-4"
+              >
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
+                      <CreditCard size={16} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900">Record Payment</h3>
+                      <p className="text-xs text-slate-500">Collect customer dues safely</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentModalTarget(null)}
+                    className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Customer & Due Details */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
+                  <div>
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Customer</span>
+                    <strong className="text-sm font-bold text-slate-800">{paymentModalTarget.customer_name || paymentModalTarget.name}</strong>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Pending Balance</span>
+                    <strong className="text-sm font-black text-rose-600">{currency(paymentModalTarget.pending_amount)}</strong>
+                  </div>
+                </div>
+
+                <form onSubmit={submitRecordPaymentModal} className="space-y-3.5">
+                  {/* Payment Amount Input & Quick Fill */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Payment Amount (₹) <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      min="1"
+                      max={paymentModalTarget.pending_amount}
+                      required
+                      autoFocus
+                      placeholder="Enter amount"
+                      className="w-full text-base font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-900"
+                      value={paymentModalForm.amount}
+                      onChange={(e) => setPaymentModalForm({ ...paymentModalForm, amount: e.target.value })}
+                    />
+
+                    {/* Quick Chips */}
+                    <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setPaymentModalForm({ ...paymentModalForm, amount: String(paymentModalTarget.pending_amount) })}
+                        className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 transition-colors"
+                      >
+                        Full ({currency(paymentModalTarget.pending_amount)})
+                      </button>
+                      {Number(paymentModalTarget.pending_amount) > 1000 && (
+                        <button
+                          type="button"
+                          onClick={() => setPaymentModalForm({ ...paymentModalForm, amount: String(Math.round(Number(paymentModalTarget.pending_amount) / 2)) })}
+                          className="px-2 py-0.5 text-[11px] font-bold rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors"
+                        >
+                          50% ({currency(Math.round(Number(paymentModalTarget.pending_amount) / 2))})
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Payment Date, Mode & Reference No */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Payment Date <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                        value={paymentModalForm.date || today()}
+                        onChange={(e) => setPaymentModalForm({ ...paymentModalForm, date: e.target.value })}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">Payment Mode</label>
+                      <select
+                        className="w-full text-xs font-bold px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                        value={paymentModalForm.mode}
+                        onChange={(e) => setPaymentModalForm({ ...paymentModalForm, mode: e.target.value })}
+                      >
+                        <option value="cash">Cash</option>
+                        <option value="upi">UPI / GPay</option>
+                        <option value="bank">Bank Transfer</option>
+                        <option value="cheque">Cheque</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Reference No (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. UPI Ref / Txn ID"
+                      className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                      value={paymentModalForm.reference_no}
+                      onChange={(e) => setPaymentModalForm({ ...paymentModalForm, reference_no: e.target.value })}
+                    />
+                  </div>
+
+                  {/* Notes */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Payment Notes (Optional)</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Received by store manager"
+                      className="w-full text-xs font-medium px-3 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none bg-white text-slate-800"
+                      value={paymentModalForm.note}
+                      onChange={(e) => setPaymentModalForm({ ...paymentModalForm, note: e.target.value })}
+                    />
+                  </div>
+
+                  {/* Submit Button */}
+                  <div className="pt-2 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentModalTarget(null)}
+                      className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="px-4 py-2 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-2xs transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Check size={14} /> {saving ? 'Recording...' : 'Save Payment'}
+                    </button>
+                  </div>
+                </form>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {showQuickAddCustomerModal && (

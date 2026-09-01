@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS sales (
   due_date TEXT,
   notes TEXT,
   sale_date TEXT NOT NULL,
+  public_token TEXT DEFAULT gen_random_uuid()::text,
   created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
