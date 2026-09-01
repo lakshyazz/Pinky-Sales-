@@ -1045,6 +1045,7 @@ function SalesCreationWorkspace({
   updateSaleItemSellingPrice,
   updateSaleItemQuantity,
   toggleSaleItemColor,
+  updateSaleItemSingleColor,
   updateSaleItemColorQuantity,
   addSaleItem,
   removeSaleItem,
@@ -1054,6 +1055,7 @@ function SalesCreationWorkspace({
   updateSaleExpense,
   removeSaleExpense,
   submitSale,
+  cancelEditSale,
   activeTab,
   setShowQuickAddCustomerModal,
   getProductAvailableColors,
@@ -1108,11 +1110,12 @@ function SalesCreationWorkspace({
               available_credits: availCredits,
               credit_notes: res.credit_notes || [],
             });
+            // Only overwrite previous_balance if not currently in editing mode with a prefilled balance
             setForms((prev) => ({
               ...prev,
               sale: {
                 ...prev.sale,
-                previous_balance: outBal,
+                previous_balance: (prev.sale?.editing_sale_id && prev.sale?.previous_balance !== '') ? prev.sale.previous_balance : outBal,
                 apply_advance: true,
               },
             }));
@@ -1126,7 +1129,7 @@ function SalesCreationWorkspace({
             ...prev,
             sale: {
               ...prev.sale,
-              previous_balance: outBal,
+              previous_balance: (prev.sale?.editing_sale_id && prev.sale?.previous_balance !== '') ? prev.sale.previous_balance : outBal,
               apply_advance: true,
             },
           }));
@@ -1207,6 +1210,34 @@ function SalesCreationWorkspace({
 
   return (
     <div className="w-full">
+      {/* Edit Mode Notification Banner */}
+      {forms.sale?.editing_sale_id && (
+        <div className="mb-4 bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3.5 px-4 flex flex-wrap items-center justify-between gap-3 text-amber-900 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <span className="p-2 rounded-xl bg-amber-500 text-white font-black text-xs flex items-center justify-center">
+              <Edit3 size={15} />
+            </span>
+            <div>
+              <span className="text-xs font-black uppercase tracking-wider block text-amber-800">
+                Editing Invoice #{forms.sale.editing_invoice_number || `INV-${String(forms.sale.editing_sale_id).padStart(6, '0')}`}
+              </span>
+              <span className="text-[11px] text-amber-700">
+                Modify quantities, prices, variants, or customer balance. Stock will be reconciled automatically.
+              </span>
+            </div>
+          </div>
+          {cancelEditSale && (
+            <button
+              type="button"
+              onClick={cancelEditSale}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 shadow-2xs cursor-pointer transition-all flex items-center gap-1"
+            >
+              <X size={14} /> Cancel Editing
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
         {/* Left Main Workspace Column */}
         <div className="lg:col-span-8 space-y-3.5">
@@ -1324,12 +1355,13 @@ function SalesCreationWorkspace({
                 const hasMultipleColours = availableColors.length > 1;
                 const colorStockMap = selectedProd?.colour_stock || {};
                 const activeBreakdown = item.color_breakdown || [];
+                const currentVariantValue = item.selected_colour || (activeBreakdown.length === 1 ? activeBreakdown[0].color : (activeBreakdown.length > 1 ? '__split__' : (availableColors[0] || '')));
 
                 return (
                   <div key={idx} className="bg-slate-50/60 border border-slate-200/70 rounded-xl p-3 space-y-2.5 transition-all hover:border-slate-300">
                     <div className="flex flex-wrap items-end gap-2.5">
                       {/* Product Selector with compact 40px combobox */}
-                      <div className="flex-1 min-w-[240px]">
+                      <div className="flex-1 min-w-[220px]">
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">Product / Model</label>
                         <SearchableCombobox
                           value={item.product_id}
@@ -1341,8 +1373,40 @@ function SalesCreationWorkspace({
                         />
                       </div>
 
+                      {/* Color / Variant Selector Dropdown */}
+                      {Boolean(item.product_id) && availableColors.length > 0 && (
+                        <div className="w-[140px]">
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
+                          <select
+                            value={currentVariantValue}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === '__split__') {
+                                if (!activeBreakdown.length) {
+                                  toggleSaleItemColor(idx, availableColors[0]);
+                                }
+                              } else if (updateSaleItemSingleColor) {
+                                updateSaleItemSingleColor(idx, val);
+                              } else {
+                                toggleSaleItemColor(idx, val);
+                              }
+                            }}
+                            className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
+                          >
+                            {availableColors.map((c) => (
+                              <option key={c} value={c}>
+                                {c} {colorStockMap[c] !== undefined ? `(${colorStockMap[c]} in stock)` : ''}
+                              </option>
+                            ))}
+                            {availableColors.length > 1 && (
+                              <option value="__split__">⚡ Multi-Color Split</option>
+                            )}
+                          </select>
+                        </div>
+                      )}
+
                       {/* Price Tier */}
-                      <div className="w-[130px]">
+                      <div className="w-[115px]">
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price Tier</label>
                         <select
                           value={item.price_type || 'retail'}
@@ -1356,7 +1420,7 @@ function SalesCreationWorkspace({
                       </div>
 
                       {/* Selling Price */}
-                      <div className="w-[110px]">
+                      <div className="w-[105px]">
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price (₹)</label>
                         <input
                           type="number"
@@ -1369,38 +1433,36 @@ function SalesCreationWorkspace({
                       </div>
 
                       {/* Quantity */}
-                      <div className="w-[85px]">
+                      <div className="w-[80px]">
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">Qty</label>
                         <input
                           type="number"
                           min="1"
                           value={item.quantity}
                           onChange={(e) => updateSaleItemQuantity(idx, e.target.value)}
-                          disabled={!item.product_id || activeBreakdown.length > 0}
-                          title={activeBreakdown.length > 0 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
+                          disabled={!item.product_id || activeBreakdown.length > 1}
+                          title={activeBreakdown.length > 1 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
                           className="w-full h-10 px-2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-70 text-center"
                         />
                       </div>
 
                       {/* Total Amount */}
-                      <div className="w-[115px]">
+                      <div className="w-[110px]">
                         <label className="block text-[11px] font-semibold text-slate-600 mb-1">Total (₹)</label>
                         <div className="w-full h-10 px-2.5 flex items-center justify-end bg-slate-100/90 border border-slate-200 rounded-xl text-xs font-black text-slate-900">
                           ₹{Number(item.total_amount || 0).toLocaleString('en-IN')}
                         </div>
                       </div>
 
-                      {/* Remove Button */}
-                      {items.length > 1 && (
-                        <button
-                          type="button"
-                          onClick={() => removeSaleItem(idx)}
-                          className="h-10 px-2.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-transparent hover:border-rose-200 transition-all cursor-pointer flex items-center justify-center shrink-0"
-                          title="Remove item"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      )}
+                      {/* Trash / Remove Row Button */}
+                      <button
+                        type="button"
+                        onClick={() => removeSaleItem(idx)}
+                        className="h-10 px-2.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-transparent hover:border-rose-200 transition-all cursor-pointer flex items-center justify-center shrink-0"
+                        title={items.length > 1 ? "Remove item" : "Clear item"}
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
 
                     {/* Invoice Model Name & Manufacturing Brand Customization */}
@@ -1961,17 +2023,35 @@ function SalesCreationWorkspace({
               </div>
             </div>
 
-            {/* Create Sale Action Button */}
-            <div className="pt-2">
+            {/* Create / Update Sale Action Button */}
+            <div className="pt-2 space-y-2">
               <button
                 type="button"
                 disabled={saving || needsSpecificShop}
                 onClick={() => submitSale(activeTab)}
-                className="w-full h-11 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-bold text-sm shadow-sm hover:shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`w-full h-11 rounded-xl text-white font-bold text-sm shadow-sm hover:shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99] ${
+                  forms.sale?.editing_sale_id
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
               >
-                <Plus size={18} />
-                <span>{saving ? 'Creating Sale...' : 'Create Sale'}</span>
+                {forms.sale?.editing_sale_id ? <Check size={18} /> : <Plus size={18} />}
+                <span>
+                  {saving
+                    ? (forms.sale?.editing_sale_id ? 'Updating Sale...' : 'Creating Sale...')
+                    : (forms.sale?.editing_sale_id ? 'Update Sale / Invoice' : 'Create Sale')}
+                </span>
               </button>
+              {forms.sale?.editing_sale_id && cancelEditSale && (
+                <button
+                  type="button"
+                  onClick={cancelEditSale}
+                  className="w-full h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs transition-all flex items-center justify-center gap-1 cursor-pointer"
+                >
+                  <X size={14} />
+                  <span>Cancel Editing</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -4158,6 +4238,21 @@ function App() {
     }));
   };
 
+  const updateSaleItemSingleColor = (itemIndex, colorName) => {
+    const currentItems = [...(forms.sale.items || [])];
+    const item = { ...currentItems[itemIndex] };
+    item.selected_colour = colorName;
+    item.color_breakdown = [{ color: colorName, qty: Number(item.quantity || 1) }];
+    currentItems[itemIndex] = item;
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        items: currentItems,
+      },
+    }));
+  };
+
   const toggleSaleItemColor = (itemIndex, colorName) => {
     const currentItems = [...(forms.sale.items || [])];
     const item = { ...currentItems[itemIndex] };
@@ -4174,6 +4269,7 @@ function App() {
     const totalColorQty = breakdown.reduce((sum, b) => sum + (Number(b.qty) || 0), 0);
     if (breakdown.length > 0) {
       item.quantity = Math.max(totalColorQty, 1);
+      item.selected_colour = breakdown.length === 1 ? breakdown[0].color : '__split__';
     }
 
     const unitPrice = Number(item.selling_price || 0);
@@ -4227,8 +4323,11 @@ function App() {
 
   const removeSaleItem = (index) => {
     const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [] }])];
-    if (currentItems.length <= 1) return;
-    currentItems.splice(index, 1);
+    if (currentItems.length <= 1) {
+      currentItems[0] = { product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' };
+    } else {
+      currentItems.splice(index, 1);
+    }
     const totals = calculateSaleTotals(currentItems, forms.sale.expenses);
     setForms((prev) => ({
       ...prev,
@@ -4240,6 +4339,94 @@ function App() {
         items: currentItems,
       },
     }));
+  };
+
+  const startEditSale = (sale) => {
+    if (!sale) return;
+    const saleItems = Array.isArray(sale.items) && sale.items.length > 0
+      ? sale.items.map((it) => ({
+          product_id: String(it.product_id),
+          quantity: Number(it.quantity || 1),
+          selling_price: it.selling_price || it.unit_price || it.price || '',
+          price_type: it.price_type || 'retail',
+          total_amount: Number(it.total_price || it.total_amount || 0),
+          color_breakdown: Array.isArray(it.color_breakdown) ? it.color_breakdown : (it.colour ? [{ color: it.colour, qty: Number(it.quantity || 1) }] : []),
+          selected_colour: it.colour || '',
+          custom_product_name: it.custom_product_name || '',
+          custom_brand_name: it.custom_brand_name || '',
+        }))
+      : [{
+          product_id: String(sale.product_id || ''),
+          quantity: Number(sale.quantity || 1),
+          selling_price: sale.unit_price || sale.selling_price || '',
+          price_type: sale.price_type || 'retail',
+          total_amount: Number(sale.products_total || sale.total_amount || 0),
+          color_breakdown: sale.colour ? [{ color: sale.colour, qty: Number(sale.quantity || 1) }] : [],
+          selected_colour: sale.colour || '',
+          custom_product_name: sale.custom_product_name || '',
+          custom_brand_name: sale.custom_brand_name || '',
+        }];
+
+    const saleExpenses = Array.isArray(sale.expenses) && sale.expenses.length > 0
+      ? sale.expenses.map((e) => ({
+          id: e.id || Date.now() + Math.random(),
+          expense_type: e.expense_type || 'custom',
+          expense_name: e.expense_name || e.description || 'Courier',
+          amount: Number(e.amount || 0),
+        }))
+      : (Number(sale.extra_expenses_total || 0) > 0 ? [{
+          id: Date.now(),
+          expense_type: 'courier',
+          expense_name: 'Courier',
+          amount: Number(sale.extra_expenses_total),
+        }] : []);
+
+    const rawDate = sale.invoice_date || sale.sale_date || '';
+    const initialDate = /^\d{4}-\d{2}-\d{2}/.test(rawDate)
+      ? rawDate.slice(0, 10)
+      : getTodayIso();
+
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        editing_sale_id: sale.id,
+        editing_invoice_number: sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`,
+        customer_id: String(sale.customer_id || ''),
+        invoice_date: initialDate,
+        payment_terms_days: Number(sale.payment_terms_days !== undefined && sale.payment_terms_days !== null ? sale.payment_terms_days : 7),
+        due_date: sale.due_date ? String(sale.due_date).slice(0, 10) : calculateDueDate(initialDate, Number(sale.payment_terms_days || 7)),
+        previous_balance: sale.previous_balance !== undefined && sale.previous_balance !== null ? sale.previous_balance : '',
+        paid_amount: sale.paid_amount !== undefined && sale.paid_amount !== null ? String(sale.paid_amount) : '0',
+        payment_mode: sale.payment_mode || 'cash',
+        notes: sale.notes || '',
+        items: saleItems,
+        expenses: saleExpenses,
+      },
+    }));
+
+    setActivePage('customers');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    showToast(`Loaded invoice ${sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`} into editor`);
+  };
+
+  const cancelEditSale = () => {
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...initialForms.sale,
+        invoice_date: getTodayIso(),
+        payment_terms_days: 7,
+        due_date: calculateDueDate(getTodayIso(), 7),
+        previous_balance: '',
+        applied_credit_amount: 0,
+        items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
+        expenses: [],
+        editing_sale_id: null,
+        editing_invoice_number: null,
+      },
+    }));
+    showToast('Cancelled invoice editing');
   };
 
   const addSaleExpense = () => {
@@ -4378,8 +4565,12 @@ function App() {
 
     try {
       setSaving(true);
-      await authedFetch('/sales', {
-        method: 'POST',
+      const isEditing = Boolean(forms.sale.editing_sale_id);
+      const endpoint = isEditing ? `/sales/${forms.sale.editing_sale_id}` : '/sales';
+      const method = isEditing ? 'PUT' : 'POST';
+
+      await authedFetch(endpoint, {
+        method,
         body: JSON.stringify({
           shop_id: shopId,
           customer_id: customerId,
@@ -4432,9 +4623,11 @@ function App() {
           applied_credit_amount: 0,
           items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: 1, total_amount: '' }],
           expenses: [],
+          editing_sale_id: null,
+          editing_invoice_number: null,
         },
       }));
-      showToast('Sale created successfully');
+      showToast(isEditing ? 'Invoice updated successfully' : 'Sale created successfully');
       await loadTab(reloadTab, shopId);
       if (!['sales', 'customers', 'stock'].includes(reloadTab)) {
         await loadStockPage({
@@ -6917,6 +7110,7 @@ function App() {
                     updateSaleItemSellingPrice={updateSaleItemSellingPrice}
                     updateSaleItemQuantity={updateSaleItemQuantity}
                     toggleSaleItemColor={toggleSaleItemColor}
+                    updateSaleItemSingleColor={updateSaleItemSingleColor}
                     updateSaleItemColorQuantity={updateSaleItemColorQuantity}
                     addSaleItem={addSaleItem}
                     removeSaleItem={removeSaleItem}
@@ -6926,6 +7120,7 @@ function App() {
                     updateSaleExpense={updateSaleExpense}
                     removeSaleExpense={removeSaleExpense}
                     submitSale={submitSale}
+                    cancelEditSale={cancelEditSale}
                     activeTab="customers"
                     setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
                     getProductAvailableColors={getProductAvailableColors}
@@ -7165,6 +7360,7 @@ function App() {
                     updateSaleItemSellingPrice={updateSaleItemSellingPrice}
                     updateSaleItemQuantity={updateSaleItemQuantity}
                     toggleSaleItemColor={toggleSaleItemColor}
+                    updateSaleItemSingleColor={updateSaleItemSingleColor}
                     updateSaleItemColorQuantity={updateSaleItemColorQuantity}
                     addSaleItem={addSaleItem}
                     removeSaleItem={removeSaleItem}
@@ -7174,6 +7370,7 @@ function App() {
                     updateSaleExpense={updateSaleExpense}
                     removeSaleExpense={removeSaleExpense}
                     submitSale={submitSale}
+                    cancelEditSale={cancelEditSale}
                     activeTab="sales"
                     setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
                     getProductAvailableColors={getProductAvailableColors}
@@ -8391,6 +8588,7 @@ function App() {
             showToast={showToast}
             currency={currency}
             formatDateDMY={formatDateDMY}
+            onStartFullEdit={startEditSale}
             onSuccess={async (updatedSale) => {
               await loadTab(active, shopId);
               if (selectedPaymentCustomer) {

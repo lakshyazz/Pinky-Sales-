@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Calendar, Clock, Truck, FileText, AlertCircle, Loader2, Sparkles, ReceiptText, ShieldCheck, Check } from 'lucide-react';
+import { X, Calendar, Clock, Truck, FileText, AlertCircle, Loader2, Sparkles, ReceiptText, ShieldCheck, Check, Package, Edit3 } from 'lucide-react';
 
 export default function EditSaleModal({
   isOpen,
@@ -11,6 +11,7 @@ export default function EditSaleModal({
   authedFetch,
   showToast,
   onSuccess,
+  onStartFullEdit,
   currency = (v) => {
     const num = Number(v || 0);
     if (Math.abs(num - Math.round(num)) < 0.005) {
@@ -217,6 +218,26 @@ export default function EditSaleModal({
                 </strong>
               </div>
             </div>
+
+            {onStartFullEdit && (
+              <div className="p-3 bg-teal-50 dark:bg-teal-950/40 border border-teal-200 dark:border-teal-800 rounded-xl flex items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-teal-900 dark:text-teal-200 font-medium">
+                  <Package size={16} className="text-teal-600 shrink-0" />
+                  <span>Modify products, quantities, prices, or variants?</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onStartFullEdit(sale);
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs shrink-0 cursor-pointer shadow-2xs transition-all flex items-center gap-1"
+                >
+                  <Edit3 size={13} />
+                  <span>Full Items Editor</span>
+                </button>
+              </div>
+            )}
 
             {/* Date & Terms Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

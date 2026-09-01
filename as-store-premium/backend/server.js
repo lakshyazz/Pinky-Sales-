@@ -4586,11 +4586,13 @@ const handleUpdateSale = async (req, res) => {
       const dueD = String(dueDateObj.getDate()).padStart(2, '0');
       const calculatedDueDate = `${dueY}-${dueM}-${dueD}`;
 
-      // 2. Resolve notes
+      // 2. Resolve notes & payment_mode & customer_id
       let notes = sale.notes || '';
       if (req.body.notes !== undefined || req.body.remarks !== undefined) {
         notes = String(req.body.notes ?? req.body.remarks ?? '').trim();
       }
+      const paymentMode = req.body.payment_mode || sale.payment_mode || 'cash';
+      const targetCustomerId = req.body.customer_id ? Number(req.body.customer_id) : sale.customer_id;
 
       // 3. Resolve extra_expenses (Courier / Other charges)
       let extraExpensesTotal = Number(sale.extra_expenses_total || 0);
@@ -4642,9 +4644,190 @@ const handleUpdateSale = async (req, res) => {
         }
       }
 
-      // 4. Recalculate financials if expenses were updated
+      // 4. Handle Line Items Update & Stock Reconciliation
+      let itemsUpdated = false;
+      let preparedItems = [];
       let productsTotal = Number(sale.products_total || 0);
-      if (!productsTotal || productsTotal <= 0) {
+      let totalQty = Number(sale.quantity || 1);
+      let primaryProductId = sale.product_id;
+      let overallColourStr = sale.colour || null;
+
+      if (req.body.items !== undefined && Array.isArray(req.body.items) && req.body.items.length > 0) {
+        itemsUpdated = true;
+
+        // A. Revert previous stock deductions back to inventory batches
+        const oldAllocations = await tx.allRecords(
+          `SELECT sba.batch_id, sba.quantity, ib.product_id
+           FROM sale_batch_allocations sba
+           JOIN inventory_batches ib ON ib.id = sba.batch_id
+           WHERE sba.sale_id = ?`,
+          [saleId]
+        );
+        for (const alloc of oldAllocations) {
+          await tx.runQuery(
+            'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+            [alloc.quantity, alloc.batch_id]
+          );
+          await syncStockFromBatches(tx, sale.shop_id, alloc.product_id);
+        }
+        await tx.runQuery('DELETE FROM sale_batch_allocations WHERE sale_id = ?', [saleId]);
+        await tx.runQuery('DELETE FROM sale_items WHERE sale_id = ?', [saleId]);
+
+        // B. Allocate new stock items
+        const reservedByBatch = new Map();
+        for (const item of req.body.items) {
+          const saleQuantity = Number(item.quantity);
+          if (!Number.isInteger(saleQuantity) || saleQuantity <= 0) {
+            const error = new Error('Every item quantity must be at least 1.');
+            error.status = 400;
+            throw error;
+          }
+          const product = await tx.getRecord('SELECT id, short_name, name, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
+          let unitPrice = 0;
+          if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
+            unitPrice = money(item.selling_price);
+          } else if (item.unit_price !== undefined && item.unit_price !== null && item.unit_price !== '' && !isNaN(Number(item.unit_price))) {
+            unitPrice = money(item.unit_price);
+          } else {
+            unitPrice = money(item.price_type === 'wholesale' ? product?.wholesale_price : product?.sale_price);
+          }
+          if (!product || unitPrice <= 0) {
+            const error = new Error(`Selling price must be greater than 0 for "${product?.short_name || product?.name || 'this product'}".`);
+            error.status = 400;
+            throw error;
+          }
+
+          const rawColours = product?.available_colours || product?.colours;
+          let productColours = [];
+          if (Array.isArray(rawColours)) {
+            productColours = rawColours.map(c => String(c).trim()).filter(Boolean);
+          } else if (typeof rawColours === 'string' && rawColours.trim()) {
+            try {
+              const parsed = JSON.parse(rawColours);
+              if (Array.isArray(parsed)) productColours = parsed.map(c => String(c).trim()).filter(Boolean);
+              else productColours = rawColours.split(',').map(c => c.trim()).filter(Boolean);
+            } catch {
+              productColours = rawColours.split(',').map(c => c.trim()).filter(Boolean);
+            }
+          }
+
+          const colorBreakdown = Array.isArray(item.color_breakdown) 
+            ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
+            : [];
+
+          const batches = await tx.allRecords(
+            `SELECT id, purchase_price, quantity_remaining, colour FROM inventory_batches ib
+             WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0
+               ${item.batch_id ? 'AND id = ?' : ''}${batchAccessSql(req.user)}
+             ORDER BY received_date ASC, id ASC`,
+            item.batch_id ? [sale.shop_id, item.product_id, item.batch_id] : [sale.shop_id, item.product_id]
+          );
+          const availableBatches = batches.map((batch) => ({
+            ...batch,
+            quantity_remaining: Math.max(Number(batch.quantity_remaining || 0) - Number(reservedByBatch.get(batch.id) || 0), 0),
+          })).filter((batch) => batch.quantity_remaining > 0);
+          const available = availableBatches.reduce((sum, batch) => sum + batch.quantity_remaining, 0);
+          if (available < saleQuantity) {
+            const prodName = product.short_name || product.name || 'Selected product';
+            const error = new Error(`Not enough stock for "${prodName}" in this workspace. (Available: ${available}, Requested: ${saleQuantity})`);
+            error.status = 400;
+            throw error;
+          }
+
+          let toReserve = saleQuantity;
+          const reservedBatches = [];
+
+          if (colorBreakdown.length > 0) {
+            for (const cb of colorBreakdown) {
+              let colorNeed = Number(cb.qty);
+              for (const batch of availableBatches) {
+                if (colorNeed <= 0) break;
+                if (batch.quantity_remaining > 0 && String(batch.colour || '').trim().toLowerCase() === String(cb.color).trim().toLowerCase()) {
+                  const take = Math.min(colorNeed, batch.quantity_remaining);
+                  reservedByBatch.set(batch.id, Number(reservedByBatch.get(batch.id) || 0) + take);
+                  reservedBatches.push({ ...batch, quantity_remaining: take });
+                  batch.quantity_remaining -= take;
+                  colorNeed -= take;
+                  toReserve -= take;
+                }
+              }
+            }
+          }
+
+          for (const batch of availableBatches) {
+            if (toReserve <= 0) break;
+            if (batch.quantity_remaining <= 0) continue;
+            const reserved = Math.min(toReserve, batch.quantity_remaining);
+            reservedByBatch.set(batch.id, Number(reservedByBatch.get(batch.id) || 0) + reserved);
+            reservedBatches.push({ ...batch, quantity_remaining: reserved });
+            batch.quantity_remaining -= reserved;
+            toReserve -= reserved;
+          }
+          preparedItems.push({ ...item, saleQuantity, saleTotal: unitPrice * saleQuantity, batches: reservedBatches, unitPrice, product, colorBreakdown, productColours });
+        }
+
+        // Insert new sale items and batch allocations
+        for (const item of preparedItems) {
+          let itemColourStr = null;
+          if (item.colorBreakdown && item.colorBreakdown.length === 1) {
+            itemColourStr = item.colorBreakdown[0].color;
+          } else if (item.colorBreakdown && item.colorBreakdown.length > 1) {
+            itemColourStr = item.colorBreakdown.map((c) => `${c.color}: ${c.qty}`).join(', ');
+          } else if (item.selected_colour || item.colour) {
+            itemColourStr = String(item.selected_colour || item.colour).trim();
+          } else if (item.productColours && item.productColours.length === 1) {
+            itemColourStr = item.productColours[0];
+          }
+
+          const customProductName = item.custom_product_name !== undefined && item.custom_product_name !== null
+            ? (String(item.custom_product_name).trim() || null)
+            : null;
+          const customBrandName = item.custom_brand_name !== undefined && item.custom_brand_name !== null
+            ? (String(item.custom_brand_name).trim() || null)
+            : null;
+
+          await tx.runQuery(
+            `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              saleId,
+              item.product_id,
+              item.saleQuantity,
+              item.unitPrice,
+              item.saleTotal,
+              item.price_type || 'retail',
+              itemColourStr,
+              customProductName,
+              customBrandName
+            ]
+          );
+
+          let remaining = item.saleQuantity;
+          for (const batch of item.batches) {
+            if (remaining <= 0) break;
+            const allocated = Math.min(remaining, Number(batch.quantity_remaining));
+            await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?', [allocated, batch.id]);
+            await tx.runQuery(
+              'INSERT INTO sale_batch_allocations (sale_id, batch_id, quantity, purchase_price) VALUES (?, ?, ?, ?)',
+              [saleId, batch.id, allocated, batch.purchase_price]
+            );
+            remaining -= allocated;
+          }
+          await syncStockFromBatches(tx, sale.shop_id, item.product_id);
+        }
+
+        productsTotal = preparedItems.reduce((sum, item) => sum + item.saleTotal, 0);
+        totalQty = preparedItems.reduce((sum, item) => sum + item.saleQuantity, 0);
+        primaryProductId = preparedItems[0]?.product_id || sale.product_id;
+
+        const colourSummaries = preparedItems.map((it) => {
+          if (it.colorBreakdown && it.colorBreakdown.length === 1) return it.colorBreakdown[0].color;
+          if (it.colorBreakdown && it.colorBreakdown.length > 1) return it.colorBreakdown.map((c) => `${c.color}: ${c.qty}`).join(', ');
+          if (it.selected_colour || it.colour) return String(it.selected_colour || it.colour).trim();
+          return null;
+        }).filter(Boolean);
+        overallColourStr = colourSummaries.length ? colourSummaries.join(', ') : null;
+      } else if (!productsTotal || productsTotal <= 0) {
         const itemTotals = await tx.getRecord(
           'SELECT COALESCE(SUM(total_price), 0) AS pt FROM sale_items WHERE sale_id = ?',
           [saleId]
@@ -4652,58 +4835,85 @@ const handleUpdateSale = async (req, res) => {
         productsTotal = Number(itemTotals?.pt || sale.total_amount || 0);
       }
 
+      // 5. Customer Opening Balance Synchronization if previous_balance was provided
+      let previousBalance = Number(sale.previous_balance || 0);
+      if (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance))) {
+        previousBalance = money(req.body.previous_balance);
+        const otherSalesPendingRow = await tx.getRecord(
+          'SELECT COALESCE(SUM(pending_amount), 0) AS p FROM sales WHERE customer_id = ? AND id != ? AND pending_amount > 0',
+          [targetCustomerId, saleId]
+        );
+        const otherPending = Number(otherSalesPendingRow?.p || 0);
+        const newOpeningBal = Math.max(0, money(previousBalance - otherPending));
+        await tx.runQuery(
+          'UPDATE customers SET opening_balance = ? WHERE id = ?',
+          [newOpeningBal, targetCustomerId]
+        );
+      }
+
+      // 6. Recalculate totals and financials
       const discountAmount = Number(sale.discount_amount || 0);
-      const currentInvoiceTotal = expensesUpdated
+      const currentInvoiceTotal = (itemsUpdated || expensesUpdated)
         ? Math.max(money(productsTotal + extraExpensesTotal - discountAmount), 0)
         : Number(sale.current_invoice_total || sale.total_amount || 0);
 
-      const previousBalance = Number(sale.previous_balance || 0);
       const appliedCreditAmount = Number(sale.applied_credit_amount || 0);
-
-      const netPayableAmount = expensesUpdated
+      const netPayableAmount = (itemsUpdated || expensesUpdated || req.body.previous_balance !== undefined)
         ? Math.max(money(currentInvoiceTotal + previousBalance - appliedCreditAmount), 0)
         : Number(sale.net_payable_amount || (currentInvoiceTotal + previousBalance - appliedCreditAmount));
 
-      const paidAmount = Number(sale.paid_amount || 0);
-      const pendingAmount = expensesUpdated
-        ? Math.max(money(currentInvoiceTotal - paidAmount), 0)
-        : Number(sale.pending_amount !== undefined && sale.pending_amount !== null ? sale.pending_amount : Math.max(currentInvoiceTotal - paidAmount, 0));
+      let paidAmount = Number(sale.paid_amount || 0);
+      if (req.body.paid_amount !== undefined && !isNaN(Number(req.body.paid_amount))) {
+        paidAmount = money(req.body.paid_amount);
+      }
 
-      const closingBalance = expensesUpdated
-        ? Math.max(money(netPayableAmount - paidAmount), 0)
-        : Number(sale.closing_balance !== undefined && sale.closing_balance !== null ? sale.closing_balance : Math.max(money(netPayableAmount - paidAmount), 0));
-
+      const pendingAmount = Math.max(money(currentInvoiceTotal - paidAmount), 0);
+      const closingBalance = Math.max(money(netPayableAmount - paidAmount), 0);
       const status = pendingAmount > 0 ? 'open' : 'paid';
 
-      // 5. Update sales record
+      // 7. Update sales record
       await tx.runQuery(
         `UPDATE sales
-         SET invoice_date = ?,
+         SET customer_id = ?,
+             product_id = ?,
+             quantity = ?,
+             invoice_date = ?,
              sale_date = ?,
              payment_terms_days = ?,
              due_date = ?,
              notes = ?,
+             payment_mode = ?,
+             colour = ?,
+             previous_balance = ?,
              extra_expenses_total = ?,
              products_total = ?,
              total_amount = ?,
              current_invoice_total = ?,
              net_payable_amount = ?,
+             paid_amount = ?,
              pending_amount = ?,
              closing_balance = ?,
              status = ?,
              updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         [
+          targetCustomerId,
+          primaryProductId,
+          totalQty,
           invoiceDateStr,
           invoiceDateStr,
           paymentTermsDays,
           calculatedDueDate,
           notes,
+          paymentMode,
+          overallColourStr,
+          previousBalance,
           extraExpensesTotal,
           productsTotal,
           currentInvoiceTotal,
           currentInvoiceTotal,
           netPayableAmount,
+          paidAmount,
           pendingAmount,
           closingBalance,
           status,
@@ -4737,7 +4947,7 @@ const handleUpdateSale = async (req, res) => {
       'Updated sale', 
       'sale', 
       saleId, 
-      `INV-${String(saleId).padStart(6, '0')}, date ${result.invoice_date}, terms ${result.payment_terms_days}d, due ${result.due_date}, expenses ${result.extra_expenses_total}`
+      `INV-${String(saleId).padStart(6, '0')}, date ${result.invoice_date}, terms ${result.payment_terms_days}d, due ${result.due_date}, total ₹${result.total_amount}`
     );
 
     res.json({
