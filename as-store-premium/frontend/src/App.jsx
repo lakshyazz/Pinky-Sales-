@@ -5939,6 +5939,7 @@ function App() {
       if (!map.has(key)) {
         const custObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id));
         const openingBalance = Number(custObj?.opening_balance || 0);
+        const custPending = custObj?.pending !== undefined && custObj?.pending !== null ? Number(custObj.pending) : null;
 
         map.set(key, {
           customer_id: sale.customer_id,
@@ -5951,6 +5952,7 @@ function App() {
           total_paid: 0,
           total_pending: 0,
           opening_balance: openingBalance,
+          customer_pending: custPending,
           last_purchase_date: null,
           invoices: [],
         });
@@ -5967,9 +5969,13 @@ function App() {
       }
       g.invoices.push(sale);
     }
-    // Incorporate opening balance into customer total pending
+    // Set customer total pending accurately
     for (const g of map.values()) {
-      g.total_pending = Math.max(0, g.total_pending + Number(g.opening_balance || 0));
+      if (g.customer_pending !== null && !isNaN(g.customer_pending)) {
+        g.total_pending = Math.max(0, g.customer_pending);
+      } else {
+        g.total_pending = Math.max(0, g.total_pending + Number(g.opening_balance || 0));
+      }
     }
     return Array.from(map.values());
   }, [visibleSales, data.customers]);

@@ -3101,13 +3101,13 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
     where.push('(c.created_by IS NULL OR c.created_by = ?)');
     params.push(req.user.id);
   }
-  const pendingSql = 'COALESCE(SUM(s.pending_amount), 0)';
+  const pendingSql = '(COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0))';
   const having = [];
   if (req.query.status === 'pending') having.push(`${pendingSql} > 0`);
   if (req.query.status === 'paid') having.push(`${pendingSql} = 0`);
   const baseSql = `
     FROM customers c
-    LEFT JOIN sales s ON s.customer_id = c.id
+    LEFT JOIN sales s ON s.customer_id = c.id AND s.pending_amount > 0
     LEFT JOIN shops sh ON sh.id = c.shop_id
     WHERE ${where.join(' AND ')}
     GROUP BY c.id, sh.id
@@ -3115,7 +3115,7 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
   `;
   const rows = await runPaginatedList({
     dataSql: `
-    SELECT c.*, sh.name AS shop_name, COALESCE(SUM(s.pending_amount), 0) AS pending
+    SELECT c.*, sh.name AS shop_name, (COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0)) AS pending
     ${baseSql}
     ORDER BY c.created_at DESC
   `,
@@ -3406,7 +3406,7 @@ app.get(['/api/sales/customers', '/sales/customers'], authenticateToken, require
           COUNT(DISTINCT sa.id) AS total_invoices,
           SUM(sa.total_amount) AS total_purchase_amount,
           SUM(sa.paid_amount) AS total_paid,
-          SUM(sa.pending_amount) AS total_pending,
+          (COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0)) AS total_pending,
           MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) AS last_purchase_date
         ${baseSql}
         ORDER BY MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) DESC, c.id DESC
@@ -4027,15 +4027,6 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       const previousBalance = (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance)))
         ? money(req.body.previous_balance)
         : livePrevBalance;
-
-      // If manual previous_balance was entered and differs from livePrevBalance, adjust customer's opening_balance so future invoices carry it forward permanently
-      const prevBalDiff = money(previousBalance - livePrevBalance);
-      if (prevBalDiff !== 0) {
-        await tx.runQuery(
-          'UPDATE customers SET opening_balance = COALESCE(opening_balance, 0) + ? WHERE id = ?',
-          [prevBalDiff, customer_id]
-        );
-      }
 
       const preparedItems = [];
       const reservedByBatch = new Map();
