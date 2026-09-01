@@ -624,7 +624,7 @@ const getShopsForUser = async (user) => {
   return allRecords(`
     SELECT sh.*,
       COALESCE((SELECT SUM(st.quantity) FROM stock st WHERE st.shop_id = sh.id), 0) AS stock,
-      COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) AS pending
+      (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) AS pending
     FROM shops sh
     ${shopId ? "WHERE sh.id = ? OR sh.location_type = 'warehouse'" : ''}
     ORDER BY CASE WHEN sh.location_type = 'warehouse' THEN 0 ELSE 1 END, sh.id ASC
@@ -856,8 +856,11 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
         (SELECT COUNT(*) FROM shops WHERE status = 'active' ${shopId ? 'AND id = ?' : ''}) AS total_shops,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib WHERE 1 = 1 ${visibleBatchShopScope} ${visibleBatchAccess}) AS total_stock,
         (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} sale_date = ?) AS today_sales,
-        (SELECT COALESCE(SUM(pending_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} pending_amount > 0) AS pending_payments
-    `, shopId ? [shopId, shopId, today(), shopId] : [today()]),
+        (
+          (SELECT COALESCE(SUM(pending_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} pending_amount > 0)
+          + (SELECT COALESCE(SUM(opening_balance), 0) FROM customers ${shopId ? 'WHERE shop_id = ?' : ''})
+        ) AS pending_payments
+    `, shopId ? [shopId, today(), shopId, shopId] : [today()]),
         allRecords(`
       SELECT st.id, sh.name AS shop_name, p.id AS product_id, p.name AS product_name, p.short_name AS product_short_name, p.brand,
         ${visibleStockSql} AS quantity, sh.low_stock_threshold
@@ -871,7 +874,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     allRecords(`
       SELECT sh.id, sh.name, sh.area, sh.location_type,
         COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = sh.id ${visibleBatchAccess}), 0) AS stock,
-        COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) AS pending,
+        (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) AS pending,
         COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND sa.sale_date = ?), 0) AS sales_today
       FROM shops sh
       ${shopId ? 'WHERE sh.id = ?' : ''}
@@ -5912,11 +5915,12 @@ app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaf
 app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
   const pendingByShop = await allRecords(`
-    SELECT sh.name AS shop_name, COALESCE(SUM(sa.pending_amount), 0) AS pending
+    SELECT sh.name AS shop_name, 
+      (COALESCE(SUM(sa.pending_amount), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) AS pending
     FROM shops sh
     LEFT JOIN sales sa ON sa.shop_id = sh.id
     ${shopId ? 'WHERE sh.id = ?' : ''}
-    GROUP BY sh.id
+    GROUP BY sh.id, sh.name
     ORDER BY pending DESC
   `, shopId ? [shopId] : []);
   const auditRows = isShopStaffRole(req.user.role)
