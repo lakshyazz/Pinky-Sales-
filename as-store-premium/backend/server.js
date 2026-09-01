@@ -3343,7 +3343,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
       COALESCE(se.expenses, '[]'::json) AS expenses,
       COALESCE(pm.payments, '[]'::json) AS payments,
       p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
-      c.name AS customer_name, c.mobile, c.address,
+      c.name AS customer_name, c.mobile, c.address, COALESCE(c.advance_balance, 0) AS customer_advance_balance, COALESCE(c.advance_balance, 0) AS advance_balance,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
       p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
     ${baseSql}

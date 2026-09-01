@@ -6157,6 +6157,7 @@ function App() {
       if (!map.has(key)) {
         const custObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id));
         const openingBalance = Number(custObj?.opening_balance || 0);
+        const advanceBalance = Number(custObj?.advance_balance || 0);
         const custPending = custObj?.pending !== undefined && custObj?.pending !== null ? Number(custObj.pending) : null;
 
         map.set(key, {
@@ -6170,6 +6171,7 @@ function App() {
           total_paid: 0,
           total_pending: 0,
           opening_balance: openingBalance,
+          advance_balance: advanceBalance,
           customer_pending: custPending,
           last_purchase_date: null,
           invoices: [],
@@ -6187,8 +6189,12 @@ function App() {
       }
       g.invoices.push(sale);
     }
-    // Set customer total pending accurately
+    // Set customer total pending accurately & sync advance_balance
     for (const g of map.values()) {
+      const custObj = (data.customers || []).find(c => String(c.id) === String(g.customer_id));
+      if (custObj) {
+        g.advance_balance = Number(custObj.advance_balance || 0);
+      }
       if (g.customer_pending !== null && !isNaN(g.customer_pending)) {
         g.total_pending = Math.max(0, g.customer_pending);
       } else {
@@ -7245,9 +7251,24 @@ function App() {
                                   </span>
                                 </td>
                                 <td className="py-3.5 px-4 text-right">
-                                  <strong className={`text-sm font-black ${pendingVal > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                                    {currency(pendingVal)}
-                                  </strong>
+                                  {pendingVal > 0 ? (
+                                    <strong className="text-sm font-black text-rose-600">
+                                      {currency(pendingVal)}
+                                    </strong>
+                                  ) : Number(customer.advance_balance || 0) > 0 ? (
+                                    <div className="flex flex-col items-end">
+                                      <strong className="text-sm font-black text-cyan-600">
+                                        +{currency(customer.advance_balance)} Cr
+                                      </strong>
+                                      <span className="text-[10px] font-bold text-cyan-700 bg-cyan-50 px-1.5 py-0.2 rounded border border-cyan-200">
+                                        Advance Credit
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <strong className="text-sm font-black text-emerald-600">
+                                      ₹0
+                                    </strong>
+                                  )}
                                 </td>
                                 <td className="py-3.5 px-4 text-right">
                                   <div className="flex items-center justify-end gap-1.5">
@@ -7434,7 +7455,7 @@ function App() {
                               </p>
                             </div>
 
-                            {/* Middle: Financials (Total Purchases, Paid, Pending) */}
+                            {/* Middle: Financials (Total Purchases, Paid, Pending / Advance) */}
                             <div className="lg:col-span-5 grid grid-cols-3 gap-2 text-center sm:text-left bg-slate-50/90 p-3 rounded-xl border border-slate-100">
                               <div>
                                 <span className="block text-[10px] uppercase font-bold text-slate-400">Total Purchases</span>
@@ -7445,10 +7466,28 @@ function App() {
                                 <span className="text-xs font-bold text-emerald-700">{currency(group.total_paid)}</span>
                               </div>
                               <div>
-                                <span className="block text-[10px] uppercase font-bold text-slate-400">Pending</span>
-                                <span className={`text-xs font-black ${Number(group.total_pending) > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
-                                  {currency(group.total_pending)}
-                                </span>
+                                {Number(group.total_pending) > 0 ? (
+                                  <>
+                                    <span className="block text-[10px] uppercase font-bold text-slate-400">Pending</span>
+                                    <span className="text-xs font-black text-amber-700">
+                                      {currency(group.total_pending)}
+                                    </span>
+                                  </>
+                                ) : Number(group.advance_balance || 0) > 0 ? (
+                                  <>
+                                    <span className="block text-[10px] uppercase font-bold text-cyan-600">Credit / Advance</span>
+                                    <span className="text-xs font-black text-cyan-700" title="Available Store Credit / Advance Balance">
+                                      +{currency(group.advance_balance)} Cr
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="block text-[10px] uppercase font-bold text-slate-400">Pending</span>
+                                    <span className="text-xs font-bold text-emerald-700">
+                                      ₹0
+                                    </span>
+                                  </>
+                                )}
                               </div>
                             </div>
 
@@ -7893,14 +7932,36 @@ function App() {
                                   </div>
                                 </td>
 
-                                {/* Pending Balance */}
+                                {/* Pending / Advance Balance */}
                                 <td className="py-3.5 px-4 text-right">
-                                  <strong className="text-sm font-black text-slate-900 block">
-                                    {currency(item.pending_amount)}
-                                  </strong>
-                                  <span className="text-[10.5px] text-slate-400">
-                                    Total: {currency(item.total_amount)}
-                                  </span>
+                                  {Number(item.pending_amount) > 0 ? (
+                                    <>
+                                      <strong className="text-sm font-black text-slate-900 block">
+                                        {currency(item.pending_amount)}
+                                      </strong>
+                                      <span className="text-[10.5px] text-slate-400">
+                                        Total: {currency(item.total_amount)}
+                                      </span>
+                                    </>
+                                  ) : Number(item.advance_balance || 0) > 0 ? (
+                                    <div className="flex flex-col items-end">
+                                      <strong className="text-sm font-black text-cyan-700 block">
+                                        +{currency(item.advance_balance)} Cr
+                                      </strong>
+                                      <span className="text-[10px] font-bold text-cyan-700 bg-cyan-50 px-1.5 py-0.2 rounded border border-cyan-200">
+                                        Advance Credit
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <strong className="text-sm font-black text-emerald-700 block">
+                                        ₹0
+                                      </strong>
+                                      <span className="text-[10.5px] text-slate-400">
+                                        Settled
+                                      </span>
+                                    </>
+                                  )}
                                 </td>
 
                                 {/* Invoices Count */}
@@ -8689,11 +8750,28 @@ function App() {
                 <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
                   {/* Financial Balance Summary Card */}
                   <div className="p-4 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-sm space-y-3">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                      Total Outstanding Due
-                    </span>
-                    <div className="text-2xl font-black text-teal-400">
-                      {currency(selectedPaymentCustomer.pending_amount)}
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                        {Number(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending || 0) > 0
+                          ? 'Total Outstanding Due'
+                          : (Number(selectedPaymentCustomer.advance_balance || 0) > 0 ? 'Store Credit / Advance Balance' : 'Account Balance')}
+                      </span>
+                      {Number(selectedPaymentCustomer.advance_balance || 0) > 0 && Number(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending || 0) <= 0 && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+                          Available Credit
+                        </span>
+                      )}
+                    </div>
+                    <div className={`text-2xl font-black ${
+                      Number(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending || 0) > 0
+                        ? 'text-amber-400'
+                        : (Number(selectedPaymentCustomer.advance_balance || 0) > 0 ? 'text-cyan-400' : 'text-emerald-400')
+                    }`}>
+                      {Number(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending || 0) > 0
+                        ? currency(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending)
+                        : (Number(selectedPaymentCustomer.advance_balance || 0) > 0
+                            ? `+${currency(selectedPaymentCustomer.advance_balance)} Cr`
+                            : '₹0 (Settled)')}
                     </div>
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60 text-xs">
                       <div>
