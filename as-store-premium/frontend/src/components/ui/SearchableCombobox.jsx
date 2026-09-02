@@ -1,9 +1,9 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react';
 import { ChevronDown, Search, Check, Plus, X, Layers, Box, Tag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ProductThumbnail from './ProductThumbnail';
 
-export default function SearchableCombobox({
+function SearchableCombobox({
   value,
   onChange,
   options = [],
@@ -22,6 +22,7 @@ export default function SearchableCombobox({
   const containerRef = useRef(null);
   const searchInputRef = useRef(null);
   const listRef = useRef(null);
+  const deferredSearch = useDeferredValue(search);
 
   // Normalize options array into [{ id, name, keywords, brand, category, quality, model, image_url, stock, coloursCount, price }]
   const normalizedOptions = useMemo(() => {
@@ -72,9 +73,10 @@ export default function SearchableCombobox({
     return normalizedOptions.find((opt) => String(opt.id) === String(value)) || null;
   }, [normalizedOptions, value]);
 
-  // Multi-field normalized case-insensitive search filter
+  // Multi-field normalized case-insensitive search filter - only computed when isOpen is true
   const filteredOptions = useMemo(() => {
-    const rawSearch = search.trim().toLowerCase();
+    if (!isOpen) return [];
+    const rawSearch = deferredSearch.trim().toLowerCase();
     if (!rawSearch) return normalizedOptions;
 
     const normalize = (str = '') => String(str).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -109,7 +111,10 @@ export default function SearchableCombobox({
 
       return false;
     });
-  }, [normalizedOptions, search]);
+  }, [normalizedOptions, deferredSearch, isOpen]);
+
+  // Render top 50 items to keep DOM small and fast
+  const visibleOptions = useMemo(() => filteredOptions.slice(0, 50), [filteredOptions]);
 
   // Click outside listener
   useEffect(() => {
@@ -332,79 +337,86 @@ export default function SearchableCombobox({
                 scrollbarColor: '#cbd5e1 transparent',
               }}
             >
-              {filteredOptions.length > 0 ? (
-                filteredOptions.map((option, idx) => {
-                  const isSelected = String(option.id) === String(value);
-                  const isHighlighted = idx === highlightedIndex;
-                  const isProduct = Boolean(option.brand || option.category || option.stock !== undefined);
+              {visibleOptions.length > 0 ? (
+                <>
+                  {visibleOptions.map((option, idx) => {
+                    const isSelected = String(option.id) === String(value);
+                    const isHighlighted = idx === highlightedIndex;
+                    const isProduct = Boolean(option.brand || option.category || option.stock !== undefined);
 
-                  return (
-                    <div
-                      key={option.id}
-                      onClick={() => handleSelect(option.id)}
-                      onMouseEnter={() => setHighlightedIndex(idx)}
-                      className={`px-3 py-2 text-xs rounded-xl mx-1 transition-colors flex items-center justify-between gap-2.5 cursor-pointer ${
-                        isSelected
-                          ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-900 dark:text-teal-300 font-bold border border-teal-200 dark:border-teal-800'
-                          : isHighlighted
-                          ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
-                          : 'text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60 font-medium'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                        {isProduct && (
-                          <ProductThumbnail
-                            src={option.image_url}
-                            category={option.category}
-                            size={32}
-                            showZoom={false}
-                            rounded="8px"
-                          />
-                        )}
-                        <div className="min-w-0 flex-1">
-                          <div className="font-bold text-slate-900 dark:text-white truncate text-xs leading-tight">
-                            {option.name}
-                          </div>
-                          {(option.brand || option.category || option.quality) && (
-                            <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                              {option.brand && (
-                                <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
-                                  {option.brand}
-                                </span>
-                              )}
-                              {option.category && (
-                                <span className="text-[10px] font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.2 rounded">
-                                  {option.category}
-                                </span>
-                              )}
+                    return (
+                      <div
+                        key={option.id}
+                        onClick={() => handleSelect(option.id)}
+                        onMouseEnter={() => setHighlightedIndex(idx)}
+                        className={`px-3 py-2 text-xs rounded-xl mx-1 transition-colors flex items-center justify-between gap-2.5 cursor-pointer ${
+                          isSelected
+                            ? 'bg-teal-50 dark:bg-teal-950/60 text-teal-900 dark:text-teal-300 font-bold border border-teal-200 dark:border-teal-800'
+                            : isHighlighted
+                            ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-medium'
+                            : 'text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800/60 font-medium'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                          {isProduct && (
+                            <ProductThumbnail
+                              src={option.image_url}
+                              category={option.category}
+                              size={32}
+                              showZoom={false}
+                              rounded="8px"
+                            />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-slate-900 dark:text-white truncate text-xs leading-tight">
+                              {option.name}
                             </div>
+                            {(option.brand || option.category || option.quality) && (
+                              <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                {option.brand && (
+                                  <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.2 rounded">
+                                    {option.brand}
+                                  </span>
+                                )}
+                                {option.category && (
+                                  <span className="text-[10px] font-semibold text-teal-700 bg-teal-50 px-1.5 py-0.2 rounded">
+                                    {option.category}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Right Stock & Colours Meta */}
+                        <div className="flex items-center gap-1.5 shrink-0 text-right">
+                          {option.stock !== undefined && (
+                            <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md ${
+                              Number(option.stock) > 0 
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
+                                : 'bg-rose-50 text-rose-700 border border-rose-200'
+                            }`}>
+                              Stock: {option.stock}
+                            </span>
+                          )}
+                          {option.coloursCount !== undefined && Number(option.coloursCount) > 1 && (
+                            <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200">
+                              {option.coloursCount} Colors
+                            </span>
+                          )}
+                          {isSelected && (
+                            <Check className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0 ml-1" />
                           )}
                         </div>
                       </div>
-
-                      {/* Right Stock & Colours Meta */}
-                      <div className="flex items-center gap-1.5 shrink-0 text-right">
-                        {option.stock !== undefined && (
-                          <span className={`text-[10px] font-extrabold px-1.5 py-0.5 rounded-md ${
-                            Number(option.stock) > 0 
-                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' 
-                              : 'bg-rose-50 text-rose-700 border border-rose-200'
-                          }`}>
-                            Stock: {option.stock}
-                          </span>
-                        )}
-                        {option.coloursCount !== undefined && Number(option.coloursCount) > 1 && (
-                          <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200">
-                            {option.coloursCount} Colors
-                          </span>
-                        )}
-                        {isSelected && (
-                          <Check className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0 ml-1" />
-                        )}
-                      </div>
+                    );
+                  })}
+                  {filteredOptions.length > 50 && (
+                    <div className="px-3 py-1.5 text-[10.5px] text-center font-bold text-slate-500 bg-slate-50 border-t border-slate-100 dark:bg-slate-800 dark:border-slate-700">
+                      Showing top 50 of {filteredOptions.length} results · Type to refine
                     </div>
-                  );
-                })
+                  )}
+                </>
               ) : (
                 <div className="px-4 py-4 text-center text-xs font-medium text-slate-400 dark:text-slate-500">
                   No matches for "{search}"
@@ -436,3 +448,5 @@ export default function SearchableCombobox({
     </div>
   );
 }
+
+export default React.memo(SearchableCombobox);

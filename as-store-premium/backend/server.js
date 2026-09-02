@@ -7,6 +7,8 @@ import multer from 'multer';
 import crypto from 'crypto';
 import { initDatabase, runQuery, getRecord, allRecords, runTransaction, executeTransaction } from './database.js';
 import { uploadImageToR2, deleteImageFromR2, isR2Configured, getImageBufferFromStorage } from './r2Storage.js';
+import { postSaleJournal, postPaymentJournal, postCreditNoteJournal, postPurchaseBillJournal, postDebitNoteJournal, reverseJournal } from './accountingEngine.js';
+import { getCustomerLedger, getVendorLedger, getARAgingReport, getAPAgingReport } from './ledgerEngine.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -184,7 +186,10 @@ const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 });
-const money = (value) => Number(value || 0);
+// [FIX A1] money() now uses half-up rounding to 2 decimal places.
+// Raw Number() was floating-point unsafe (0.1+0.2 = 0.30000000000000004).
+// Math.round(x * 100) / 100 ensures all monetary sums match PostgreSQL NUMERIC(12,2) behaviour.
+const money = (value) => Math.round(Number(value || 0) * 100) / 100;
 const productDisplayName = (row) => row.short_name || row.name;
 const DEFAULT_PAGE_LIMIT = 5000;
 const MAX_PAGE_LIMIT = 5000;
@@ -2390,6 +2395,19 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
       const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
       await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, productId, qty]);
     }
+    if (targetShopId) {
+      await runQuery(`
+        INSERT INTO inventory_batches (
+          shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+          quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, CURRENT_DATE, 'Initial product entry', ?, ?, ?)
+      `, [
+        targetShopId, productId,
+        purchasePriceNum, wholesalePriceNum, officialPriceNum, retailPriceNum,
+        openingStockNum, openingStockNum, req.user?.id || 1,
+        effectiveMfgBrandId, effectiveSupplierId
+      ]);
+    }
 
     invalidateCache('reference-data', 'catalog', 'products');
     
@@ -3673,7 +3691,11 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
       [customerId]
     );
     const availableCredits = creditNotes.reduce((sum, cn) => sum + money(cn.balance_amount), 0);
-    const totalPending = Math.max(0, money((invoiceOutstanding + openingBalance) - availableCredits));
+    // [FIX A7] Do NOT subtract availableCredits here.
+    // Credit notes are already FIFO-applied against pending_amount at creation time (lines 3833-3880).
+    // Deducting them again produces a displayed balance that is lower than actual outstanding.
+    // available_credits is returned separately as a distinct informational field.
+    const totalPending = money(invoiceOutstanding + openingBalance);
 
     res.json({
       customer,
@@ -3825,10 +3847,12 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
         throw error;
       }
 
-      // 4. Generate unique Credit Note number using row lock or sequence
-      const lastCn = await tx.getRecord('SELECT id FROM credit_notes ORDER BY id DESC LIMIT 1 FOR UPDATE');
-      const nextSeq = (Number(lastCn?.id || 0)) + 1;
-      const creditNoteNumber = `CN-${String(nextSeq).padStart(6, '0')}`;
+      // 4. [FIX A3] Generate Credit Note number via PostgreSQL sequence (race-safe).
+      // The previous pattern (SELECT MAX id LIMIT 1 FOR UPDATE) was racy under concurrent requests
+      // — two transactions could read the same max-id before either inserts.
+      // nextval() is atomic and guaranteed unique across all concurrent sessions.
+      const seqRow = await tx.getRecord("SELECT nextval('credit_note_seq') AS seq");
+      const creditNoteNumber = `CN-${String(Number(seqRow.seq)).padStart(6, '0')}`;
 
       // 5. Deduct Return Amount from Pending Invoices
       let remainingReturnToApply = totalAmount;
@@ -4043,14 +4067,11 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         ? money(req.body.previous_balance)
         : livePrevBalance;
 
-      // Synchronize customer opening_balance so customer ledger, sales, pending, and future invoices always carry forward this exact balance:
-      const newOpeningBalance = Math.max(0, money(previousBalance - existingSalesPending));
-      if (Math.abs(newOpeningBalance - customerOpeningBal) > 0.001) {
-        await tx.runQuery(
-          'UPDATE customers SET opening_balance = ? WHERE id = ?',
-          [newOpeningBalance, customer_id]
-        );
-      }
+      // [FIX A5] opening_balance is a fixed historical seed value — it must NEVER be mutated during
+      // a sale transaction. Mutating it made it impossible to produce a stable Party Ledger opening
+      // figure and caused running-balance drift on every invoice creation.
+      // Running balance is now computed from journal_entry_lines using a window function.
+      // opening_balance remains read-only after initial customer onboarding.
 
       const preparedItems = [];
       const reservedByBatch = new Map();
@@ -5075,8 +5096,8 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
         if (amt > 0) {
           await tx.runQuery(
             `UPDATE credit_notes 
-             SET used_amount = used_amount - ?, balance_amount = balance_amount + ?,
-                 status = CASE WHEN balance_amount + ? = amount THEN 'active' ELSE 'partially_used' END,
+             SET used_amount = GREATEST(0, used_amount - ?), balance_amount = balance_amount + ?,
+                 status = CASE WHEN balance_amount + ? >= amount THEN 'active' ELSE 'partially_used' END,
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?`,
             [amt, amt, amt, r.credit_note_id]
@@ -5084,6 +5105,44 @@ app.delete('/api/sales/:id', authenticateToken, requireShopStaff, async (req, re
         }
       }
       await tx.runQuery('DELETE FROM credit_note_redemptions WHERE sale_id = ?', [saleId]).catch(() => {});
+
+      // [FIX A6] Reverse advance_applied that was deducted from customer advance_balance at sale time.
+      // Previously this was never reversed on deletion, permanently corrupting customer balance.
+      const advanceApplied = money(sale.advance_applied || 0);
+      if (advanceApplied > 0 && sale.customer_id) {
+        await tx.runQuery(
+          'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
+          [advanceApplied, sale.customer_id]
+        );
+      }
+
+      // [FIX A6b] Reverse any excess payments that were forwarded from this sale to other older sales.
+      // These are identified by their payment note containing the invoice number of the deleted sale.
+      const invTag = `INV-${String(saleId).padStart(6, '0')}`;
+      const forwardedPayments = await tx.allRecords(
+        `SELECT p.id, p.sale_id, p.amount FROM payments p
+         WHERE p.note LIKE ? AND p.sale_id != ? AND p.sale_id IS NOT NULL`,
+        [`%${invTag}%`, saleId]
+      ).catch(() => []);
+      for (const fp of forwardedPayments) {
+        const fpAmt = money(fp.amount || 0);
+        if (fpAmt > 0) {
+          // Re-open the older sale: subtract the allocated amount from paid, add back to pending
+          const olderSale = await tx.getRecord('SELECT * FROM sales WHERE id = ? FOR UPDATE', [fp.sale_id]);
+          if (olderSale) {
+            const restoredPaid = Math.max(0, money(money(olderSale.paid_amount) - fpAmt));
+            const settlementBase = money(olderSale.net_payable_amount) > 0
+              ? money(olderSale.net_payable_amount)
+              : money(olderSale.total_amount);
+            const restoredPending = Math.max(0, money(settlementBase - restoredPaid));
+            await tx.runQuery(
+              'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+              [restoredPaid, restoredPending, restoredPending > 0 ? 'open' : 'paid', fp.sale_id]
+            );
+          }
+          await tx.runQuery('DELETE FROM payments WHERE id = ?', [fp.id]);
+        }
+      }
 
       // 3. Delete payment records, expenses, items, allocations
       await tx.runQuery('DELETE FROM payments WHERE sale_id = ?', [saleId]).catch(() => {});
@@ -5735,8 +5794,14 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
         for (const sale of sales) {
           if (remainingPayment <= 0) break;
           const allocated = Math.min(remainingPayment, money(sale.pending_amount));
-          const newPaid = money(sale.paid_amount) + allocated;
-          const newPending = Math.max(money(sale.total_amount) - newPaid, 0);
+          const newPaid = money(money(sale.paid_amount) + allocated);
+          // [FIX A4] Settle against net_payable_amount (post-credit/advance base), not total_amount.
+          // total_amount may differ from net_payable_amount for invoices where advance or credit was
+          // applied at creation time. Using total_amount caused the balance to never reach zero.
+          const settlementBase = money(sale.net_payable_amount) > 0
+            ? money(sale.net_payable_amount)
+            : money(sale.total_amount);
+          const newPending = Math.max(money(settlementBase - newPaid), 0);
           await tx.runQuery(
             'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
             [sale.id, allocated, payDate, payMode, note || 'Customer balance payment']
@@ -5786,8 +5851,12 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
   const allocatedPayment = Math.min(paymentAmount, salePending);
   const excessPayment = Math.max(0, paymentAmount - salePending);
 
-  const newPaid = money(sale.paid_amount) + allocatedPayment;
-  const newPending = Math.max(money(sale.total_amount) - newPaid, 0);
+  const newPaid = money(money(sale.paid_amount) + allocatedPayment);
+  // [FIX A4] Use net_payable_amount as settlement base (same fix as customer-level payment route).
+  const settlementBaseSingle = money(sale.net_payable_amount) > 0
+    ? money(sale.net_payable_amount)
+    : money(sale.total_amount);
+  const newPending = Math.max(money(settlementBaseSingle - newPaid), 0);
   await runQuery(
     'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
     [sale_id, allocatedPayment, payDate, payMode, note || 'Payment update']
@@ -6395,6 +6464,464 @@ app.get(['/api/inventory/import-logs', '/inventory/import-logs'], authenticateTo
     res.status(500).json({ error: 'Failed to fetch import logs.' });
   }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE C: ACCOUNTING ENGINE ROUTES
+// Chart of Accounts, Party Ledger, AR/AP Aging, Purchase Bills, Debit Notes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Chart of Accounts ──────────────────────────────────────────────────────
+
+app.get('/api/chart-of-accounts', authenticateToken, requireShopStaff, async (_req, res) => {
+  try {
+    const accounts = await allRecords(
+      `SELECT id, code, name, account_type, parent_id, is_system, is_active
+       FROM chart_of_accounts
+       WHERE is_active = TRUE
+       ORDER BY code ASC`
+    );
+    res.json({ accounts });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch chart of accounts.' });
+  }
+});
+
+// ─── Customer Party Ledger ───────────────────────────────────────────────────
+
+app.get('/api/ledger/customer/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const customerId = Number(req.params.id);
+    if (!Number.isInteger(customerId) || customerId <= 0) {
+      return res.status(400).json({ error: 'Valid customer ID is required.' });
+    }
+    const shopId = scopeShopId(req);
+    const { from, to } = req.query;
+    const ledger = await getCustomerLedger(customerId, shopId, { from, to });
+    res.json(ledger);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to fetch customer ledger.' });
+  }
+});
+
+// ─── Vendor Party Ledger ─────────────────────────────────────────────────────
+
+app.get('/api/ledger/vendor/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const supplierId = Number(req.params.id);
+    if (!Number.isInteger(supplierId) || supplierId <= 0) {
+      return res.status(400).json({ error: 'Valid supplier ID is required.' });
+    }
+    const shopId = scopeShopId(req);
+    const { from, to } = req.query;
+    const ledger = await getVendorLedger(supplierId, shopId, { from, to });
+    res.json(ledger);
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to fetch vendor ledger.' });
+  }
+});
+
+// ─── AR Aging Report ─────────────────────────────────────────────────────────
+
+app.get('/api/reports/ar-aging', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = scopeShopId(req);
+    const asOfDate = String(req.query.as_of || req.query.date || '').slice(0, 10) || null;
+    const report = await getARAgingReport(shopId, asOfDate);
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to generate AR aging report.' });
+  }
+});
+
+// ─── AP Aging Report ─────────────────────────────────────────────────────────
+
+app.get('/api/reports/ap-aging', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = scopeShopId(req);
+    const asOfDate = String(req.query.as_of || req.query.date || '').slice(0, 10) || null;
+    const report = await getAPAgingReport(shopId, asOfDate);
+    res.json(report);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to generate AP aging report.' });
+  }
+});
+
+// ─── Journal Entries (audit trail) ───────────────────────────────────────────
+
+app.get('/api/journal-entries', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = scopeShopId(req);
+    const pagination = parsePagination(req.query);
+    const where = ['1 = 1'];
+    const params = [];
+    if (shopId) { where.push('je.shop_id = ?'); params.push(shopId); }
+    if (req.query.ref_type) { where.push('je.ref_type = ?'); params.push(req.query.ref_type); }
+    if (req.query.ref_id)   { where.push('je.ref_id = ?');   params.push(Number(req.query.ref_id)); }
+    appendDateRangeFilter(where, params, req.query.from, req.query.to, 'je.entry_date');
+
+    const rows = await runPaginatedList({
+      dataSql: `
+        SELECT je.id, je.shop_id, je.entry_date, je.narration, je.ref_type, je.ref_id,
+               je.is_reversed, je.created_at,
+               JSON_AGG(JSON_BUILD_OBJECT(
+                 'id', jel.id,
+                 'account_code', coa.code,
+                 'account_name', coa.name,
+                 'account_type', coa.account_type,
+                 'debit', jel.debit,
+                 'credit', jel.credit,
+                 'narration', jel.narration
+               ) ORDER BY jel.id ASC) AS lines
+        FROM journal_entries je
+        LEFT JOIN journal_entry_lines jel ON jel.journal_entry_id = je.id
+        LEFT JOIN chart_of_accounts coa ON coa.id = jel.account_id
+        WHERE ${where.join(' AND ')}
+        GROUP BY je.id
+        ORDER BY je.entry_date DESC, je.id DESC
+      `,
+      countSql: `SELECT COUNT(*) AS total FROM journal_entries je WHERE ${where.join(' AND ')}`,
+      params,
+      pagination,
+      totalKey: 'totalJournalEntries',
+    });
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch journal entries.' });
+  }
+});
+
+// ─── Purchase Bills ───────────────────────────────────────────────────────────
+
+app.get('/api/purchase-bills', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = scopeShopId(req);
+    const pagination = parsePagination(req.query);
+    const where = ['1 = 1'];
+    const params = [];
+    if (shopId) { where.push('pb.shop_id = ?'); params.push(shopId); }
+    if (req.query.supplier_id) { where.push('pb.supplier_id = ?'); params.push(Number(req.query.supplier_id)); }
+    if (req.query.status)      { where.push('pb.status = ?');      params.push(req.query.status); }
+    appendSearchFilter(where, params, req.query.search, ['pb.bill_number', "COALESCE(s.name, '')"]);
+    appendDateRangeFilter(where, params, req.query.from, req.query.to, 'pb.bill_date');
+
+    const rows = await runPaginatedList({
+      dataSql: `
+        SELECT pb.*, s.name AS supplier_name
+        FROM purchase_bills pb
+        LEFT JOIN suppliers s ON s.id = pb.supplier_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY pb.bill_date DESC, pb.id DESC
+      `,
+      countSql: `SELECT COUNT(*) AS total FROM purchase_bills pb LEFT JOIN suppliers s ON s.id = pb.supplier_id WHERE ${where.join(' AND ')}`,
+      params,
+      pagination,
+      totalKey: 'totalPurchaseBills',
+    });
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch purchase bills.' });
+  }
+});
+
+app.get('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const billId = Number(req.params.id);
+    if (!Number.isInteger(billId) || billId <= 0) return res.status(400).json({ error: 'Valid bill ID required.' });
+    const bill = await getRecord(
+      `SELECT pb.*, s.name AS supplier_name
+       FROM purchase_bills pb LEFT JOIN suppliers s ON s.id = pb.supplier_id
+       WHERE pb.id = ?`, [billId]
+    );
+    if (!bill) return res.status(404).json({ error: 'Purchase bill not found.' });
+    const items = await allRecords(
+      `SELECT pbi.*, p.short_name AS product_name
+       FROM purchase_bill_items pbi LEFT JOIN products p ON p.id = pbi.product_id
+       WHERE pbi.bill_id = ?`, [billId]
+    );
+    res.json({ ...bill, items });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch purchase bill.' });
+  }
+});
+
+app.post('/api/purchase-bills', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = requireScopedShopId(req, req.body.shop_id);
+    const { supplier_id, bill_date, payment_terms_days = 30, notes, payment_mode = 'credit', items = [], extra_charges = 0 } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one item is required.' });
+    }
+    const billDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(bill_date || '')) ? String(bill_date) : today();
+    const terms = Math.max(0, Number(payment_terms_days) || 30);
+    const dueDateObj = new Date(billDateStr + 'T00:00:00');
+    dueDateObj.setDate(dueDateObj.getDate() + terms);
+    const dueDate = dueDateObj.toISOString().slice(0, 10);
+
+    const result = await runTransaction(async (tx) => {
+      const validItems = [];
+      let productsTotal = 0;
+      for (const item of items) {
+        const qty = Number(item.quantity);
+        const unitPrice = money(item.unit_price);
+        const discAmt   = money(item.discount_amount || 0);
+        if (!Number.isInteger(qty) || qty <= 0 || unitPrice <= 0) {
+          const err = new Error('Each item requires a valid quantity and unit price.');
+          err.status = 400; throw err;
+        }
+        const lineTotal = money(qty * unitPrice - discAmt);
+        productsTotal += lineTotal;
+        validItems.push({ product_id: item.product_id || null, custom_product_name: item.custom_product_name || null, quantity: qty, unit_price: unitPrice, discount_amount: discAmt, total_price: lineTotal });
+      }
+      productsTotal = money(productsTotal);
+      const extraCharges = money(extra_charges);
+      const totalAmount = money(productsTotal + extraCharges);
+
+      const seqRow = await tx.getRecord("SELECT nextval('purchase_bill_seq') AS seq");
+      const billNumber = `BILL-${String(Number(seqRow.seq)).padStart(6, '0')}`;
+
+      const ins = await tx.runQuery(
+        `INSERT INTO purchase_bills (bill_number, shop_id, supplier_id, bill_date, due_date, payment_terms_days, products_total, extra_charges, total_amount, pending_amount, payment_mode, notes, status, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)`,
+        [billNumber, shopId, supplier_id || null, billDateStr, dueDate, terms, productsTotal, extraCharges, totalAmount, totalAmount, payment_mode, notes || '', req.user.id]
+      );
+      const billId = ins.id;
+
+      for (const vi of validItems) {
+        await tx.runQuery(
+          `INSERT INTO purchase_bill_items (bill_id, product_id, custom_product_name, quantity, unit_price, discount_amount, total_price)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [billId, vi.product_id, vi.custom_product_name, vi.quantity, vi.unit_price, vi.discount_amount, vi.total_price]
+        );
+      }
+
+      await postPurchaseBillJournal(tx, billId, shopId, supplier_id, totalAmount, billDateStr, req.user.id);
+      return { id: billId, bill_number: billNumber, total_amount: totalAmount, pending_amount: totalAmount };
+    });
+
+    await audit(req, 'Created purchase bill', 'purchase_bill', result.id, `${result.bill_number}, total ${result.total_amount}`);
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to create purchase bill.' });
+  }
+});
+
+app.post('/api/purchase-bills/:id/pay', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const billId = Number(req.params.id);
+    if (!Number.isInteger(billId) || billId <= 0) return res.status(400).json({ error: 'Valid bill ID required.' });
+    const paymentAmount = money(req.body.amount);
+    if (paymentAmount <= 0) return res.status(400).json({ error: 'Payment amount must be greater than zero.' });
+    const paymentMode = String(req.body.payment_mode || 'cash').trim();
+    const payDate = /^\d{4}-\d{2}-\d{2}$/.test(String(req.body.payment_date || '')) ? String(req.body.payment_date) : today();
+
+    const result = await runTransaction(async (tx) => {
+      const bill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [billId]);
+      if (!bill) { const e = new Error('Bill not found.'); e.status = 404; throw e; }
+      if (bill.status === 'cancelled') { const e = new Error('Cannot pay a cancelled bill.'); e.status = 400; throw e; }
+      const allocated = Math.min(paymentAmount, money(bill.pending_amount));
+      const newPaid    = money(money(bill.paid_amount) + allocated);
+      const newPending = Math.max(0, money(money(bill.total_amount) - newPaid));
+      const newStatus  = newPending <= 0 ? 'paid' : (newPaid > 0 ? 'partially_paid' : 'open');
+      await tx.runQuery(
+        'UPDATE purchase_bills SET paid_amount = ?, pending_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+        [newPaid, newPending, newStatus, billId]
+      );
+      // Journal: DR AP, CR Cash/Bank
+      const [apAccId, cashAccId] = await Promise.all([
+        tx.getRecord("SELECT id FROM chart_of_accounts WHERE code = '2000'"),
+        tx.getRecord("SELECT id FROM chart_of_accounts WHERE code = '1000'"),
+      ]);
+      if (apAccId && cashAccId) {
+        const jeIns = await tx.runQuery(
+          `INSERT INTO journal_entries (shop_id, entry_date, narration, ref_type, ref_id, created_by) VALUES (?, ?, ?, 'purchase_bill_payment', ?, ?)`,
+          [bill.shop_id, payDate, `Vendor payment — ${bill.bill_number}`, billId, req.user.id]
+        );
+        await tx.runQuery(
+          'INSERT INTO journal_entry_lines (journal_entry_id, account_id, debit, entity_type, entity_id) VALUES (?, ?, ?, ?, ?)',
+          [jeIns.id, apAccId.id, allocated, 'purchase_bill', billId]
+        );
+        await tx.runQuery(
+          'INSERT INTO journal_entry_lines (journal_entry_id, account_id, credit, entity_type, entity_id) VALUES (?, ?, ?, ?, ?)',
+          [jeIns.id, cashAccId.id, allocated, 'purchase_bill', billId]
+        );
+      }
+      return { paid_amount: newPaid, pending_amount: newPending, status: newStatus };
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to record bill payment.' });
+  }
+});
+
+// ─── Debit Notes (purchase returns — auto stock deduction) ────────────────────
+
+app.get('/api/debit-notes', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = scopeShopId(req);
+    const pagination = parsePagination(req.query);
+    const where = ['1 = 1'];
+    const params = [];
+    if (shopId) { where.push('dn.shop_id = ?'); params.push(shopId); }
+    if (req.query.supplier_id) { where.push('dn.supplier_id = ?'); params.push(Number(req.query.supplier_id)); }
+    if (req.query.status)      { where.push('dn.status = ?');      params.push(req.query.status); }
+    appendSearchFilter(where, params, req.query.search, ['dn.debit_note_number', "COALESCE(s.name, '')"]);
+    appendDateRangeFilter(where, params, req.query.from, req.query.to, 'dn.return_date');
+
+    const rows = await runPaginatedList({
+      dataSql: `
+        SELECT dn.*, s.name AS supplier_name,
+          (SELECT COUNT(*) FROM debit_note_items dni WHERE dni.debit_note_id = dn.id) AS item_count
+        FROM debit_notes dn
+        LEFT JOIN suppliers s ON s.id = dn.supplier_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY dn.return_date DESC, dn.id DESC
+      `,
+      countSql: `SELECT COUNT(*) AS total FROM debit_notes dn LEFT JOIN suppliers s ON s.id = dn.supplier_id WHERE ${where.join(' AND ')}`,
+      params,
+      pagination,
+      totalKey: 'totalDebitNotes',
+    });
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch debit notes.' });
+  }
+});
+
+app.get('/api/debit-notes/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const dnId = Number(req.params.id);
+    if (!Number.isInteger(dnId) || dnId <= 0) return res.status(400).json({ error: 'Valid debit note ID required.' });
+    const dn = await getRecord(
+      `SELECT dn.*, s.name AS supplier_name
+       FROM debit_notes dn LEFT JOIN suppliers s ON s.id = dn.supplier_id
+       WHERE dn.id = ?`, [dnId]
+    );
+    if (!dn) return res.status(404).json({ error: 'Debit note not found.' });
+    const items = await allRecords(
+      `SELECT dni.*, p.short_name AS product_name
+       FROM debit_note_items dni LEFT JOIN products p ON p.id = dni.product_id
+       WHERE dni.debit_note_id = ?`, [dnId]
+    );
+    res.json({ ...dn, items });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch debit note.' });
+  }
+});
+
+app.post('/api/debit-notes', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const shopId = requireScopedShopId(req, req.body.shop_id);
+    const { supplier_id, purchase_bill_id, reason = '', return_date, items = [] } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one returned item is required.' });
+    }
+    const returnDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(return_date || '')) ? String(return_date) : today();
+
+    const result = await runTransaction(async (tx) => {
+      // Validate items and calculate total
+      const validItems = [];
+      let totalAmount = 0;
+      for (const item of items) {
+        const qty = Number(item.quantity);
+        const unitPrice = money(item.unit_price);
+        if (!Number.isInteger(qty) || qty <= 0 || unitPrice < 0) {
+          const e = new Error('Each item needs a valid quantity and unit price.'); e.status = 400; throw e;
+        }
+        const lineTotal = money(qty * unitPrice);
+        totalAmount += lineTotal;
+        validItems.push({
+          product_id: item.product_id || null,
+          custom_product_name: item.custom_product_name || null,
+          quantity: qty,
+          unit_price: unitPrice,
+          total_price: lineTotal,
+          colour: item.colour || null,
+          restock_supplier: item.restock_supplier !== false,
+        });
+      }
+      totalAmount = money(totalAmount);
+      if (totalAmount <= 0) {
+        const e = new Error('Total debit note amount must be greater than zero.'); e.status = 400; throw e;
+      }
+
+      // Generate unique debit note number via sequence
+      const seqRow = await tx.getRecord("SELECT nextval('debit_note_seq') AS seq");
+      const debitNoteNumber = `DN-${String(Number(seqRow.seq)).padStart(6, '0')}`;
+
+      // Insert debit note header
+      const dnIns = await tx.runQuery(
+        `INSERT INTO debit_notes (debit_note_number, shop_id, supplier_id, purchase_bill_id, amount, reason, return_date, status, stock_deducted, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', FALSE, ?)`,
+        [debitNoteNumber, shopId, supplier_id || null, purchase_bill_id || null, totalAmount, reason || 'Purchase return', returnDateStr, req.user.id]
+      );
+      const dnId = dnIns.id;
+
+      // Insert items and auto-deduct stock
+      for (const vi of validItems) {
+        await tx.runQuery(
+          `INSERT INTO debit_note_items (debit_note_id, product_id, custom_product_name, quantity, unit_price, total_price, colour, restock_supplier)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [dnId, vi.product_id, vi.custom_product_name, vi.quantity, vi.unit_price, vi.total_price, vi.colour, vi.restock_supplier]
+        );
+
+        // Auto stock deduction (per plan: automatic upon debit note confirmation)
+        if (vi.product_id && vi.quantity > 0) {
+          const colourCond = vi.colour ? 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))' : '';
+          const batchParams = vi.colour ? [shopId, vi.product_id, vi.colour] : [shopId, vi.product_id];
+          const batch = await tx.getRecord(
+            `SELECT id, quantity_remaining FROM inventory_batches
+             WHERE shop_id = ? AND product_id = ? ${colourCond}
+             ORDER BY received_date DESC, id DESC LIMIT 1`,
+            batchParams
+          );
+          if (batch && batch.quantity_remaining >= vi.quantity) {
+            await tx.runQuery(
+              'UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?',
+              [vi.quantity, batch.id]
+            );
+            await syncStockFromBatches(tx, shopId, vi.product_id);
+          }
+          // (If insufficient stock, we still record the debit note but skip stock deduction gracefully)
+        }
+      }
+
+      // Update debit note to mark stock as deducted
+      await tx.runQuery(
+        'UPDATE debit_notes SET stock_deducted = TRUE WHERE id = ?',
+        [dnId]
+      );
+
+      // If linked to a purchase bill, reduce its total (AP credit)
+      if (purchase_bill_id) {
+        const bill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [purchase_bill_id]);
+        if (bill) {
+          const newPending = Math.max(0, money(money(bill.pending_amount) - totalAmount));
+          const newPaid    = money(money(bill.total_amount) - newPending - money(bill.pending_amount - newPending - 0));
+          const resolvedPending = newPending;
+          const newStatus  = resolvedPending <= 0 ? 'paid' : (money(bill.paid_amount) > 0 ? 'partially_paid' : 'open');
+          await tx.runQuery(
+            'UPDATE purchase_bills SET pending_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [resolvedPending, newStatus, purchase_bill_id]
+          );
+        }
+      }
+
+      // Double-entry: DR AP, CR Purchase Returns
+      await postDebitNoteJournal(tx, dnId, shopId, supplier_id, totalAmount, returnDateStr, req.user.id);
+
+      return { id: dnId, debit_note_number: debitNoteNumber, amount: totalAmount };
+    });
+
+    await audit(req, 'Created debit note', 'debit_note', result.id, `${result.debit_note_number}, amount ${result.amount}`);
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to create debit note.' });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// END ACCOUNTING ENGINE ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const isTransientDatabaseError = (error) => {
   const message = `${error?.message || ''} ${error?.cause?.message || ''}`;

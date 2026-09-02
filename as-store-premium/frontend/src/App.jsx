@@ -56,28 +56,36 @@ import {
   Pencil,
   Copy,
   Share2,
+  BookOpen,
 } from 'lucide-react';
 const SalesReturnModal = React.lazy(() => import('./components/modals/SalesReturnModal'));
 const EditSaleModal = React.lazy(() => import('./components/modals/EditSaleModal'));
 const ShareInvoiceModal = React.lazy(() => import('./components/modals/ShareInvoiceModal'));
 const ProductDetailModal = React.lazy(() => import('./components/models/ProductDetailModal'));
 const ProductDetailPage = React.lazy(() => import('./components/models/ProductDetailPage'));
-import ModelsPage from './components/models/ModelsPage';
-import PricesPage from './components/prices/PricesPage';
-import StockPage from './components/stock/StockPage';
-import LowStockPage from './components/stock/LowStockPage';
-import BranchOrderStockPage from './components/stock/BranchOrderStockPage';
-import SuperAdminStockRequestsPage from './components/stock/SuperAdminStockRequestsPage';
-import BrandsPage from './components/brands/BrandsPage';
-import ManufacturingBrandsPage from './components/manufacturing-brands/ManufacturingBrandsPage';
-import SuppliersPage from './components/suppliers/SuppliersPage';
+// Route-level lazy imports — each page loads its own JS chunk on first visit
+const ModelsPage = React.lazy(() => import('./components/models/ModelsPage'));
+const PricesPage = React.lazy(() => import('./components/prices/PricesPage'));
+const StockPage = React.lazy(() => import('./components/stock/StockPage'));
+const LowStockPage = React.lazy(() => import('./components/stock/LowStockPage'));
+const BranchOrderStockPage = React.lazy(() => import('./components/stock/BranchOrderStockPage'));
+const SuperAdminStockRequestsPage = React.lazy(() => import('./components/stock/SuperAdminStockRequestsPage'));
+const BrandsPage = React.lazy(() => import('./components/brands/BrandsPage'));
+const ManufacturingBrandsPage = React.lazy(() => import('./components/manufacturing-brands/ManufacturingBrandsPage'));
+const SuppliersPage = React.lazy(() => import('./components/suppliers/SuppliersPage'));
+const PartyLedger = React.lazy(() => import('./components/ledger/PartyLedger'));
+const AgingReport = React.lazy(() => import('./components/reports/AgingReport'));
+const PurchaseBillsPage = React.lazy(() => import('./components/billing/PurchaseBillsPage'));
+const DebitNotesPage = React.lazy(() => import('./components/billing/DebitNotesPage'));
+// Named export wrapper for CategoriesPage
+const CategoriesPage = React.lazy(() => import('./components/other-products/CategoriesPage').then(m => ({ default: m.CategoriesPage })));
+const ShopkeeperLoginsPage = React.lazy(() => import('./components/operations/ShopkeeperLoginsPage'));
+const SupplierImportWorkspace = React.lazy(() => import('./components/operations/SupplierImportWorkspace'));
+// Shared UI primitives — tiny, used on every page, keep static
 import Pagination from './components/ui/Pagination';
 import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './components/ui/SkeletonLoader';
 import SearchInput from './components/ui/SearchInput';
 import SearchableCombobox from './components/ui/SearchableCombobox';
-import { CategoriesPage } from './components/other-products/CategoriesPage';
-import ShopkeeperLoginsPage from './components/operations/ShopkeeperLoginsPage';
-const SupplierImportWorkspace = React.lazy(() => import('./components/operations/SupplierImportWorkspace'));
 import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
 import { consolidateProductList } from './utils/productConsolidation';
 import { 
@@ -425,6 +433,10 @@ const navByRole = {
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['suppliers', 'Suppliers', Users],
     ['categories', 'Product Categories', Store],
+    ['purchase-bills', 'Purchase Bills', ShoppingCart],
+    ['debit-notes', 'Debit Notes (Returns)', RotateCcw],
+    ['ledger', 'Party Ledger', BookOpen],
+    ['aging', 'AR/AP Aging', Clock],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
     ['import', 'Supplier Import', UploadCloud],
@@ -449,6 +461,10 @@ const navByRole = {
     ['manufacturing-brands', 'Manufacturing Brands', Tags],
     ['suppliers', 'Suppliers', Users],
     ['categories', 'Product Categories', Store],
+    ['purchase-bills', 'Purchase Bills', ShoppingCart],
+    ['debit-notes', 'Debit Notes (Returns)', RotateCcw],
+    ['ledger', 'Party Ledger', BookOpen],
+    ['aging', 'AR/AP Aging', Clock],
     ['reports', 'Reports', FileText],
   ],
   supplier: [
@@ -477,6 +493,8 @@ const sidebarSectionsByRole = {
     { title: 'Overview', ids: ['dashboard'] },
     { title: 'Operations', ids: ['prices', 'stock', 'customers', 'sales', 'payments', 'tools', 'spares', 'oca-glass', 'other-category'] },
     { title: 'Inventory & Catalog', ids: ['low-stock', 'requests', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
+    { title: 'Accounts Payable', ids: ['purchase-bills', 'debit-notes'] },
+    { title: 'Ledger & Reports', ids: ['ledger', 'aging'] },
     { title: 'Management', ids: ['shops', 'shopkeepers', 'import'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -485,6 +503,8 @@ const sidebarSectionsByRole = {
     { title: 'Operations', ids: ['prices', 'stock', 'customers', 'sales', 'payments', 'tools', 'spares', 'oca-glass', 'other-category'] },
     { title: 'Stock Replenishment', ids: ['low-stock', 'order-stock', 'requests'] },
     { title: 'Catalog & Brands', ids: ['models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
+    { title: 'Accounts Payable', ids: ['purchase-bills', 'debit-notes'] },
+    { title: 'Ledger & Reports', ids: ['ledger', 'aging'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   supplier: [
@@ -1030,6 +1050,281 @@ function BillSummary({ sale }) {
   );
 }
 
+const SaleItemRow = React.memo(function SaleItemRow({
+  item,
+  idx,
+  itemsLength,
+  salesProductOptions,
+  data,
+  getProductAvailableColors,
+  updateSaleItemProduct,
+  updateSaleItemCustomName,
+  updateSaleItemCustomBrand,
+  updateSaleItemPriceType,
+  updateSaleItemSellingPrice,
+  updateSaleItemQuantity,
+  toggleSaleItemColor,
+  updateSaleItemSingleColor,
+  updateSaleItemColorQuantity,
+  removeSaleItem,
+}) {
+  const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(item.product_id)) 
+    || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(item.product_id))
+    || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(item.product_id));
+  const availableColors = getProductAvailableColors ? getProductAvailableColors(selectedProd) : [];
+  const hasMultipleColours = availableColors.length > 1;
+  const colorStockMap = selectedProd?.colour_stock || {};
+  const activeBreakdown = item.color_breakdown || [];
+  const currentVariantValue = item.selected_colour || (activeBreakdown.length === 1 ? activeBreakdown[0].color : (activeBreakdown.length > 1 ? '__split__' : (availableColors[0] || '')));
+
+  return (
+    <div className="bg-slate-50/60 border border-slate-200/70 rounded-xl p-3 space-y-2.5 transition-all hover:border-slate-300">
+      <div className="flex flex-wrap items-end gap-2.5">
+        {/* Product Selector with compact 40px combobox */}
+        <div className="flex-1 min-w-[220px]">
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Product / Model</label>
+          <SearchableCombobox
+            value={item.product_id}
+            onChange={(v) => updateSaleItemProduct(idx, v)}
+            options={salesProductOptions}
+            placeholder="Search product, brand, model..."
+            searchPlaceholder="Type model, OLED, battery..."
+            className="w-full"
+          />
+        </div>
+
+        {/* Color / Variant Selector Dropdown */}
+        {Boolean(item.product_id) && availableColors.length > 0 && (
+          <div className="w-[140px]">
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
+            <select
+              value={currentVariantValue}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === '__split__') {
+                  if (!activeBreakdown.length) {
+                    toggleSaleItemColor(idx, availableColors[0]);
+                  }
+                } else if (updateSaleItemSingleColor) {
+                  updateSaleItemSingleColor(idx, val);
+                } else {
+                  toggleSaleItemColor(idx, val);
+                }
+              }}
+              className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
+            >
+              {availableColors.map((c) => (
+                <option key={c} value={c}>
+                  {c} {colorStockMap[c] !== undefined ? `(${colorStockMap[c]} in stock)` : ''}
+                </option>
+              ))}
+              {availableColors.length > 1 && (
+                <option value="__split__">⚡ Multi-Color Split</option>
+              )}
+            </select>
+          </div>
+        )}
+
+        {/* Price Tier */}
+        <div className="w-[115px]">
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price Tier</label>
+          <select
+            value={item.price_type || 'retail'}
+            onChange={(e) => updateSaleItemPriceType(idx, e.target.value)}
+            disabled={!item.product_id}
+            className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer disabled:opacity-50"
+          >
+            <option value="retail">Retail</option>
+            <option value="wholesale">Wholesale</option>
+          </select>
+        </div>
+
+        {/* Selling Price */}
+        <div className="w-[105px]">
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price (₹)</label>
+          <input
+            type="number"
+            placeholder="₹ 0"
+            value={item.selling_price !== undefined ? item.selling_price : ''}
+            onChange={(e) => updateSaleItemSellingPrice(idx, e.target.value)}
+            disabled={!item.product_id}
+            className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-50 text-right"
+          />
+        </div>
+
+        {/* Quantity */}
+        <div className="w-[80px]">
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Qty</label>
+          <input
+            type="number"
+            min="0"
+            placeholder="0"
+            value={item.quantity !== undefined && item.quantity !== '' ? item.quantity : 0}
+            onChange={(e) => updateSaleItemQuantity(idx, e.target.value)}
+            disabled={!item.product_id || activeBreakdown.length > 1}
+            title={activeBreakdown.length > 1 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
+            className="w-full h-10 px-2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-70 text-center"
+          />
+        </div>
+
+        {/* Total Amount */}
+        <div className="w-[110px]">
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Total (₹)</label>
+          <div className="w-full h-10 px-2.5 flex items-center justify-end bg-slate-100/90 border border-slate-200 rounded-xl text-xs font-black text-slate-900">
+            ₹{Number(item.total_amount || 0).toLocaleString('en-IN')}
+          </div>
+        </div>
+
+        {/* Trash / Remove Row Button */}
+        <button
+          type="button"
+          onClick={() => removeSaleItem(idx)}
+          className="h-10 px-2.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-transparent hover:border-rose-200 transition-all cursor-pointer flex items-center justify-center shrink-0"
+          title={itemsLength > 1 ? "Remove item" : "Clear item"}
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+
+      {/* Invoice Model Name & Manufacturing Brand Customization */}
+      {Boolean(item.product_id) && (
+        <div className="pt-2.5 border-t border-slate-200/70 space-y-1.5 bg-slate-100/50 p-2.5 rounded-xl">
+          <div className="flex flex-wrap items-center justify-between gap-1.5">
+            <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-1">
+              <Edit3 size={12} className="text-sky-600" />
+              Invoice Display Model &amp; Brand
+            </span>
+            <span className="text-[10px] text-slate-400 font-medium">
+              Stock deducts from selected model ({selectedProd?.short_name || selectedProd?.name || 'Selected Item'})
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                Model Name on Invoice (Editable)
+              </label>
+              <input
+                type="text"
+                value={item.custom_product_name !== undefined ? item.custom_product_name : (selectedProd?.short_name || selectedProd?.name || '')}
+                onChange={(e) => updateSaleItemCustomName && updateSaleItemCustomName(idx, e.target.value)}
+                placeholder="e.g. V40E (without WF)"
+                className="w-full h-8 px-2.5 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                Manufacturing Brand on Invoice (Editable)
+              </label>
+              <input
+                type="text"
+                value={item.custom_brand_name !== undefined ? item.custom_brand_name : (selectedProd?.manufacturing_brand_name || selectedProd?.brand || '')}
+                onChange={(e) => updateSaleItemCustomBrand && updateSaleItemCustomBrand(idx, e.target.value)}
+                placeholder="e.g. AS CARE / FRESH NEW CARE"
+                className="w-full h-8 px-2.5 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Smart Colour Selection System: CONDITIONAL VISIBILITY */}
+      {Boolean(item.product_id) && hasMultipleColours && (
+        <div className="pt-2.5 border-t border-slate-200/70">
+          <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1">
+              <Tag size={11} className="text-teal-600" />
+              Select Colour Breakdown:
+            </span>
+            <span className="text-[10px] text-slate-400 font-medium">
+              Allocate quantities per colour
+            </span>
+          </div>
+
+          {/* Colour chips */}
+          <div className="flex flex-wrap items-center gap-1 mb-2">
+            {availableColors.map((color) => {
+              const isSelected = activeBreakdown.some((b) => b.color === color);
+              const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
+              return (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => toggleSaleItemColor(idx, color)}
+                  className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer border ${
+                    isSelected
+                      ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                  }`}
+                >
+                  <span>{color}</span>
+                  {colorStockQty !== null && (
+                    <span className={`text-[9px] px-1 py-0.2 rounded font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-100 text-slate-600'}`}>
+                      {colorStockQty}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Split colour quantity allocation row */}
+          {activeBreakdown.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 p-2 bg-white rounded-lg border border-slate-200">
+              {activeBreakdown.map((b) => (
+                <div key={b.color} className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md border border-slate-200">
+                  <span className="text-[11px] font-bold text-slate-800">{b.color}:</span>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
+                      className="w-5 h-5 flex items-center justify-center rounded bg-white hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 cursor-pointer"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min="1"
+                      value={b.qty}
+                      onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
+                      className="w-10 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-none bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
+                      className="w-5 h-5 flex items-center justify-center rounded bg-white hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 cursor-pointer"
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSaleItemColor(idx, b.color)}
+                      className="text-slate-400 hover:text-rose-600 p-0.5 cursor-pointer ml-0.5"
+                      title="Remove this colour"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Single-colour auto-assigned indicator (Selector completely hidden) */}
+      {Boolean(item.product_id) && availableColors.length === 1 && (
+        <div className="pt-2 border-t border-slate-200/60 flex items-center gap-2 text-[11px] text-slate-500 font-medium">
+          <span className="w-2 h-2 rounded-full bg-teal-500 inline-block" />
+          <span>Colour: <strong className="text-slate-800 font-bold">{availableColors[0]}</strong></span>
+          <span className="text-[10px] text-slate-400 font-normal bg-slate-100 px-1.5 py-0.2 rounded">Single variant</span>
+        </div>
+      )}
+    </div>
+  );
+});
+
 function SalesCreationWorkspace({
   forms,
   setForms,
@@ -1347,263 +1642,27 @@ function SalesCreationWorkspace({
             </div>
 
             <div className="space-y-2.5">
-              {items.map((item, idx) => {
-                const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(item.product_id)) 
-                  || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(item.product_id))
-                  || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(item.product_id));
-                const availableColors = getProductAvailableColors(selectedProd);
-                const hasMultipleColours = availableColors.length > 1;
-                const colorStockMap = selectedProd?.colour_stock || {};
-                const activeBreakdown = item.color_breakdown || [];
-                const currentVariantValue = item.selected_colour || (activeBreakdown.length === 1 ? activeBreakdown[0].color : (activeBreakdown.length > 1 ? '__split__' : (availableColors[0] || '')));
-
-                return (
-                  <div key={idx} className="bg-slate-50/60 border border-slate-200/70 rounded-xl p-3 space-y-2.5 transition-all hover:border-slate-300">
-                    <div className="flex flex-wrap items-end gap-2.5">
-                      {/* Product Selector with compact 40px combobox */}
-                      <div className="flex-1 min-w-[220px]">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Product / Model</label>
-                        <SearchableCombobox
-                          value={item.product_id}
-                          onChange={(v) => updateSaleItemProduct(idx, v)}
-                          options={salesProductOptions}
-                          placeholder="Search product, brand, model..."
-                          searchPlaceholder="Type model, OLED, battery..."
-                          className="w-full"
-                        />
-                      </div>
-
-                      {/* Color / Variant Selector Dropdown */}
-                      {Boolean(item.product_id) && availableColors.length > 0 && (
-                        <div className="w-[140px]">
-                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
-                          <select
-                            value={currentVariantValue}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === '__split__') {
-                                if (!activeBreakdown.length) {
-                                  toggleSaleItemColor(idx, availableColors[0]);
-                                }
-                              } else if (updateSaleItemSingleColor) {
-                                updateSaleItemSingleColor(idx, val);
-                              } else {
-                                toggleSaleItemColor(idx, val);
-                              }
-                            }}
-                            className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
-                          >
-                            {availableColors.map((c) => (
-                              <option key={c} value={c}>
-                                {c} {colorStockMap[c] !== undefined ? `(${colorStockMap[c]} in stock)` : ''}
-                              </option>
-                            ))}
-                            {availableColors.length > 1 && (
-                              <option value="__split__">⚡ Multi-Color Split</option>
-                            )}
-                          </select>
-                        </div>
-                      )}
-
-                      {/* Price Tier */}
-                      <div className="w-[115px]">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price Tier</label>
-                        <select
-                          value={item.price_type || 'retail'}
-                          onChange={(e) => updateSaleItemPriceType(idx, e.target.value)}
-                          disabled={!item.product_id}
-                          className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer disabled:opacity-50"
-                        >
-                          <option value="retail">Retail</option>
-                          <option value="wholesale">Wholesale</option>
-                        </select>
-                      </div>
-
-                      {/* Selling Price */}
-                      <div className="w-[105px]">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price (₹)</label>
-                        <input
-                          type="number"
-                          placeholder="₹ 0"
-                          value={item.selling_price !== undefined ? item.selling_price : ''}
-                          onChange={(e) => updateSaleItemSellingPrice(idx, e.target.value)}
-                          disabled={!item.product_id}
-                          className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-50 text-right"
-                        />
-                      </div>
-
-                      {/* Quantity */}
-                      <div className="w-[80px]">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Qty</label>
-                        <input
-                          type="number"
-                          min="0"
-                          placeholder="0"
-                          value={item.quantity !== undefined && item.quantity !== '' ? item.quantity : 0}
-                          onChange={(e) => updateSaleItemQuantity(idx, e.target.value)}
-                          disabled={!item.product_id || activeBreakdown.length > 1}
-                          title={activeBreakdown.length > 1 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
-                          className="w-full h-10 px-2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-70 text-center"
-                        />
-                      </div>
-
-                      {/* Total Amount */}
-                      <div className="w-[110px]">
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">Total (₹)</label>
-                        <div className="w-full h-10 px-2.5 flex items-center justify-end bg-slate-100/90 border border-slate-200 rounded-xl text-xs font-black text-slate-900">
-                          ₹{Number(item.total_amount || 0).toLocaleString('en-IN')}
-                        </div>
-                      </div>
-
-                      {/* Trash / Remove Row Button */}
-                      <button
-                        type="button"
-                        onClick={() => removeSaleItem(idx)}
-                        className="h-10 px-2.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-xl border border-transparent hover:border-rose-200 transition-all cursor-pointer flex items-center justify-center shrink-0"
-                        title={items.length > 1 ? "Remove item" : "Clear item"}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-
-                    {/* Invoice Model Name & Manufacturing Brand Customization */}
-                    {Boolean(item.product_id) && (
-                      <div className="pt-2.5 border-t border-slate-200/70 space-y-1.5 bg-slate-100/50 p-2.5 rounded-xl">
-                        <div className="flex flex-wrap items-center justify-between gap-1.5">
-                          <span className="text-[10.5px] font-extrabold uppercase tracking-wider text-slate-700 flex items-center gap-1">
-                            <Edit3 size={12} className="text-sky-600" />
-                            Invoice Display Model &amp; Brand
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-medium">
-                            Stock deducts from selected model ({selectedProd?.short_name || selectedProd?.name || 'Selected Item'})
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
-                              Model Name on Invoice (Editable)
-                            </label>
-                            <input
-                              type="text"
-                              value={item.custom_product_name !== undefined ? item.custom_product_name : (selectedProd?.short_name || selectedProd?.name || '')}
-                              onChange={(e) => updateSaleItemCustomName && updateSaleItemCustomName(idx, e.target.value)}
-                              placeholder="e.g. V40E (without WF)"
-                              className="w-full h-8 px-2.5 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg focus:border-sky-500 focus:outline-none"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
-                              Manufacturing Brand on Invoice (Editable)
-                            </label>
-                            <input
-                              type="text"
-                              value={item.custom_brand_name !== undefined ? item.custom_brand_name : (selectedProd?.manufacturing_brand_name || selectedProd?.brand || '')}
-                              onChange={(e) => updateSaleItemCustomBrand && updateSaleItemCustomBrand(idx, e.target.value)}
-                              placeholder="e.g. AS CARE / FRESH NEW CARE"
-                              className="w-full h-8 px-2.5 text-xs font-semibold text-slate-800 bg-white border border-slate-200 rounded-lg focus:border-sky-500 focus:outline-none"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Smart Colour Selection System: CONDITIONAL VISIBILITY */}
-                    {Boolean(item.product_id) && hasMultipleColours && (
-                      <div className="pt-2.5 border-t border-slate-200/70">
-                        <div className="flex flex-wrap items-center justify-between gap-1.5 mb-1.5">
-                          <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-600 flex items-center gap-1">
-                            <Tag size={11} className="text-teal-600" />
-                            Select Colour Breakdown:
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-medium">
-                            Allocate quantities per colour
-                          </span>
-                        </div>
-
-                        {/* Colour chips */}
-                        <div className="flex flex-wrap items-center gap-1 mb-2">
-                          {availableColors.map((color) => {
-                            const isSelected = activeBreakdown.some((b) => b.color === color);
-                            const colorStockQty = colorStockMap[color] !== undefined ? colorStockMap[color] : null;
-                            return (
-                              <button
-                                key={color}
-                                type="button"
-                                onClick={() => toggleSaleItemColor(idx, color)}
-                                className={`px-2.5 py-0.5 rounded-lg text-[11px] font-bold transition-all flex items-center gap-1 cursor-pointer border ${
-                                  isSelected
-                                    ? 'bg-teal-600 text-white border-teal-600 shadow-2xs'
-                                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
-                                }`}
-                              >
-                                <span>{color}</span>
-                                {colorStockQty !== null && (
-                                  <span className={`text-[9px] px-1 py-0.2 rounded font-extrabold ${isSelected ? 'bg-teal-700 text-teal-100' : 'bg-slate-100 text-slate-600'}`}>
-                                    {colorStockQty}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {/* Split colour quantity allocation row */}
-                        {activeBreakdown.length > 0 && (
-                          <div className="flex flex-wrap items-center gap-2 p-2 bg-white rounded-lg border border-slate-200">
-                            {activeBreakdown.map((b) => (
-                              <div key={b.color} className="flex items-center gap-1.5 bg-slate-50 px-2 py-1 rounded-md border border-slate-200">
-                                <span className="text-[11px] font-bold text-slate-800">{b.color}:</span>
-                                <div className="flex items-center gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => updateSaleItemColorQuantity(idx, b.color, Math.max(1, Number(b.qty || 1) - 1))}
-                                    className="w-5 h-5 flex items-center justify-center rounded bg-white hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 cursor-pointer"
-                                  >
-                                    -
-                                  </button>
-                                  <input
-                                    type="number"
-                                    min="1"
-                                    value={b.qty}
-                                    onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
-                                    className="w-10 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-none bg-white"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => updateSaleItemColorQuantity(idx, b.color, Number(b.qty || 0) + 1)}
-                                    className="w-5 h-5 flex items-center justify-center rounded bg-white hover:bg-slate-200 text-slate-700 font-black text-xs border border-slate-200 cursor-pointer"
-                                  >
-                                    +
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleSaleItemColor(idx, b.color)}
-                                    className="text-slate-400 hover:text-rose-600 p-0.5 cursor-pointer ml-0.5"
-                                    title="Remove this colour"
-                                  >
-                                    <X size={12} />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Single-colour auto-assigned indicator (Selector completely hidden) */}
-                    {Boolean(item.product_id) && availableColors.length === 1 && (
-                      <div className="pt-2 border-t border-slate-200/60 flex items-center gap-2 text-[11px] text-slate-500 font-medium">
-                        <span className="w-2 h-2 rounded-full bg-teal-500 inline-block" />
-                        <span>Colour: <strong className="text-slate-800 font-bold">{availableColors[0]}</strong></span>
-                        <span className="text-[10px] text-slate-400 font-normal bg-slate-100 px-1.5 py-0.2 rounded">Single variant</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {items.map((item, idx) => (
+                <SaleItemRow
+                  key={item.id || item._key || idx}
+                  item={item}
+                  idx={idx}
+                  itemsLength={items.length}
+                  salesProductOptions={salesProductOptions}
+                  data={data}
+                  getProductAvailableColors={getProductAvailableColors}
+                  updateSaleItemProduct={updateSaleItemProduct}
+                  updateSaleItemCustomName={updateSaleItemCustomName}
+                  updateSaleItemCustomBrand={updateSaleItemCustomBrand}
+                  updateSaleItemPriceType={updateSaleItemPriceType}
+                  updateSaleItemSellingPrice={updateSaleItemSellingPrice}
+                  updateSaleItemQuantity={updateSaleItemQuantity}
+                  toggleSaleItemColor={toggleSaleItemColor}
+                  updateSaleItemSingleColor={updateSaleItemSingleColor}
+                  updateSaleItemColorQuantity={updateSaleItemColorQuantity}
+                  removeSaleItem={removeSaleItem}
+                />
+              ))}
             </div>
 
             <div>
@@ -2438,7 +2497,7 @@ function App() {
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
   const [productPager, setProductPager] = useState(() => createPager(5000));
-  const [stockPager, setStockPager] = useState(() => createPager(50));
+  const [stockPager, setStockPager] = useState(() => createPager(5000));
   const [customerPager, setCustomerPager] = useState(() => createPager(50));
   const [salesPager, setSalesPager] = useState(() => createPager(50));
   const [pendingPager, setPendingPager] = useState(() => createPager(50));
@@ -2946,7 +3005,7 @@ function App() {
     try {
       const stockParams = applyStockQueryParams(scopedParams(currentShop), filters, search);
       stockParams.set('page', String(stockPage));
-      stockParams.set('limit', String(stockPager.limit));
+      stockParams.set('limit', String(stockPager.limit || 5000));
       stockParams.set('includeSummary', 'true');
       const [stockResponse, shopkeepers] = await Promise.all([
         authedFetch(`/stock?${stockParams.toString()}`),
@@ -6109,17 +6168,21 @@ function App() {
     return tokens.every((token) => searchableHaystack.includes(token));
   };
 
-  const modelItems = role === 'customer' 
-    ? data.catalog.filter((item) => matchesProductSearch(item, modelSearch)) 
-    : (modelSearch 
-        ? productPageItems.filter((item) => matchesProductSearch(item, modelSearch))
-        : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+  const modelItems = useMemo(() => {
+    return role === 'customer' 
+      ? data.catalog.filter((item) => matchesProductSearch(item, deferredModelSearch)) 
+      : (deferredModelSearch 
+          ? productPageItems.filter((item) => matchesProductSearch(item, deferredModelSearch))
+          : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+  }, [role, data.catalog, data.products, productPageItems, deferredModelSearch]);
 
-  const priceItems = role === 'customer' 
-    ? data.catalog.filter((item) => matchesProductSearch(item, priceSearch)) 
-    : (priceSearch 
-        ? productPageItems.filter((item) => matchesProductSearch(item, priceSearch))
-        : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+  const priceItems = useMemo(() => {
+    return role === 'customer' 
+      ? data.catalog.filter((item) => matchesProductSearch(item, deferredPriceSearch)) 
+      : (deferredPriceSearch 
+          ? productPageItems.filter((item) => matchesProductSearch(item, deferredPriceSearch))
+          : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+  }, [role, data.catalog, data.products, productPageItems, deferredPriceSearch]);
 
   const allCategoryPool = role === 'customer' ? data.catalog : (data.products || []);
 
@@ -6244,28 +6307,38 @@ function App() {
   }, [data.pending, pendingStatusFilter]);
 
   const shopkeeperQuery = normalizedText(deferredShopkeeperSearch);
-  const visibleShopkeepers = data.shopkeepers.filter((user) => {
-    if (!shopkeeperQuery) return true;
-    return [user.name, user.username, user.contact, user.shop_name]
-      .filter(Boolean)
-      .some((value) => normalizedText(value).includes(shopkeeperQuery));
-  });
-  const staffedBranchCount = new Set(data.shopkeepers.map((user) => String(user.shop_id || '')).filter(Boolean)).size;
-  const incompleteShopkeeperContacts = data.shopkeepers.filter((user) => !String(user.contact || '').trim()).length;
+  const visibleShopkeepers = useMemo(() => {
+    return data.shopkeepers.filter((user) => {
+      if (!shopkeeperQuery) return true;
+      return [user.name, user.username, user.contact, user.shop_name]
+        .filter(Boolean)
+        .some((value) => normalizedText(value).includes(shopkeeperQuery));
+    });
+  }, [data.shopkeepers, shopkeeperQuery]);
 
-  const visibleCatalog = data.catalog.filter((product) => {
+  const staffedBranchCount = useMemo(() => {
+    return new Set(data.shopkeepers.map((user) => String(user.shop_id || '')).filter(Boolean)).size;
+  }, [data.shopkeepers]);
+
+  const incompleteShopkeeperContacts = useMemo(() => {
+    return data.shopkeepers.filter((user) => !String(user.contact || '').trim()).length;
+  }, [data.shopkeepers]);
+
+  const visibleCatalog = useMemo(() => {
     const query = deferredCatalogFilters.search.trim().toLowerCase();
-    const matchesSearch = !query || [product.short_name, product.full_model_list, product.name, product.brand, product.category, product.description]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(query));
-    const matchesShop = !deferredCatalogFilters.shopId || String(product.available_shops || '').toLowerCase().includes(
-      data.shops.find((shop) => String(shop.id) === String(deferredCatalogFilters.shopId))?.name.toLowerCase() || ''
-    );
-    const matchesBrand = !deferredCatalogFilters.brand || product.brand === deferredCatalogFilters.brand;
-    const matchesCategory = !deferredCatalogFilters.category || product.category === deferredCatalogFilters.category;
-    const matchesColour = !deferredCatalogFilters.colour || (product.colours || []).includes(deferredCatalogFilters.colour);
-    return matchesSearch && matchesShop && matchesBrand && matchesCategory && matchesColour;
-  });
+    return data.catalog.filter((product) => {
+      const matchesSearch = !query || [product.short_name, product.full_model_list, product.name, product.brand, product.category, product.description]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(query));
+      const matchesShop = !deferredCatalogFilters.shopId || String(product.available_shops || '').toLowerCase().includes(
+        data.shops.find((shop) => String(shop.id) === String(deferredCatalogFilters.shopId))?.name.toLowerCase() || ''
+      );
+      const matchesBrand = !deferredCatalogFilters.brand || product.brand === deferredCatalogFilters.brand;
+      const matchesCategory = !deferredCatalogFilters.category || product.category === deferredCatalogFilters.category;
+      const matchesColour = !deferredCatalogFilters.colour || (product.colours || []).includes(deferredCatalogFilters.colour);
+      return matchesSearch && matchesShop && matchesBrand && matchesCategory && matchesColour;
+    });
+  }, [data.catalog, data.shops, deferredCatalogFilters]);
 
   const combinedStock = useMemo(() => combineStockRows(data.stock), [data.stock]);
   const stockWithOwnership = useMemo(() => combinedStock.map((item) => ({
@@ -6626,6 +6699,7 @@ function App() {
         {(loading || tabLoading) && <SkeletonPage type={active === 'dashboard' ? 'dashboard' : 'list'} />}
         {loadError && !loading && <div className="error">{loadError}</div>}
 
+        <React.Suspense fallback={<div className="p-8"><SmartSkeletonWrapper type="card" count={4} /></div>}>
         <AnimatePresence mode="wait">
           {active === 'dashboard' && data.dashboard && (
             <PageWrapper activeKey="dashboard" key="dashboard">
@@ -6786,6 +6860,52 @@ function App() {
                 api={authedFetch}
                 data={data}
                 onBrandChange={loadCore}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'purchase-bills' && role !== 'customer' && (
+            <PageWrapper activeKey="purchase-bills" key="purchase-bills">
+              <PurchaseBillsPage
+                session={session}
+                api={authedFetch}
+                setGlobalToast={showToast}
+                suppliers={data.reference?.suppliers || []}
+                products={data.products || []}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'debit-notes' && role !== 'customer' && (
+            <PageWrapper activeKey="debit-notes" key="debit-notes">
+              <DebitNotesPage
+                session={session}
+                api={authedFetch}
+                setGlobalToast={showToast}
+                suppliers={data.reference?.suppliers || []}
+                products={data.products || []}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'ledger' && role !== 'customer' && (
+            <PageWrapper activeKey="ledger" key="ledger">
+              <PartyLedger
+                session={session}
+                api={authedFetch}
+                setGlobalToast={showToast}
+                customers={data.customers || []}
+                suppliers={data.reference?.suppliers || []}
+              />
+            </PageWrapper>
+          )}
+
+          {active === 'aging' && role !== 'customer' && (
+            <PageWrapper activeKey="aging" key="aging">
+              <AgingReport
+                session={session}
+                api={authedFetch}
+                setGlobalToast={showToast}
               />
             </PageWrapper>
           )}
@@ -9114,6 +9234,7 @@ function App() {
             </div>
           )}
         </AnimatePresence>
+        </React.Suspense>
 
         {/* ========================================================= */}
         {/* GLOBAL: RECORD PAYMENT MODAL */}

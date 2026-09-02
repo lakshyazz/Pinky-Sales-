@@ -9,9 +9,10 @@ export const getCategoryIconInfo = (category = '') => {
       Icon: Smartphone,
       emoji: '📱',
       label: 'Display',
-      gradient: 'linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%)',
-      color: '#0d9488',
-      border: '#99f6e4',
+      gradient: 'linear-gradient(135deg, #0d9488 0%, #0f766e 100%)',
+      color: '#ffffff',
+      border: 'transparent',
+      shadow: '0 3px 10px rgba(13, 148, 136, 0.3)',
     };
   }
   if (cat.includes('battery') || cat.includes('cell') || cat.includes('power')) {
@@ -19,9 +20,10 @@ export const getCategoryIconInfo = (category = '') => {
       Icon: BatteryCharging,
       emoji: '🔋',
       label: 'Battery',
-      gradient: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
-      color: '#16a34a',
-      border: '#bbf7d0',
+      gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+      color: '#ffffff',
+      border: 'transparent',
+      shadow: '0 3px 10px rgba(16, 185, 129, 0.3)',
     };
   }
   if (cat.includes('camera') || cat.includes('lens') || cat.includes('cam')) {
@@ -29,9 +31,10 @@ export const getCategoryIconInfo = (category = '') => {
       Icon: Camera,
       emoji: '📷',
       label: 'Camera',
-      gradient: 'linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%)',
-      color: '#4f46e5',
-      border: '#c7d2fe',
+      gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)',
+      color: '#ffffff',
+      border: 'transparent',
+      shadow: '0 3px 10px rgba(139, 92, 246, 0.3)',
     };
   }
   if (cat.includes('speaker') || cat.includes('ringer') || cat.includes('mic') || cat.includes('audio') || cat.includes('buzzer') || cat.includes('earpiece')) {
@@ -39,9 +42,10 @@ export const getCategoryIconInfo = (category = '') => {
       Icon: Volume2,
       emoji: '🔊',
       label: 'Speaker',
-      gradient: 'linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%)',
-      color: '#7c3aed',
-      border: '#ddd6fe',
+      gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+      color: '#ffffff',
+      border: 'transparent',
+      shadow: '0 3px 10px rgba(245, 158, 11, 0.3)',
     };
   }
   if (cat.includes('charging') || cat.includes('charge') || cat.includes('port') || cat.includes('flex') || cat.includes('cable') || cat.includes('cc board') || cat.includes('connector')) {
@@ -49,9 +53,10 @@ export const getCategoryIconInfo = (category = '') => {
       Icon: Zap,
       emoji: '🔌',
       label: 'Charging Port',
-      gradient: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
-      color: '#ea580c',
-      border: '#fed7aa',
+      gradient: 'linear-gradient(135deg, #f97316 0%, #ea580c 100%)',
+      color: '#ffffff',
+      border: 'transparent',
+      shadow: '0 3px 10px rgba(249, 115, 22, 0.3)',
     };
   }
   if (cat.includes('housing') || cat.includes('glass') || cat.includes('back glass') || cat.includes('body') || cat.includes('frame') || cat.includes('panel')) {
@@ -59,9 +64,10 @@ export const getCategoryIconInfo = (category = '') => {
       Icon: Layers,
       emoji: '🔲',
       label: 'Housing',
-      gradient: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-      color: '#0284c7',
-      border: '#bae6fd',
+      gradient: 'linear-gradient(135deg, #06b6d4 0%, #0284c7 100%)',
+      color: '#ffffff',
+      border: 'transparent',
+      shadow: '0 3px 10px rgba(6, 182, 212, 0.3)',
     };
   }
   
@@ -69,9 +75,10 @@ export const getCategoryIconInfo = (category = '') => {
     Icon: Package,
     emoji: '📦',
     label: 'Accessory',
-    gradient: 'linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%)',
-    color: '#475569',
-    border: '#e2e8f0',
+    gradient: 'linear-gradient(135deg, #64748b 0%, #475569 100%)',
+    color: '#ffffff',
+    border: 'transparent',
+    shadow: '0 3px 10px rgba(100, 116, 139, 0.25)',
   };
 };
 
@@ -140,9 +147,9 @@ export default function ProductThumbnail({
         style={{
           ...dimensionStyle,
           borderRadius: rounded,
-          border: `1px solid ${hasValidImage ? '#e2e8f0' : iconInfo.border}`,
+          border: hasValidImage ? '1px solid #e2e8f0' : 'none',
           background: hasValidImage ? '#ffffff' : iconInfo.gradient,
-          boxShadow: hasValidImage ? '0 1px 3px rgba(0,0,0,0.05)' : 'none',
+          boxShadow: hasValidImage ? '0 1px 3px rgba(0,0,0,0.05)' : (iconInfo.shadow || 'none'),
         }}
         onClick={(e) => {
           if (hasValidImage && showZoom) {

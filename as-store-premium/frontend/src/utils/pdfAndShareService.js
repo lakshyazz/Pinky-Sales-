@@ -1,5 +1,15 @@
-import { jsPDF } from 'jspdf';
-import autoTable from 'jspdf-autotable';
+// jsPDF loaded on-demand when a PDF is actually generated (~200KB saved from initial bundle)
+let _jspdfModule = null;
+async function getJsPDF() {
+  if (!_jspdfModule) {
+    const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ]);
+    _jspdfModule = { jsPDF, autoTable };
+  }
+  return _jspdfModule;
+}
 
 export const formatMoney = (amount) => {
   const num = Number(amount || 0);
@@ -70,7 +80,8 @@ export const getBrandName = (item = {}, sale = null) => {
  * 1. GENERATE PROFESSIONAL TAX INVOICE PDF (Unified Single Engine)
  * Replaces old green/colored layout with 100% identical monochrome boxed tabular layout.
  */
-export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
+export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
+  const { jsPDF, autoTable } = await getJsPDF();
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -404,7 +415,8 @@ export const generateInvoicePDFDoc = (sale, customer = {}, shop = {}) => {
 /**
  * 2. GENERATE CUSTOMER ACCOUNT STATEMENT PDF
  */
-export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {}) => {
+export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop = {}) => {
+  const { jsPDF, autoTable } = await getJsPDF();
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -785,7 +797,8 @@ export const generateStatementPDFDoc = (customer = {}, invoices = [], shop = {})
 /**
  * 3. GENERATE CUSTOMER RUNNING LEDGER PDF
  */
-export const generateLedgerPDFDoc = (customer = {}, invoices = [], payments = [], shop = {}) => {
+export const generateLedgerPDFDoc = async (customer = {}, invoices = [], payments = [], shop = {}) => {
+  const { jsPDF, autoTable } = await getJsPDF();
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
