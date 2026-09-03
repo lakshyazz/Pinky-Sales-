@@ -47,6 +47,8 @@ export default function ShareInvoiceModal({
   const [editableMessage, setEditableMessage] = useState('');
   const [editablePhone, setEditablePhone] = useState('');
   const [isEditingPhone, setIsEditingPhone] = useState(false);
+  const [statementSales, setStatementSales] = useState(null);
+  const [loadingStatement, setLoadingStatement] = useState(false);
 
   // Extract customer and invoices list
   const customer = target?.customer || {};
@@ -80,7 +82,48 @@ export default function ShareInvoiceModal({
     }
   }, [target, invoices]);
 
+  // Pre-fetch complete customer history for statement generation (aligned with direct Statement Print icon)
+  useEffect(() => {
+    if (!isOpen || !target) {
+      setStatementSales(null);
+      return;
+    }
+
+    let isCancelled = false;
+    const custId = customer.customer_id || customer.id || target?.sale?.customer_id;
+    if (!authedFetch || !custId) return;
+
+    const loadStatement = async () => {
+      try {
+        setLoadingStatement(true);
+        const params = new URLSearchParams({
+          customerId: String(custId),
+          shopId: String(customer.shop_id || shop?.id || target?.sale?.shop_id || 1),
+        });
+        const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
+        if (!isCancelled && resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
+          setStatementSales(resp.sales);
+        }
+      } catch (err) {
+        console.warn('ShareInvoiceModal background /customer-invoice fetch failed:', err);
+      } finally {
+        if (!isCancelled) setLoadingStatement(false);
+      }
+    };
+
+    loadStatement();
+    return () => { isCancelled = true; };
+  }, [isOpen, target, customer.id, customer.customer_id, target?.sale?.customer_id, authedFetch, shop?.id]);
+
+  const handleDocTypeChange = (newType) => {
+    setDocType(newType);
+    if (newType === 'statement') {
+      setSelectedInvoiceId('all');
+    }
+  };
+
   const isAllSelected = selectedInvoiceId === 'all';
+  const isStatement = docType === 'statement';
   const activeInvoice = isAllSelected 
     ? null 
     : (invoices.find((inv) => String(inv.id) === String(selectedInvoiceId)) || invoices[0] || null);
@@ -88,10 +131,72 @@ export default function ShareInvoiceModal({
   const customerDisplayName = customer.customer_name || customer.name || activeInvoice?.customer_name || 'Valued Customer';
   const customerMobile = customer.mobile || activeInvoice?.mobile || '';
 
-  // Aggregate metrics for "all" mode
+  // Aggregate metrics for modal invoices
   const totalBilledAll = invoices.reduce((acc, inv) => acc + Number(inv.total_amount || 0), 0);
   const totalPaidAll = invoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
   const totalPendingAll = Number(customer.pending_amount ?? invoices.reduce((acc, inv) => acc + Number(inv.pending_amount || 0), 0));
+
+  // Statement aggregated metrics from complete transaction history
+  const statementInvoices = useMemo(() => {
+    if (isStatement && statementSales && statementSales.length > 0) {
+      return statementSales;
+    }
+    return invoices;
+  }, [isStatement, statementSales, invoices]);
+
+  const stmtTotalBilled = statementInvoices.reduce((acc, inv) => acc + Number(inv.total_amount || 0), 0);
+  const stmtTotalPaid = statementInvoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
+  const stmtOpeningBal = Number(customer.opening_balance || 0);
+  const stmtTotalPending = Number(customer.pending_amount ?? (statementInvoices.reduce((acc, inv) => acc + Number(inv.pending_amount || 0), 0) + (stmtOpeningBal > 0 ? stmtOpeningBal : 0)));
+
+  // Helper to fetch complete statement data matching the row-level Statement/Print icon
+  const fetchCompleteStatementData = async () => {
+    const custId = customer.customer_id || customer.id || activeInvoice?.customer_id;
+    const targetShop = (shop && shop.id) ? shop : { 
+      name: 'PINKY SALES', 
+      address: 'C-314, Pratik Arcade, Surat', 
+      phone: '+91 90995 69700' 
+    };
+
+    let salesData = statementSales || [];
+    let customerData = customer;
+    let shopData = targetShop;
+
+    if ((!salesData || salesData.length === 0) && authedFetch && (custId || customer.mobile || activeInvoice?.mobile)) {
+      try {
+        const params = new URLSearchParams({
+          customerId: String(custId || ''),
+          shopId: String(customer.shop_id || shop?.id || activeInvoice?.shop_id || targetShop.id || 1),
+        });
+        const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
+        if (resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
+          salesData = resp.sales;
+          if (resp.customer) customerData = { ...customer, ...resp.customer };
+          if (resp.shop) shopData = { ...targetShop, ...resp.shop };
+          setStatementSales(resp.sales);
+        }
+      } catch (err) {
+        console.warn('ShareInvoiceModal: /customer-invoice fetch error, falling back to modal records:', err);
+      }
+    }
+
+    if (!salesData.length) {
+      salesData = Array.isArray(target?.items) && target.items.length > 0 
+        ? target.items 
+        : (invoices.length > 0 ? invoices : (target?.sale ? [target.sale] : [customer]));
+    }
+
+    return {
+      customerData: {
+        ...customerData,
+        pending_amount: customerData.pending_amount ?? (isStatement ? stmtTotalPending : totalPendingAll),
+        total_amount: customerData.total_amount ?? (isStatement ? stmtTotalBilled : totalBilledAll),
+        paid_amount: customerData.paid_amount ?? (isStatement ? stmtTotalPaid : totalPaidAll),
+      },
+      salesData,
+      shopData,
+    };
+  };
 
   // Build Consolidated Sale object for multi-invoice tax invoice generation
   const consolidatedSale = useMemo(() => {
@@ -139,23 +244,23 @@ export default function ShareInvoiceModal({
   }, [isAllSelected, activeInvoice, invoices, customer, customerDisplayName, customerMobile, shop]);
 
   // Determine WhatsApp template message type
-  const shareType = isAllSelected ? (docType === 'statement' ? 'pending_summary' : 'single_invoice') : 'single_invoice';
+  const shareType = isStatement ? 'pending_summary' : (isAllSelected ? 'pending_summary' : 'single_invoice');
 
   // Live formatted WhatsApp default message
   const defaultFormattedMessage = useMemo(() => {
     return formatWhatsAppMessage({
       customer: {
         ...customer,
-        items: invoices,
-        pending_amount: totalPendingAll,
-        total_amount: totalBilledAll,
-        paid_amount: totalPaidAll,
+        items: isStatement ? statementInvoices : invoices,
+        pending_amount: isStatement ? stmtTotalPending : totalPendingAll,
+        total_amount: isStatement ? (stmtTotalBilled + (stmtOpeningBal > 0 ? stmtOpeningBal : 0)) : totalBilledAll,
+        paid_amount: isStatement ? stmtTotalPaid : totalPaidAll,
       },
-      sale: isAllSelected ? consolidatedSale : activeInvoice,
+      sale: isStatement ? null : (isAllSelected ? consolidatedSale : activeInvoice),
       shop,
       type: shareType,
     });
-  }, [customer, invoices, totalPendingAll, totalBilledAll, totalPaidAll, isAllSelected, consolidatedSale, activeInvoice, shop, shareType]);
+  }, [customer, invoices, isStatement, statementInvoices, stmtTotalPending, stmtTotalBilled, stmtTotalPaid, stmtOpeningBal, totalPendingAll, totalBilledAll, totalPaidAll, isAllSelected, consolidatedSale, activeInvoice, shop, shareType]);
 
   // Synchronize default message & phone into editable state when switching selection or docType
   useEffect(() => {
@@ -229,11 +334,8 @@ export default function ShareInvoiceModal({
       let filename = '';
 
       if (docType === 'statement') {
-        doc = await generateStatementPDFDoc(
-          { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
-          invoices,
-          shop
-        );
+        const { customerData, salesData, shopData } = await fetchCompleteStatementData();
+        doc = await generateStatementPDFDoc(customerData, salesData, shopData);
         filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
       } else {
         // Default: Generate Tax Invoice PDF (Consolidated or Single)
@@ -301,18 +403,23 @@ export default function ShareInvoiceModal({
 
   /**
    * Direct Download Account Statement PDF
+   * Uses exact same /customer-invoice backend endpoint and generateStatementPDFDoc
+   * logic as the working row-level Statement/Print icon.
    */
   const handleDownloadStatementPdf = async () => {
     try {
-      const doc = await generateStatementPDFDoc(
-        { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
-        invoices,
-        shop
-      );
+      if (showToast) showToast('Preparing complete account statement...');
+      const { customerData, salesData, shopData } = await fetchCompleteStatementData();
+      if (!salesData.length || (salesData.length === 1 && !salesData[0]?.id && !salesData[0]?.total_amount)) {
+        if (showToast) showToast('No purchase or payment history found for this customer');
+        return;
+      }
+      const doc = await generateStatementPDFDoc(customerData, salesData, shopData);
       const filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
       doc.save(filename);
-      if (showToast) showToast(`📑 ${filename} downloaded!`);
+      if (showToast) showToast(`📑 Complete Statement downloaded!`);
     } catch (err) {
+      console.error('Statement download failed:', err);
       if (showToast) showToast(`Statement download failed: ${err.message || 'Error'}`);
     }
   };
@@ -430,7 +537,7 @@ export default function ShareInvoiceModal({
             <div className="flex items-center gap-1.5 p-1 bg-white border border-slate-200 rounded-xl shadow-2xs">
               <button
                 type="button"
-                onClick={() => setDocType('invoice')}
+                onClick={() => handleDocTypeChange('invoice')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   docType === 'invoice'
                     ? 'bg-emerald-600 text-white shadow-xs'
@@ -442,7 +549,7 @@ export default function ShareInvoiceModal({
               </button>
               <button
                 type="button"
-                onClick={() => setDocType('statement')}
+                onClick={() => handleDocTypeChange('statement')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
                   docType === 'statement'
                     ? 'bg-teal-700 text-white shadow-xs'
@@ -463,7 +570,7 @@ export default function ShareInvoiceModal({
                   <Layers size={14} className="text-emerald-600" /> Choose Invoices:
                 </span>
                 <span className="text-[11px] text-slate-500 font-medium">
-                  {isAllSelected ? (docType === 'invoice' ? 'All Invoices (Consolidated)' : 'Complete Statement') : 'Single Invoice'}
+                  {isStatement ? 'Complete Account Statement (All Invoices & Payments)' : (isAllSelected ? 'All Invoices (Consolidated)' : 'Single Invoice')}
                 </span>
               </div>
 
@@ -479,9 +586,9 @@ export default function ShareInvoiceModal({
                   }`}
                 >
                   <ReceiptText size={13} />
-                  <span>All pending ({invoices.length})</span>
+                  <span>{isStatement ? `Complete Statement (${statementInvoices.length})` : `All pending (${invoices.length})`}</span>
                   <span className={`text-[10.5px] px-1.5 py-0.5 rounded-md font-bold ${isAllSelected ? 'bg-emerald-700 text-emerald-50' : 'bg-slate-100 text-slate-600'}`}>
-                    {currency(totalPendingAll)}
+                    {currency(isStatement ? stmtTotalPending : totalPendingAll)}
                   </span>
                 </button>
 
@@ -494,7 +601,10 @@ export default function ShareInvoiceModal({
                     <button
                       key={inv.id}
                       type="button"
-                      onClick={() => setSelectedInvoiceId(String(inv.id))}
+                      onClick={() => {
+                        setSelectedInvoiceId(String(inv.id));
+                        if (isStatement) setDocType('invoice');
+                      }}
                       aria-pressed={isInvSelected}
                       className={`min-h-10 px-2.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
                         isInvSelected
@@ -514,29 +624,39 @@ export default function ShareInvoiceModal({
           )}
 
           {/* Details Card */}
-          {isAllSelected ? (
-            /* Multi-Invoice Summary View */
+          {(isStatement || isAllSelected) ? (
+            /* Multi-Invoice / Complete Statement Summary View */
             <section className="overflow-hidden rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-800 text-white shadow-lg shadow-slate-900/10">
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                <span className="text-[10px] text-slate-300 font-bold uppercase tracking-[0.14em]">
-                  {docType === 'invoice' ? 'Consolidated Tax Invoice' : 'Outstanding Account Statement'}
+                <span className="text-[10px] text-slate-300 font-bold uppercase tracking-[0.14em] flex items-center gap-1.5">
+                  <ReceiptText size={13} className="text-teal-400" />
+                  {isStatement ? 'Complete Account Statement' : 'Consolidated Tax Invoice'}
                 </span>
-                <span className="text-[11px] text-emerald-300 font-bold">
-                  {invoices.length} Invoices Selected
+                <span className="text-[11px] text-emerald-300 font-bold flex items-center gap-1.5">
+                  {loadingStatement && <span className="animate-spin text-teal-400 text-xs">⟳</span>}
+                  {isStatement ? `${statementInvoices.length} Invoices & Transactions` : `${invoices.length} Invoices Selected`}
                 </span>
               </div>
               <div className="grid grid-cols-3 divide-x divide-white/10 px-2 py-4 text-center">
                 <div className="px-2">
-                  <span className="block text-[10px] text-slate-400 uppercase font-medium">Total Invoiced</span>
-                  <strong className="text-xs sm:text-sm font-bold text-slate-100">{currency(totalBilledAll)}</strong>
+                  <span className="block text-[10px] text-slate-400 uppercase font-medium">
+                    {isStatement ? 'Total Debits' : 'Total Invoiced'}
+                  </span>
+                  <strong className="text-xs sm:text-sm font-bold text-slate-100">
+                    {currency(isStatement ? (stmtTotalBilled + (stmtOpeningBal > 0 ? stmtOpeningBal : 0)) : totalBilledAll)}
+                  </strong>
                 </div>
                 <div className="px-2">
                   <span className="block text-[10px] text-slate-400 uppercase font-medium">Total Paid</span>
-                  <span className="text-xs sm:text-sm font-bold text-emerald-400">{currency(totalPaidAll)}</span>
+                  <span className="text-xs sm:text-sm font-bold text-emerald-400">
+                    {currency(isStatement ? stmtTotalPaid : totalPaidAll)}
+                  </span>
                 </div>
                 <div className="px-2">
                   <span className="block text-[10px] text-slate-400 uppercase font-medium">Outstanding Balance</span>
-                  <strong className="text-sm sm:text-base font-black text-rose-400">{currency(totalPendingAll)}</strong>
+                  <strong className="text-sm sm:text-base font-black text-rose-400">
+                    {currency(isStatement ? stmtTotalPending : totalPendingAll)}
+                  </strong>
                 </div>
               </div>
             </section>
