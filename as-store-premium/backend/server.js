@@ -5608,6 +5608,7 @@ app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (
 app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
   const pagination = parsePagination(req.query);
+  const params = [];
   const where = ['1=1'];
   if (shopId) {
     where.push('c.shop_id = ?');
