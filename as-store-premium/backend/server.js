@@ -3438,7 +3438,9 @@ app.get(['/api/sales/customers', '/sales/customers'], authenticateToken, require
           COUNT(DISTINCT sa.id) AS total_invoices,
           SUM(sa.total_amount) AS total_purchase_amount,
           SUM(sa.paid_amount) AS total_paid,
-          (COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0)) AS total_pending,
+          -- [FIX B3] Only add opening_balance for the customer's registered shop to prevent double-counting
+          -- across shops (MAX(opening_balance) was added once per shop group, inflating multi-shop totals).
+          (COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(CASE WHEN c.shop_id = sa.shop_id THEN c.opening_balance ELSE 0 END), 0)) AS total_pending,
           MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) AS last_purchase_date
         ${baseSql}
         ORDER BY MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) DESC, c.id DESC
@@ -3529,7 +3531,20 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
       ORDER BY sa.id DESC
     `, params);
 
-    res.json({ customer, invoices });
+    const openingBalance = money(customer.opening_balance || 0);
+    // [FIX B2] Return both `invoices` (for backwards compatibility) and `sales` alias + `summary`
+    // so the frontend openCustomerLedgerDrawer can correctly update pending_amount after a payment.
+    // Previously the frontend checked `res.sales` and `res.summary` which didn't exist, causing stale
+    // pending balances in the UI (payments appeared to not reduce the balance).
+    const summary = {
+      total_amount: invoices.reduce((sum, inv) => sum + money(inv.total_amount), 0),
+      paid_amount: invoices.reduce((sum, inv) => sum + money(inv.paid_amount), 0),
+      pending_amount: money(
+        invoices.reduce((sum, inv) => sum + money(inv.pending_amount), 0) + openingBalance
+      ),
+      opening_balance: openingBalance,
+    };
+    res.json({ customer, invoices, sales: invoices, summary });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to load customer invoices.' });
   }
@@ -5683,8 +5698,10 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       sh.phone AS shop_phone,
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
-      COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0) AS pending_amount,
-      COALESCE(MAX(c.opening_balance), 0) AS opening_balance,
+      -- [FIX B3] Only add opening_balance for the customer's registered shop to prevent double-counting.
+      -- If customer has sales in multiple shops, MAX(opening_balance) was being added per shop group.
+      COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(CASE WHEN c.shop_id = sa.shop_id THEN c.opening_balance ELSE 0 END), 0) AS pending_amount,
+      COALESCE(MAX(CASE WHEN c.shop_id = sa.shop_id THEN c.opening_balance ELSE 0 END), 0) AS opening_balance,
       COALESCE(MAX(c.advance_balance), 0) AS advance_balance,
       (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}))[1] AS due_date,
       JSON_AGG(JSON_BUILD_OBJECT(

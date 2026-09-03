@@ -6113,7 +6113,8 @@ function App() {
         return;
       }
 
-      const doc = generateStatementPDFDoc(customerData, salesData, shopData);
+      // [FIX B1] generateStatementPDFDoc is async (lazy-loads jsPDF). Must await before calling .output().
+      const doc = await generateStatementPDFDoc(customerData, salesData, shopData);
       const pdfBlob = doc.output('blob');
       const blobUrl = URL.createObjectURL(pdfBlob);
       window.open(blobUrl, '_blank');

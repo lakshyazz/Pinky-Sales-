@@ -1095,14 +1095,17 @@ export const shareToWhatsAppService = async ({
 
   if (type === 'statement' || type === 'pending_summary') {
     const invoices = Array.isArray(customer?.items) && customer.items.length > 0 ? customer.items : (sale ? [sale] : [primaryInvoice]);
-    doc = generateStatementPDFDoc(customer, invoices, shop);
+    // [FIX B1] All generate*PDFDoc functions are async (they lazy-load jsPDF). Must await them.
+    doc = await generateStatementPDFDoc(customer, invoices, shop);
     filename = `Statement_${custName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
   } else if (type === 'ledger') {
     const invoices = Array.isArray(customer?.items) && customer.items.length > 0 ? customer.items : (sale ? [sale] : [primaryInvoice]);
-    doc = generateLedgerPDFDoc(customer, invoices, [], shop);
+    // [FIX B1] Must await — generateLedgerPDFDoc is also async.
+    doc = await generateLedgerPDFDoc(customer, invoices, [], shop);
     filename = `Ledger_${custName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
   } else if (type !== 'reminder_only' && type !== 'invoice_reminder_only' && type !== 'pending_reminder_only') {
-    doc = generateInvoicePDFDoc(primaryInvoice, customer, shop);
+    // [FIX B1] Must await — generateInvoicePDFDoc is also async.
+    doc = await generateInvoicePDFDoc(primaryInvoice, customer, shop);
     filename = `Invoice_${invNo}_${custName.replace(/\s+/g, '_')}.pdf`;
   }
 
