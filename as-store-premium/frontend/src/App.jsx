@@ -6420,7 +6420,13 @@ function App() {
   const accessibleInventoryQuantity = stockSummaryLoaded ? Number(stockSummaryTotals.quantity || 0) : stockWithOwnership.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
   const lowStockAlerts = useMemo(() => combineLowStockAlerts(data.dashboard?.lowStock), [data.dashboard?.lowStock]);
   const dashboardAvailability = data.dashboard?.modelAvailability || [];
-  const dashboardWarehouseStock = useMemo(() => dashboardAvailability.reduce((sum, item) => sum + Number(item.warehouse_stock || 0), 0), [dashboardAvailability]);
+  const dashboardWarehouseStock = useMemo(() => {
+    // Prefer totals.warehouse_stock (always fetched directly from warehouse shop, unscoped).
+    // Fall back to summing from modelAvailability for backwards compatibility.
+    const fromTotals = Number(data.dashboard?.totals?.warehouse_stock || 0);
+    if (fromTotals > 0) return fromTotals;
+    return dashboardAvailability.reduce((sum, item) => sum + Number(item.warehouse_stock || 0), 0);
+  }, [data.dashboard?.totals?.warehouse_stock, dashboardAvailability]);
   const dashboardBranchPerformance = data.dashboard?.shopWise?.filter((shop) => shop.location_type !== 'warehouse') || [];
   const dashboardShopCount = dashboardBranchPerformance.length || data.dashboard?.totals?.total_shops || 0;
   const globalQueryTokens = useMemo(() => {

@@ -860,12 +860,13 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       SELECT
         (SELECT COUNT(*) FROM shops WHERE status = 'active' ${shopId ? 'AND id = ?' : ''}) AS total_shops,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib WHERE 1 = 1 ${visibleBatchShopScope} ${visibleBatchAccess}) AS total_stock,
+        (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib JOIN shops wh ON wh.id = ib.shop_id WHERE wh.location_type = 'warehouse') AS warehouse_stock,
         (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} sale_date = ?) AS today_sales,
         (
           (SELECT COALESCE(SUM(pending_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} pending_amount > 0)
           + (SELECT COALESCE(SUM(opening_balance), 0) FROM customers ${shopId ? 'WHERE shop_id = ?' : ''})
         ) AS pending_payments
-    `, shopId ? [shopId, today(), shopId, shopId] : [today()]),
+    `, shopId ? [shopId, shopId, today(), shopId, shopId] : [today()]),
         allRecords(`
       SELECT st.id, sh.name AS shop_name, p.id AS product_id, p.name AS product_name, p.short_name AS product_short_name, p.brand,
         ${visibleStockSql} AS quantity, sh.low_stock_threshold
@@ -908,7 +909,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     allRecords(`
       SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand, p.category, p.model, p.description, p.colours, p.official_price, p.sale_price,
         COALESCE(SUM(ib.quantity_remaining), 0) AS available_stock,
-        COALESCE(SUM(ib.quantity_remaining) FILTER (WHERE sh.location_type = 'warehouse'), 0) AS warehouse_stock,
+        COALESCE((SELECT SUM(wib.quantity_remaining) FROM inventory_batches wib JOIN shops wh ON wh.id = wib.shop_id WHERE wib.product_id = p.id AND wh.location_type = 'warehouse'), 0) AS warehouse_stock,
         STRING_AGG(DISTINCT CASE WHEN ib.quantity_remaining > 0 THEN sh.name END, ', ') AS available_locations
       FROM products p
       LEFT JOIN inventory_batches ib ON ib.product_id = p.id AND ib.quantity_remaining > 0 ${shopId ? 'AND ib.shop_id = ?' : ''}
