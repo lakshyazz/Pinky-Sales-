@@ -452,8 +452,8 @@ export async function getARAgingReport(shopId, asOfDate) {
     ORDER BY total_outstanding DESC
   `;
 
-  // Inject the asOf date for each CASE expression (6 occurrences above)
-  const fullParams = [asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf];
+  // Inject the asOf date for each CASE expression — 8 placeholders in the SQL above
+  const fullParams = [asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf];
   if (shopId) fullParams.push(shopId);
 
   const rows = await allRecords(sql, fullParams);
@@ -528,7 +528,7 @@ export async function getAPAgingReport(shopId, asOfDate) {
     ORDER BY total_outstanding DESC
   `;
 
-  const fullParams = [asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf];
+  const fullParams = [asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf];
   if (shopId) fullParams.push(shopId);
 
   const rows = await allRecords(sql, fullParams);
