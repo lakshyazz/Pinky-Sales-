@@ -3479,6 +3479,7 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
         COALESCE(si_agg.items, '[]'::json) AS items,
         COALESCE(se.expenses, '[]'::json) AS expenses,
         COALESCE(cnr_agg.credit_redemptions, '[]'::json) AS credit_redemptions,
+        COALESCE(pm.payments, '[]'::json) AS payments,
         p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
         sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
         p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name
@@ -3527,15 +3528,23 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
         JOIN credit_notes cn ON cn.id = cnr.credit_note_id
         GROUP BY cnr.sale_id
       ) cnr_agg ON cnr_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object(
+          'id', id,
+          'amount', amount,
+          'payment_date', payment_date,
+          'payment_mode', payment_mode,
+          'note', note,
+          'created_at', created_at
+        ) ORDER BY payment_date ASC, id ASC) AS payments
+        FROM payments
+        GROUP BY sale_id
+      ) pm ON pm.sale_id = sa.id
       WHERE sa.customer_id = ? ${whereShop}
       ORDER BY sa.id DESC
     `, params);
 
     const openingBalance = money(customer.opening_balance || 0);
-    // [FIX B2] Return both `invoices` (for backwards compatibility) and `sales` alias + `summary`
-    // so the frontend openCustomerLedgerDrawer can correctly update pending_amount after a payment.
-    // Previously the frontend checked `res.sales` and `res.summary` which didn't exist, causing stale
-    // pending balances in the UI (payments appeared to not reduce the balance).
     const summary = {
       total_amount: invoices.reduce((sum, inv) => sum + money(inv.total_amount), 0),
       paid_amount: invoices.reduce((sum, inv) => sum + money(inv.paid_amount), 0),
@@ -5600,12 +5609,15 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
   const pagination = parsePagination(req.query);
   const params = [];
-  if (shopId) params.push(shopId);
-  const where = [`sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ?' : ''}`];
+  const where = ['(sa.pending_amount > 0 OR COALESCE(c.opening_balance, 0) > 0)'];
+  if (shopId) {
+    where.push('(sa.shop_id = ? OR (sa.id IS NULL AND c.shop_id = ?))');
+    params.push(shopId, shopId);
+  }
   appendSearchFilter(where, params, req.query.search, [
     "COALESCE(c.name, '')",
     "COALESCE(c.mobile, '')",
-    'p.name',
+    "COALESCE(p.name, '')",
     "COALESCE(p.short_name, '')",
     "COALESCE(p.full_model_list, '')",
     "COALESCE(p.brand, '')",
@@ -5622,15 +5634,15 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'sa.due_date');
   }
   if (isShopStaffRole(req.user.role)) {
-    where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
-    params.push(req.user.id);
+    where.push('(sa.created_by IS NULL OR sa.created_by = ? OR c.created_by = ?)');
+    params.push(req.user.id, req.user.id);
   }
   const groupOrderSql = "sa.due_date ASC NULLS LAST, sa.id ASC";
   const baseSql = `
-    FROM sales sa
-    JOIN products p ON p.id = sa.product_id
-    JOIN customers c ON c.id = sa.customer_id
-    JOIN shops sh ON sh.id = sa.shop_id
+    FROM customers c
+    JOIN shops sh ON sh.id = c.shop_id
+    LEFT JOIN sales sa ON sa.customer_id = c.id AND sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ' + Number(shopId) : ''}
+    LEFT JOIN products p ON p.id = sa.product_id
     LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
     LEFT JOIN (
       SELECT si.sale_id, json_agg(json_build_object(
@@ -5681,14 +5693,15 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       GROUP BY sale_id
     ) pm ON pm.sale_id = sa.id
     WHERE ${where.join(' AND ')}
-    GROUP BY sa.shop_id, c.id, c.name, c.mobile, c.address, sh.id, sh.name, sh.area, sh.address, sh.phone
+    GROUP BY c.id, c.name, c.mobile, c.address, c.shop_id, sh.id, sh.name, sh.area, sh.address, sh.phone
+    HAVING (COALESCE(SUM(sa.pending_amount), 0) + COALESCE(c.opening_balance, 0)) > 0
   `;
   const rows = await runPaginatedList({
     dataSql: `
     SELECT
-      'customer-' || sa.shop_id || ':' || c.id AS id,
+      'customer-' || c.shop_id || ':' || c.id AS id,
       c.id AS customer_id,
-      sa.shop_id,
+      c.shop_id,
       c.name AS customer_name,
       c.mobile AS mobile,
       c.address AS address,
@@ -5698,13 +5711,11 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       sh.phone AS shop_phone,
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
-      -- [FIX B3] Only add opening_balance for the customer's registered shop to prevent double-counting.
-      -- If customer has sales in multiple shops, MAX(opening_balance) was being added per shop group.
-      COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(CASE WHEN c.shop_id = sa.shop_id THEN c.opening_balance ELSE 0 END), 0) AS pending_amount,
-      COALESCE(MAX(CASE WHEN c.shop_id = sa.shop_id THEN c.opening_balance ELSE 0 END), 0) AS opening_balance,
-      COALESCE(MAX(c.advance_balance), 0) AS advance_balance,
-      (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}))[1] AS due_date,
-      JSON_AGG(JSON_BUILD_OBJECT(
+      COALESCE(SUM(sa.pending_amount), 0) + COALESCE(c.opening_balance, 0) AS pending_amount,
+      COALESCE(c.opening_balance, 0) AS opening_balance,
+      COALESCE(c.advance_balance, 0) AS advance_balance,
+      (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}) FILTER (WHERE sa.id IS NOT NULL))[1] AS due_date,
+      COALESCE(JSON_AGG(JSON_BUILD_OBJECT(
         'id', sa.id,
         'invoice_number', COALESCE(sa.invoice_number, 'INV-' || LPAD(sa.id::TEXT, 6, '0')),
         'shop_id', sa.shop_id,
@@ -5743,27 +5754,12 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
         'shop_address', sh.address,
         'shop_phone', sh.phone,
         'display_name', COALESCE(p.short_name, p.name),
-        'items', COALESCE(si_agg.items, JSON_BUILD_ARRAY(JSON_BUILD_OBJECT(
-          'id', 0,
-          'product_id', sa.product_id,
-          'quantity', COALESCE(sa.quantity, 1),
-          'unit_price', CASE WHEN COALESCE(sa.quantity, 1) > 0 THEN sa.total_amount / COALESCE(sa.quantity, 1) ELSE sa.total_amount END,
-          'total_price', sa.total_amount,
-          'name', p.name,
-          'product_name', p.name,
-          'short_name', p.short_name,
-          'product_short_name', p.short_name,
-          'brand', p.brand,
-          'brand_name', COALESCE(mb.name, p.brand),
-          'mfg_brand', COALESCE(mb.name, p.brand),
-          'manufacturing_brand_name', COALESCE(mb.name, p.brand),
-          'colour', sa.colour
-        ))),
+        'items', COALESCE(si_agg.items, JSON_BUILD_ARRAY()),
         'expenses', COALESCE(se.expenses, '[]'::json),
         'payments', COALESCE(pm.payments, '[]'::json)
-      ) ORDER BY ${groupOrderSql}) AS items
+      ) ORDER BY ${groupOrderSql}) FILTER (WHERE sa.id IS NOT NULL), '[]'::json) AS items
     ${baseSql}
-    ORDER BY due_date ASC NULLS LAST, pending_amount DESC
+    ORDER BY pending_amount DESC
   `,
     countSql: `SELECT COUNT(*) AS total FROM (SELECT 1 ${baseSql}) counted`,
     params,
@@ -5811,21 +5807,21 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
 
         for (const sale of sales) {
           if (remainingPayment <= 0) break;
-          const allocated = Math.min(remainingPayment, money(sale.pending_amount));
+          const invoiceDue = Math.max(0, money(money(sale.total_amount) - money(sale.paid_amount)));
+          if (invoiceDue <= 0) {
+            await tx.runQuery('UPDATE sales SET pending_amount = 0, status = ? WHERE id = ?', ['paid', sale.id]);
+            continue;
+          }
+          const allocated = Math.min(remainingPayment, invoiceDue);
           const newPaid = money(money(sale.paid_amount) + allocated);
-          // [FIX A4] Settle against net_payable_amount (post-credit/advance base), not total_amount.
-          // total_amount may differ from net_payable_amount for invoices where advance or credit was
-          // applied at creation time. Using total_amount caused the balance to never reach zero.
-          const settlementBase = money(sale.net_payable_amount) > 0
-            ? money(sale.net_payable_amount)
-            : money(sale.total_amount);
-          const newPending = Math.max(money(settlementBase - newPaid), 0);
+          const newPending = Math.max(0, money(money(sale.total_amount) - newPaid));
+          const newStatus = newPending <= 0 ? 'paid' : 'open';
           await tx.runQuery(
             'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
             [sale.id, allocated, payDate, payMode, note || 'Customer balance payment']
           );
-          await tx.runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale.id]);
-          remainingPayment -= allocated;
+          await tx.runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newStatus, sale.id]);
+          remainingPayment = money(remainingPayment - allocated);
         }
 
         const custRec = await tx.getRecord('SELECT COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?', [customer_id]);
@@ -5865,21 +5861,18 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
     return res.status(403).json({ error: 'This sale belongs to another branch.' });
   }
 
-  const salePending = money(sale.pending_amount);
-  const allocatedPayment = Math.min(paymentAmount, salePending);
-  const excessPayment = Math.max(0, paymentAmount - salePending);
+  const invoiceDue = Math.max(0, money(money(sale.total_amount) - money(sale.paid_amount)));
+  const allocatedPayment = Math.min(paymentAmount, invoiceDue);
+  const excessPayment = Math.max(0, money(paymentAmount - invoiceDue));
 
   const newPaid = money(money(sale.paid_amount) + allocatedPayment);
-  // [FIX A4] Use net_payable_amount as settlement base (same fix as customer-level payment route).
-  const settlementBaseSingle = money(sale.net_payable_amount) > 0
-    ? money(sale.net_payable_amount)
-    : money(sale.total_amount);
-  const newPending = Math.max(money(settlementBaseSingle - newPaid), 0);
+  const newPending = Math.max(0, money(money(sale.total_amount) - newPaid));
+  const newStatus = newPending <= 0 ? 'paid' : 'open';
   await runQuery(
     'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
     [sale_id, allocatedPayment, payDate, payMode, note || 'Payment update']
   );
-  await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newPending > 0 ? 'open' : 'paid', sale_id]);
+  await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newStatus, sale_id]);
 
   let excessAdvance = 0;
   if (excessPayment > 0 && sale.customer_id) {

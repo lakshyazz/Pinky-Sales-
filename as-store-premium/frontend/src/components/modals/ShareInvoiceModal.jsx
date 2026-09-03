@@ -229,7 +229,7 @@ export default function ShareInvoiceModal({
       let filename = '';
 
       if (docType === 'statement') {
-        doc = generateStatementPDFDoc(
+        doc = await generateStatementPDFDoc(
           { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
           invoices,
           shop
@@ -239,7 +239,7 @@ export default function ShareInvoiceModal({
         // Default: Generate Tax Invoice PDF (Consolidated or Single)
         const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
         const invNo = saleToUse?.invoice_number || (isAllSelected ? 'Consolidated' : `INV-${String(saleToUse?.id || '1').padStart(6, '0')}`);
-        doc = generateInvoicePDFDoc(saleToUse, customer, shop);
+        doc = await generateInvoicePDFDoc(saleToUse, customer, shop);
         filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
       }
 
@@ -265,8 +265,8 @@ export default function ShareInvoiceModal({
         authedFetch('/audit', {
           method: 'POST',
           body: JSON.stringify({
-            action: `Shared ${docType} via Native WhatsApp & PDF`,
-            entity_type: 'customer',
+            action: 'Shared invoice on WhatsApp',
+            entity_type: 'invoice',
             entity_id: customer?.customer_id || customer?.id || activeInvoice?.customer_id || 0,
             details: `Sent to ${cleanPhone}`,
           }),
@@ -285,12 +285,12 @@ export default function ShareInvoiceModal({
   /**
    * Direct Download Tax Invoice PDF
    */
-  const handleDownloadInvoicePdf = () => {
+  const handleDownloadInvoicePdf = async () => {
     try {
       const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
       if (!saleToUse) return;
       const invNo = saleToUse.invoice_number || (isAllSelected ? 'Consolidated' : `INV-${String(saleToUse.id || '1').padStart(6, '0')}`);
-      const doc = generateInvoicePDFDoc(saleToUse, customer, shop);
+      const doc = await generateInvoicePDFDoc(saleToUse, customer, shop);
       const filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
       doc.save(filename);
       if (showToast) showToast(`📄 ${filename} downloaded!`);
@@ -302,9 +302,9 @@ export default function ShareInvoiceModal({
   /**
    * Direct Download Account Statement PDF
    */
-  const handleDownloadStatementPdf = () => {
+  const handleDownloadStatementPdf = async () => {
     try {
-      const doc = generateStatementPDFDoc(
+      const doc = await generateStatementPDFDoc(
         { ...customer, pending_amount: totalPendingAll, total_amount: totalBilledAll, paid_amount: totalPaidAll },
         invoices,
         shop
