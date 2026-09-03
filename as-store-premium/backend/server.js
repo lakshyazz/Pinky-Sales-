@@ -4022,7 +4022,7 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
 app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { customer_id, paid_amount, notes, payment_mode = 'cash', applied_credit_amount = 0 } = req.body;
+    const { customer_id, paid_amount, notes, payment_mode = 'credit', applied_credit_amount = 0 } = req.body;
     const items = Array.isArray(req.body.items) && req.body.items.length
       ? req.body.items
       : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, selling_price: req.body.selling_price || req.body.unit_price, price_type: req.body.price_type || 'retail' }];

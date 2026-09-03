@@ -788,8 +788,8 @@ const initialForms = {
     discount_amount: '0',
     discount_percentage: '0',
     is_custom_total: false,
-    paid_amount: '',
-    payment_mode: 'cash',
+    paid_amount: '0',
+    payment_mode: 'credit',
     invoice_date: getTodayIso(),
     payment_terms_days: 7,
     due_date: calculateDueDate(getTodayIso(), 7),
@@ -2043,7 +2043,14 @@ function SalesCreationWorkspace({
                   <label className="text-[11px] font-semibold text-slate-600">Paid Amount (₹)</label>
                   <button
                     type="button"
-                    onClick={() => setForms((prev) => ({ ...prev, sale: { ...prev.sale, paid_amount: String(netPayable) } }))}
+                    onClick={() => setForms((prev) => ({
+                      ...prev,
+                      sale: {
+                        ...prev.sale,
+                        paid_amount: String(netPayable),
+                        payment_mode: prev.sale.payment_mode === 'credit' ? 'cash' : (prev.sale.payment_mode || 'cash'),
+                      },
+                    }))}
                     className="text-[10px] font-bold text-teal-600 hover:text-teal-800 hover:underline cursor-pointer"
                   >
                     {netPayable > 0 ? `Pay Full (${currency(netPayable)})` : 'Covered by Advance (₹0)'}
@@ -2063,15 +2070,25 @@ function SalesCreationWorkspace({
               <div>
                 <label className="block text-[11px] font-semibold text-slate-600 mb-1">Payment Mode</label>
                 <select
-                  value={forms.sale.payment_mode || 'cash'}
-                  onChange={(e) => setForms((prev) => ({ ...prev, sale: { ...prev.sale, payment_mode: e.target.value } }))}
+                  value={forms.sale.payment_mode || 'credit'}
+                  onChange={(e) => {
+                    const newMode = e.target.value;
+                    setForms((prev) => ({
+                      ...prev,
+                      sale: {
+                        ...prev.sale,
+                        payment_mode: newMode,
+                        paid_amount: newMode === 'credit' ? '0' : (Number(prev.sale.paid_amount || 0) > 0 ? prev.sale.paid_amount : ''),
+                      },
+                    }));
+                  }}
                   className="w-full h-10 px-3 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
                 >
+                  <option value="credit">Credit / Pending</option>
                   <option value="cash">Cash</option>
                   <option value="upi">UPI</option>
                   <option value="card">Card</option>
                   <option value="bank">Bank Transfer</option>
-                  <option value="credit">Credit / Pending</option>
                 </select>
               </div>
 
@@ -4468,7 +4485,7 @@ function App() {
         due_date: sale.due_date ? String(sale.due_date).slice(0, 10) : calculateDueDate(initialDate, Number(sale.payment_terms_days || 7)),
         previous_balance: sale.previous_balance !== undefined && sale.previous_balance !== null ? sale.previous_balance : '',
         paid_amount: sale.paid_amount !== undefined && sale.paid_amount !== null ? String(sale.paid_amount) : '0',
-        payment_mode: sale.payment_mode || 'cash',
+        payment_mode: sale.payment_mode || 'credit',
         notes: sale.notes || '',
         items: saleItems,
         expenses: saleExpenses,
@@ -4652,7 +4669,7 @@ function App() {
           payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7),
           due_date: dueDate,
           notes,
-          payment_mode: forms.sale.payment_mode || 'cash',
+          payment_mode: forms.sale.payment_mode || 'credit',
           products_total: productsTotal,
           extra_expenses_total: extraExpensesTotal,
           original_total: calculatedTotal,
