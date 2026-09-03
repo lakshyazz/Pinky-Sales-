@@ -3368,6 +3368,16 @@ function App() {
       if (tab === 'payments') await loadPendingPage({ page: pendingPager.page, currentShop, filters: pendingFilters });
       if (tab === 'reports') await loadReportsPage({ currentShop });
       if (tab === 'catalog') set('catalog', await api(`/catalog?${new URLSearchParams(catalogFilters).toString()}`));
+      if (tab === 'ledger') {
+        // Load all customers (unpaginated) so the Party Ledger dropdown is populated
+        const ledgerParams = scopedParams(currentShop);
+        ledgerParams.set('page', '1');
+        ledgerParams.set('limit', '5000');
+        const [customerResponse] = await Promise.all([
+          authedFetch(`/customers?${ledgerParams.toString()}`),
+        ]);
+        setData((prev) => ({ ...prev, customers: getPaginatedRows(customerResponse) }));
+      }
     } catch (error) {
       handleLoadError(error, 'Unable to refresh this page right now.');
     } finally {
