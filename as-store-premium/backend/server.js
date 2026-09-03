@@ -5608,11 +5608,10 @@ app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (
 app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req, res) => {
   const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
   const pagination = parsePagination(req.query);
-  const params = [];
-  const where = ['(sa.pending_amount > 0 OR COALESCE(c.opening_balance, 0) > 0)'];
+  const where = ['1=1'];
   if (shopId) {
-    where.push('(sa.shop_id = ? OR (sa.id IS NULL AND c.shop_id = ?))');
-    params.push(shopId, shopId);
+    where.push('c.shop_id = ?');
+    params.push(shopId);
   }
   appendSearchFilter(where, params, req.query.search, [
     "COALESCE(c.name, '')",
@@ -5641,7 +5640,7 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
   const baseSql = `
     FROM customers c
     JOIN shops sh ON sh.id = c.shop_id
-    LEFT JOIN sales sa ON sa.customer_id = c.id AND sa.pending_amount > 0 ${shopId ? 'AND sa.shop_id = ' + Number(shopId) : ''}
+    LEFT JOIN sales sa ON sa.customer_id = c.id ${shopId ? 'AND sa.shop_id = ' + Number(shopId) : ''}
     LEFT JOIN products p ON p.id = sa.product_id
     LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
     LEFT JOIN (

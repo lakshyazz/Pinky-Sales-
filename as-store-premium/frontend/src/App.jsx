@@ -8045,8 +8045,9 @@ function App() {
                         <tbody className="divide-y divide-slate-100">
                           {filteredPendingCustomers.map((item) => {
                             const dueInfo = getDueDateInfo(item.due_date);
-                            const activeInvoices = (item.items || []).filter(inv => Number(inv.pending_amount || 0) > 0);
-                            const invoiceCount = activeInvoices.length;
+                            const allInvoices = item.items || [];
+                            const totalInvoices = allInvoices.length;
+                            const openInvoices = allInvoices.filter(inv => Number(inv.pending_amount || 0) > 0).length;
                             const lastPurchase = item.items?.[0]?.sale_date || item.items?.[0]?.invoice_date || item.sale_date;
 
                             return (
@@ -8115,9 +8116,21 @@ function App() {
                                   <button
                                     type="button"
                                     onClick={() => setSelectedPaymentCustomer(item)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 transition-colors cursor-pointer"
                                   >
-                                    <ReceiptText size={12} /> {invoiceCount === 0 ? 'Opening Bal' : `${invoiceCount} ${invoiceCount === 1 ? 'Invoice' : 'Invoices'}`}
+                                    <ReceiptText size={12} />
+                                    {totalInvoices === 0 ? (
+                                      <span>Opening Bal</span>
+                                    ) : (
+                                      <>
+                                        <span>{totalInvoices} {totalInvoices === 1 ? 'Invoice' : 'Invoices'}</span>
+                                        {openInvoices === 0 && (
+                                          <span className="text-[9.5px] font-extrabold px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded border border-emerald-200">
+                                            Paid
+                                          </span>
+                                        )}
+                                      </>
+                                    )}
                                   </button>
                                 </td>
 

@@ -613,8 +613,12 @@ export default function ShareInvoiceModal({
                       }`}
                     >
                       <span>{invNo}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold ${isInvSelected ? 'bg-emerald-700 text-emerald-50' : 'bg-slate-100 text-slate-600'}`}>
-                        {currency(invPending > 0 ? invPending : inv.total_amount)}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-bold ${
+                        isInvSelected 
+                          ? 'bg-emerald-700 text-emerald-50' 
+                          : (invPending > 0 ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200')
+                      }`}>
+                        {invPending > 0 ? currency(invPending) : 'PAID'}
                       </span>
                     </button>
                   );
