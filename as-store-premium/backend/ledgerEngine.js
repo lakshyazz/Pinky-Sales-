@@ -420,40 +420,50 @@ export async function getVendorLedger(supplierId, shopId, { from, to } = {}) {
 export async function getARAgingReport(shopId, asOfDate) {
   const asOf = isoDate(asOfDate) || new Date().toISOString().slice(0, 10);
   const shopCond = shopId ? 'AND s.shop_id = ?' : '';
-  const params = [asOf, asOf, asOf, asOf, asOf];
-  if (shopId) { params.push(shopId); }
+  const shopCondC = shopId ? 'AND c2.shop_id = ?' : '';
 
   const sql = `
     SELECT
-      c.id                                                           AS customer_id,
-      c.name                                                         AS customer_name,
+      c.id                                                                       AS customer_id,
+      c.name                                                                     AS customer_name,
       c.mobile,
-      ROUND(COALESCE(SUM(CASE
+      -- opening_balance is added to the current bucket (no due date association)
+      ROUND((COALESCE(SUM(CASE
         WHEN s.due_date::date > ?::date THEN s.pending_amount
-        ELSE 0 END), 0)::numeric, 2)                                 AS current_bucket,
+        ELSE 0 END), 0) + COALESCE(MAX(c.opening_balance), 0))::numeric, 2)     AS current_bucket,
       ROUND(COALESCE(SUM(CASE
         WHEN s.due_date::date BETWEEN ?::date - 30 AND ?::date THEN s.pending_amount
-        ELSE 0 END), 0)::numeric, 2)                                 AS d1_30,
+        ELSE 0 END), 0)::numeric, 2)                                             AS d1_30,
       ROUND(COALESCE(SUM(CASE
         WHEN s.due_date::date BETWEEN ?::date - 60 AND ?::date - 31 THEN s.pending_amount
-        ELSE 0 END), 0)::numeric, 2)                                 AS d31_60,
+        ELSE 0 END), 0)::numeric, 2)                                             AS d31_60,
       ROUND(COALESCE(SUM(CASE
         WHEN s.due_date::date BETWEEN ?::date - 90 AND ?::date - 61 THEN s.pending_amount
-        ELSE 0 END), 0)::numeric, 2)                                 AS d61_90,
+        ELSE 0 END), 0)::numeric, 2)                                             AS d61_90,
       ROUND(COALESCE(SUM(CASE
         WHEN s.due_date::date < ?::date - 90 THEN s.pending_amount
-        ELSE 0 END), 0)::numeric, 2)                                 AS d90_plus,
-      ROUND(COALESCE(SUM(s.pending_amount), 0)::numeric, 2)          AS total_outstanding
-    FROM sales s
-    JOIN customers c ON c.id = s.customer_id
-    WHERE s.pending_amount > 0 ${shopCond}
+        ELSE 0 END), 0)::numeric, 2)                                             AS d90_plus,
+      -- total = sum of all pending sales + opening_balance (matches pending page)
+      ROUND((COALESCE(SUM(s.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0))::numeric, 2)
+                                                                                 AS total_outstanding
+    FROM customers c
+    LEFT JOIN sales s ON s.customer_id = c.id AND s.pending_amount > 0 ${shopCond}
+    WHERE (s.id IS NOT NULL OR COALESCE(c.opening_balance, 0) > 0)
+      AND c.id IN (
+        SELECT DISTINCT c2.id FROM customers c2
+        LEFT JOIN sales s2 ON s2.customer_id = c2.id AND s2.pending_amount > 0 ${shopCondC}
+        WHERE s2.id IS NOT NULL OR COALESCE(c2.opening_balance, 0) > 0
+      )
     GROUP BY c.id, c.name, c.mobile
-    HAVING SUM(s.pending_amount) > 0
+    HAVING (COALESCE(SUM(s.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0)) > 0
     ORDER BY total_outstanding DESC
   `;
 
-  // Inject the asOf date for each CASE expression — 8 placeholders in the SQL above
+  // Placeholders: 5 asOf for CASE buckets (current uses 1, then 1-30, 31-60, 61-90, 90+)
+  // + shopId (if any) for the LEFT JOIN condition
+  // + shopId (if any) for the subquery
   const fullParams = [asOf, asOf, asOf, asOf, asOf, asOf, asOf, asOf];
+  if (shopId) fullParams.push(shopId);
   if (shopId) fullParams.push(shopId);
 
   const rows = await allRecords(sql, fullParams);
