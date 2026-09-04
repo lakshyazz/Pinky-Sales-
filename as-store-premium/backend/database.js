@@ -25,7 +25,7 @@ if (!connectionString) {
   throw new Error('Database connection URL is missing. Set DATABASE_URL or POSTGRES_URL in environment variables.');
 }
 
-const pool = new Pool({
+export const pool = new Pool({
   connectionString,
   ssl: { rejectUnauthorized: false },
   max: Number(process.env.PG_POOL_MAX || (process.env.VERCEL === '1' ? 3 : 10)),

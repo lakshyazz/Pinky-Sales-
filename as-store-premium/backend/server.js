@@ -3123,7 +3123,14 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
     where.push('(c.created_by IS NULL OR c.created_by = ?)');
     params.push(req.user.id);
   }
-  const pendingSql = '(COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0))';
+  const pendingSql = `(
+    GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+      (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+       WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+    )))
+    + COALESCE(SUM(s.pending_amount), 0)
+    - COALESCE(c.advance_balance, 0)
+  )`;
   const having = [];
   if (req.query.status === 'pending') having.push(`${pendingSql} > 0`);
   if (req.query.status === 'paid') having.push(`${pendingSql} = 0`);
@@ -3137,7 +3144,7 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
   `;
   const rows = await runPaginatedList({
     dataSql: `
-    SELECT c.*, sh.name AS shop_name, (COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0)) AS pending
+    SELECT c.*, sh.name AS shop_name, ${pendingSql} AS pending
     ${baseSql}
     ORDER BY c.created_at DESC
   `,
@@ -3661,12 +3668,54 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
     const sales = await allRecords(query, params);
     if (!sales.length) return res.status(404).json({ error: 'No purchases found for this customer.' });
 
+    const customerPayments = await allRecords(
+      `SELECT pm.id,
+              pm.payment_number,
+              pm.sale_id,
+              pm.amount,
+              pm.payment_date,
+              pm.payment_mode,
+              pm.reference_number,
+              pm.notes,
+              pm.created_at,
+              COALESCE(JSON_AGG(JSON_BUILD_OBJECT(
+                'id', pa.id,
+                'allocation_type', pa.allocation_type,
+                'amount_applied', pa.amount_applied,
+                'sale_id', pa.sale_id,
+                'notes', pa.notes
+              )) FILTER (WHERE pa.id IS NOT NULL), '[]'::json) AS allocations
+       FROM payments pm
+       LEFT JOIN payment_allocations pa ON pa.payment_id = pm.id AND pa.reversed_at IS NULL
+       WHERE pm.customer_id = ? AND pm.reversed_at IS NULL
+       GROUP BY pm.id
+       ORDER BY pm.payment_date ASC, pm.id ASC`,
+      [customer.id]
+    );
+
+    const dynBalRow = await getRecord(
+      `SELECT (
+         GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+           (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+            WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+         )))
+         + COALESCE((SELECT SUM(s.total_amount - s.paid_amount) FROM sales s WHERE s.customer_id = c.id), 0)
+         - COALESCE(c.advance_balance, 0)
+       ) AS pending_amount
+       FROM customers c WHERE c.id = ?`,
+      [customer.id]
+    );
+
     res.json({
       customer: {
         id: customer.id,
         name: customer.name,
         mobile: customer.mobile,
         address: customer.address,
+        opening_balance: money(customer.opening_balance || 0),
+        opening_balance_date: customer.opening_balance_date || customer.created_at,
+        advance_balance: money(customer.advance_balance || 0),
+        pending_amount: money(dynBalRow?.pending_amount || 0),
       },
       shop: {
         id: customer.shop_id,
@@ -3676,11 +3725,12 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         phone: customer.shop_phone,
       },
       sales,
+      payments: customerPayments,
       totals: {
         quantity: sales.reduce((sum, sale) => sum + money(sale.quantity), 0),
         total_amount: sales.reduce((sum, sale) => sum + money(sale.total_amount), 0),
         paid_amount: sales.reduce((sum, sale) => sum + money(sale.paid_amount), 0),
-        pending_amount: sales.reduce((sum, sale) => sum + money(sale.pending_amount), 0),
+        pending_amount: money(dynBalRow?.pending_amount || 0),
       },
     });
   } catch (error) {
@@ -3707,6 +3757,19 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
     const openingBalance = money(customer.opening_balance || 0);
     const advanceBalance = money(customer.advance_balance || 0);
 
+    // Active opening balance allocations
+    const settledOBRow = await getRecord(
+      `SELECT COALESCE(SUM(amount_applied), 0) AS settled
+       FROM payment_allocations
+       WHERE customer_id = ? AND allocation_type = 'opening_balance' AND reversed_at IS NULL`,
+      [customerId]
+    );
+    const settledOpeningBalance = money(settledOBRow?.settled || 0);
+    const remainingOpeningBalance = Math.max(0, money(openingBalance - settledOpeningBalance));
+
+    // Dynamic Outstanding Balance: (opening_balance - settled_ob) + invoices_outstanding - advance_balance
+    const dynamicOutstanding = Math.max(0, money(remainingOpeningBalance + invoiceOutstanding - advanceBalance));
+
     // Active credit notes with remaining balance
     const creditNotes = await allRecords(
       `SELECT id, credit_note_number, amount, used_amount, balance_amount, reason, status, return_date, sale_id, created_at
@@ -3716,17 +3779,14 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
       [customerId]
     );
     const availableCredits = creditNotes.reduce((sum, cn) => sum + money(cn.balance_amount), 0);
-    // [FIX A7] Do NOT subtract availableCredits here.
-    // Credit notes are already FIFO-applied against pending_amount at creation time (lines 3833-3880).
-    // Deducting them again produces a displayed balance that is lower than actual outstanding.
-    // available_credits is returned separately as a distinct informational field.
-    const totalPending = money(invoiceOutstanding + openingBalance);
 
     res.json({
       customer,
-      outstanding_balance: totalPending,
+      outstanding_balance: dynamicOutstanding,
       invoices_outstanding: invoiceOutstanding,
       opening_balance: openingBalance,
+      settled_opening_balance: settledOpeningBalance,
+      remaining_opening_balance: remainingOpeningBalance,
       advance_balance: advanceBalance,
       available_credits: money(availableCredits),
       credit_notes: creditNotes,
@@ -4079,6 +4139,25 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         throw error;
       }
 
+      // In-lock idempotency check: If key already submitted, return existing record gracefully
+      if (req.body.idempotency_key) {
+        const existingSale = await tx.getRecord('SELECT * FROM sales WHERE idempotency_key = ?', [req.body.idempotency_key]);
+        if (existingSale) {
+          const saleItems = await tx.allRecords('SELECT * FROM sale_items WHERE sale_id = ?', [existingSale.id]);
+          return {
+            id: existingSale.id,
+            ids: [existingSale.id],
+            invoice_number: existingSale.invoice_number,
+            public_token: existingSale.public_token,
+            public_url: `/invoice/public/${existingSale.public_token}`,
+            pending_amount: Number(existingSale.pending_amount),
+            total_amount: Number(existingSale.total_amount),
+            items: saleItems,
+            idempotency_replay: true,
+          };
+        }
+      }
+
       // Fetch live previous outstanding balance for this customer (open sales pending + customer opening balance)
       const prevBalRow = await tx.getRecord(
         'SELECT COALESCE(SUM(pending_amount), 0) AS prev_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
@@ -4342,8 +4421,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           notes, status, created_by, payment_mode, price_type, manufacturing_brand_id, original_amount,
           discount_amount, discount_percentage, colour,
           previous_balance, current_invoice_total, applied_credit_amount, net_payable_amount, closing_balance, advance_applied,
-          public_token
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          public_token, idempotency_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           shopId, 
           primaryProduct.product_id, 
@@ -4374,7 +4453,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           netPayableAmount,
           closingBalance,
           advanceDeduction,
-          publicToken
+          publicToken,
+          req.body.idempotency_key || null
         ]
       );
 
@@ -4453,46 +4533,104 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
 
       // 9. Record payment if initial amount was paid on this sale
       if (advanceDeduction > 0) {
+        const seqAdv = await tx.getRecord("SELECT nextval('payment_number_seq') AS num");
+        const advPayNum = 'PAY-' + String(seqAdv.num).padStart(6, '0');
+        const advPay = await tx.getRecord(
+          `INSERT INTO payments (payment_number, customer_id, sale_id, amount, payment_date, payment_mode, note, shop_id, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+          [advPayNum, customer_id, saleId, advanceDeduction, today(), 'store_credit', 'Auto-adjusted from Customer Advance / Store Credit', shopId, req.user.id]
+        );
         await tx.runQuery(
-          'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-          [saleId, advanceDeduction, today(), 'store_credit', 'Auto-adjusted from Customer Advance / Store Credit']
+          `INSERT INTO payment_allocations (payment_id, customer_id, sale_id, allocation_type, amount_applied, notes)
+           VALUES (?, ?, ?, 'invoice', ?, 'Store credit adjusted')`,
+          [advPay.id, customer_id, saleId, advanceDeduction]
         );
       }
       if (directPaidForThisSale > 0) {
+        const seqDir = await tx.getRecord("SELECT nextval('payment_number_seq') AS num");
+        const dirPayNum = 'PAY-' + String(seqDir.num).padStart(6, '0');
+        const dirPay = await tx.getRecord(
+          `INSERT INTO payments (payment_number, customer_id, sale_id, amount, payment_date, payment_mode, note, shop_id, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+          [dirPayNum, customer_id, saleId, directPaidForThisSale, today(), payment_mode, 'Initial sale payment', shopId, req.user.id]
+        );
         await tx.runQuery(
-          'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-          [saleId, directPaidForThisSale, today(), payment_mode, 'Initial sale payment']
+          `INSERT INTO payment_allocations (payment_id, customer_id, sale_id, allocation_type, amount_applied, notes)
+           VALUES (?, ?, ?, 'invoice', ?, 'Initial sale payment')`,
+          [dirPay.id, customer_id, saleId, directPaidForThisSale]
         );
       }
 
-      // 10. If excess payment was made towards previous balance, allocate in FIFO to older sales
+      // 10. If excess payment was made towards previous balance, allocate via FIFO
       if (excessPaid > 0) {
-        const olderSales = await tx.allRecords(
-          'SELECT * FROM sales WHERE customer_id = ? AND pending_amount > 0 AND id != ? ORDER BY due_date ASC, id ASC FOR UPDATE',
-          [customer_id, saleId]
-        );
+        const seqExcess = await tx.getRecord("SELECT nextval('payment_number_seq') AS num");
+        const excessPayNum = 'PAY-' + String(seqExcess.num).padStart(6, '0');
         let remainingExcess = excessPaid;
-        for (const os of olderSales) {
-          if (remainingExcess <= 0) break;
-          const alloc = Math.min(remainingExcess, money(os.pending_amount));
-          const newOsPaid = money(money(os.paid_amount) + alloc);
-          const newOsPending = Math.max(money(money(os.total_amount) - newOsPaid), 0);
-          await tx.runQuery(
-            'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
-            [newOsPaid, newOsPending, newOsPending > 0 ? 'open' : 'paid', os.id]
-          );
-          await tx.runQuery(
-            'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-            [os.id, alloc, today(), payment_mode, `Payment applied via sale carry-forward (INV-${String(saleId).padStart(6, '0')})`]
-          );
-          remainingExcess = money(remainingExcess - alloc);
+
+        // Check if customer has unsettled opening balance first
+        const settledRow = await tx.getRecord(
+          `SELECT COALESCE(SUM(amount_applied), 0) AS settled 
+           FROM payment_allocations 
+           WHERE customer_id = ? AND allocation_type = 'opening_balance' AND reversed_at IS NULL`,
+          [customer_id]
+        );
+        const unsettledOpening = Math.max(0, money(Number(customer.opening_balance) - Number(settledRow?.settled || 0)));
+        const excessAllocations = [];
+
+        if (unsettledOpening > 0 && remainingExcess > 0) {
+          const allocOB = Math.min(remainingExcess, unsettledOpening);
+          excessAllocations.push({
+            allocation_type: 'opening_balance',
+            sale_id: null,
+            amount_applied: allocOB,
+            notes: 'Applied towards opening balance',
+          });
+          remainingExcess = money(remainingExcess - allocOB);
         }
-        
-        // If excess remains even after clearing all older sales, credit remainder to customer advance_balance!
+
         if (remainingExcess > 0) {
+          const olderSales = await tx.allRecords(
+            'SELECT * FROM sales WHERE customer_id = ? AND pending_amount > 0 AND id != ? ORDER BY due_date ASC, id ASC FOR UPDATE',
+            [customer_id, saleId]
+          );
+          for (const os of olderSales) {
+            if (remainingExcess <= 0) break;
+            const alloc = Math.min(remainingExcess, money(os.pending_amount));
+            const newOsPaid = money(money(os.paid_amount) + alloc);
+            const newOsPending = Math.max(money(money(os.total_amount) - newOsPaid), 0);
+            await tx.runQuery(
+              'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+              [newOsPaid, newOsPending, newOsPending > 0 ? 'partial' : 'paid', os.id]
+            );
+            excessAllocations.push({
+              allocation_type: 'invoice',
+              sale_id: os.id,
+              amount_applied: alloc,
+              notes: `Applied to INV-${String(os.id).padStart(6, '0')}`,
+            });
+            remainingExcess = money(remainingExcess - alloc);
+          }
+        }
+
+        const unallocatedExcess = remainingExcess > 0 ? remainingExcess : 0;
+        if (unallocatedExcess > 0) {
           await tx.runQuery(
             'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
-            [remainingExcess, customer_id]
+            [unallocatedExcess, customer_id]
+          );
+        }
+
+        const excessPay = await tx.getRecord(
+          `INSERT INTO payments (payment_number, customer_id, sale_id, amount, payment_date, payment_mode, note, unallocated_amount, shop_id, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+          [excessPayNum, customer_id, saleId, excessPaid, today(), payment_mode, `Excess payment applied via sale carry-forward (INV-${String(saleId).padStart(6, '0')})`, unallocatedExcess, shopId, req.user.id]
+        );
+
+        for (const ea of excessAllocations) {
+          await tx.runQuery(
+            `INSERT INTO payment_allocations (payment_id, customer_id, sale_id, allocation_type, amount_applied, notes)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [excessPay.id, customer_id, ea.sale_id, ea.allocation_type, ea.amount_applied, ea.notes]
           );
         }
       }
@@ -4891,20 +5029,10 @@ const handleUpdateSale = async (req, res) => {
         productsTotal = Number(itemTotals?.pt || sale.total_amount || 0);
       }
 
-      // 5. Customer Opening Balance Synchronization if previous_balance was provided
+      // 5. Previous balance handling (opening_balance is immutable and must NEVER be mutated)
       let previousBalance = Number(sale.previous_balance || 0);
       if (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance))) {
         previousBalance = money(req.body.previous_balance);
-        const otherSalesPendingRow = await tx.getRecord(
-          'SELECT COALESCE(SUM(pending_amount), 0) AS p FROM sales WHERE customer_id = ? AND id != ? AND pending_amount > 0',
-          [targetCustomerId, saleId]
-        );
-        const otherPending = Number(otherSalesPendingRow?.p || 0);
-        const newOpeningBal = Math.max(0, money(previousBalance - otherPending));
-        await tx.runQuery(
-          'UPDATE customers SET opening_balance = ? WHERE id = ?',
-          [newOpeningBal, targetCustomerId]
-        );
       }
 
       // 6. Recalculate totals and financials
@@ -5694,7 +5822,14 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     ) pm ON pm.sale_id = sa.id
     WHERE ${where.join(' AND ')}
     GROUP BY c.id, c.name, c.mobile, c.address, c.shop_id, sh.id, sh.name, sh.area, sh.address, sh.phone
-    HAVING (COALESCE(SUM(sa.pending_amount), 0) + COALESCE(c.opening_balance, 0)) > 0
+    HAVING (
+      GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+        (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+         WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+      )))
+      + COALESCE(SUM(sa.pending_amount), 0)
+      - COALESCE(c.advance_balance, 0)
+    ) > 0
   `;
   const rows = await runPaginatedList({
     dataSql: `
@@ -5711,7 +5846,14 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       sh.phone AS shop_phone,
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
-      COALESCE(SUM(sa.pending_amount), 0) + COALESCE(c.opening_balance, 0) AS pending_amount,
+      GREATEST(0, (
+        GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+          (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+           WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+        )))
+        + COALESCE(SUM(sa.pending_amount), 0)
+        - COALESCE(c.advance_balance, 0)
+      )) AS pending_amount,
       COALESCE(c.opening_balance, 0) AS opening_balance,
       COALESCE(c.advance_balance, 0) AS advance_balance,
       (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}) FILTER (WHERE sa.id IS NOT NULL))[1] AS due_date,
@@ -5770,131 +5912,369 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
 });
 
 app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) => {
-  const { sale_id, customer_id, shop_id, amount, note, payment_mode = 'cash', payment_date } = req.body;
-  if ((!sale_id && !customer_id) || !amount) return res.status(400).json({ error: 'Customer or sale and amount are required.' });
+  const { 
+    sale_id, 
+    customer_id, 
+    shop_id, 
+    amount, 
+    note, 
+    payment_mode = 'cash', 
+    payment_date,
+    reference_number,
+    idempotency_key 
+  } = req.body;
+
+  if ((!sale_id && !customer_id) || !amount) {
+    return res.status(400).json({ error: 'Customer or sale and amount are required.' });
+  }
+
   const paymentAmount = money(amount);
-  if (paymentAmount <= 0) return res.status(400).json({ error: 'Payment amount must be greater than zero.' });
+  if (paymentAmount <= 0) {
+    return res.status(400).json({ error: 'Payment amount must be greater than zero.' });
+  }
 
   const payDate = /^\d{4}-\d{2}-\d{2}$/.test(String(payment_date || '')) ? String(payment_date) : today();
   const payMode = String(payment_mode || 'cash').trim();
+  const refNumber = reference_number ? String(reference_number).trim() : null;
+  const idempotencyKey = idempotency_key ? String(idempotency_key).trim() : null;
 
-  if (customer_id) {
-    try {
-      const userShopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : (shop_id ? Number(shop_id) : null);
-      const result = await runTransaction(async (tx) => {
-        let query = `
-          SELECT s.*
-          FROM sales s
-          JOIN customers c ON c.id = s.customer_id
-          WHERE c.mobile = (SELECT mobile FROM customers WHERE id = ?)
-            AND s.pending_amount > 0
-        `;
-        const params = [customer_id];
-        if (userShopId) {
-          query += ' AND s.shop_id = ?';
-          params.push(userShopId);
+  try {
+    const result = await runTransaction(async (tx) => {
+      // 1. Determine target customer_id
+      let targetCustomerId = customer_id ? Number(customer_id) : null;
+      let targetShopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : (shop_id ? Number(shop_id) : null);
+
+      if (!targetCustomerId && sale_id) {
+        const saleRecord = await tx.getRecord('SELECT customer_id, shop_id FROM sales WHERE id = ?', [sale_id]);
+        if (!saleRecord) {
+          throw Object.assign(new Error('Sale not found.'), { status: 404 });
         }
-        if (isShopStaffRole(req.user.role)) {
-          query += ' AND (s.created_by IS NULL OR s.created_by = ?)';
-          params.push(req.user.id);
-        }
-        query += ' ORDER BY s.due_date ASC, s.id ASC';
+        targetCustomerId = saleRecord.customer_id;
+        if (!targetShopId) targetShopId = saleRecord.shop_id;
+      }
 
-        const sales = await tx.allRecords(query, params);
-        const totalSalesPending = sales.reduce((sum, sale) => sum + money(sale.pending_amount), 0);
-        let remainingPayment = paymentAmount;
-        let excessAdvance = 0;
+      if (!targetCustomerId) {
+        throw Object.assign(new Error('Unable to determine customer for payment.'), { status: 400 });
+      }
 
-        for (const sale of sales) {
-          if (remainingPayment <= 0) break;
-          const invoiceDue = Math.max(0, money(money(sale.total_amount) - money(sale.paid_amount)));
-          if (invoiceDue <= 0) {
-            await tx.runQuery('UPDATE sales SET pending_amount = 0, status = ? WHERE id = ?', ['paid', sale.id]);
-            continue;
-          }
-          const allocated = Math.min(remainingPayment, invoiceDue);
-          const newPaid = money(money(sale.paid_amount) + allocated);
-          const newPending = Math.max(0, money(money(sale.total_amount) - newPaid));
-          const newStatus = newPending <= 0 ? 'paid' : 'open';
-          await tx.runQuery(
-            'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-            [sale.id, allocated, payDate, payMode, note || 'Customer balance payment']
-          );
-          await tx.runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newStatus, sale.id]);
-          remainingPayment = money(remainingPayment - allocated);
-        }
-
-        const custRec = await tx.getRecord('SELECT COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?', [customer_id]);
-        let currentOpeningBal = money(custRec?.opening_balance || 0);
-
-        if (remainingPayment > 0 && currentOpeningBal > 0) {
-          const openingDeduction = Math.min(remainingPayment, currentOpeningBal);
-          await tx.runQuery(
-            'UPDATE customers SET opening_balance = opening_balance - ? WHERE id = ?',
-            [openingDeduction, customer_id]
-          );
-          currentOpeningBal -= openingDeduction;
-          remainingPayment -= openingDeduction;
-        }
-
-        if (remainingPayment > 0) {
-          excessAdvance = money(remainingPayment);
-          await tx.runQuery(
-            'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
-            [excessAdvance, customer_id]
-          );
-        }
-
-        const remainingTotalPending = Math.max(0, money((totalSalesPending + currentOpeningBal) - paymentAmount));
-        return { pending_amount: remainingTotalPending, excess_credited: excessAdvance };
-      });
-      await audit(req, 'Recorded customer payment', 'customer', customer_id, `Paid ${paymentAmount} on ${payDate} via ${payMode}, remaining ${result.pending_amount}${result.excess_credited ? `, credited ₹${result.excess_credited} to advance balance` : ''}`);
-      return res.json({ success: true, pending_amount: result.pending_amount, excess_credited: result.excess_credited });
-    } catch (error) {
-      return res.status(error.status || 500).json({ error: error.message || 'Unable to record customer payment.' });
-    }
-  }
-
-  const sale = await getRecord('SELECT * FROM sales WHERE id = ?', [sale_id]);
-  if (!sale) return res.status(404).json({ error: 'Sale not found.' });
-  if (isShopStaffRole(req.user.role) && Number(req.user.shop_id) !== Number(sale.shop_id)) {
-    return res.status(403).json({ error: 'This sale belongs to another branch.' });
-  }
-
-  const invoiceDue = Math.max(0, money(money(sale.total_amount) - money(sale.paid_amount)));
-  const allocatedPayment = Math.min(paymentAmount, invoiceDue);
-  const excessPayment = Math.max(0, money(paymentAmount - invoiceDue));
-
-  const newPaid = money(money(sale.paid_amount) + allocatedPayment);
-  const newPending = Math.max(0, money(money(sale.total_amount) - newPaid));
-  const newStatus = newPending <= 0 ? 'paid' : 'open';
-  await runQuery(
-    'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-    [sale_id, allocatedPayment, payDate, payMode, note || 'Payment update']
-  );
-  await runQuery('UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?', [newPaid, newPending, newStatus, sale_id]);
-
-  let excessAdvance = 0;
-  if (excessPayment > 0 && sale.customer_id) {
-    const custRec = await getRecord('SELECT COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?', [sale.customer_id]);
-    let currentOpeningBal = money(custRec?.opening_balance || 0);
-    let remainingExcess = excessPayment;
-    if (currentOpeningBal > 0) {
-      const deduction = Math.min(remainingExcess, currentOpeningBal);
-      await runQuery('UPDATE customers SET opening_balance = opening_balance - ? WHERE id = ?', [deduction, sale.customer_id]);
-      remainingExcess -= deduction;
-    }
-    if (remainingExcess > 0) {
-      excessAdvance = remainingExcess;
-      await runQuery(
-        'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
-        [excessAdvance, sale.customer_id]
+      // 2. Strict Customer Row Lock FOR UPDATE first
+      const customer = await tx.getRecord(
+        `SELECT id, name, mobile, COALESCE(opening_balance, 0) AS opening_balance, 
+                COALESCE(advance_balance, 0) AS advance_balance, shop_id
+         FROM customers WHERE id = ? FOR UPDATE`,
+        [targetCustomerId]
       );
-    }
+      if (!customer) {
+        throw Object.assign(new Error('Customer not found.'), { status: 404 });
+      }
+      if (!targetShopId) targetShopId = customer.shop_id;
+
+      // 3. In-Transaction Post-Lock Idempotency Check
+      if (idempotencyKey) {
+        const existingPayment = await tx.getRecord(
+          'SELECT * FROM payments WHERE idempotency_key = ?',
+          [idempotencyKey]
+        );
+        if (existingPayment) {
+          const allocations = await tx.allRecords(
+            'SELECT * FROM payment_allocations WHERE payment_id = ? ORDER BY id ASC',
+            [existingPayment.id]
+          );
+          return {
+            payment: existingPayment,
+            allocations,
+            pending_amount: 0,
+            excess_credited: Number(existingPayment.unallocated_amount || 0),
+            idempotent_replay: true,
+          };
+        }
+      }
+
+      // 4. Generate next sequential payment voucher number
+      const seqRow = await tx.getRecord("SELECT nextval('payment_number_seq') AS num");
+      const paymentNumber = 'PAY-' + String(seqRow.num).padStart(6, '0');
+
+      // 5. FIFO Allocation Engine
+      let remainingPayment = paymentAmount;
+      const allocationsToInsert = [];
+
+      // If specific sale_id was passed, allocate to that sale first
+      if (sale_id) {
+        const targetSale = await tx.getRecord(
+          'SELECT * FROM sales WHERE id = ? FOR UPDATE',
+          [sale_id]
+        );
+        if (targetSale && Number(targetSale.pending_amount) > 0) {
+          const invDue = money(targetSale.pending_amount);
+          const allocSale = Math.min(remainingPayment, invDue);
+          const newPaid = money(Number(targetSale.paid_amount) + allocSale);
+          const newPending = Math.max(0, money(Number(targetSale.total_amount) - newPaid));
+          const newStatus = newPending <= 0 ? 'paid' : (newPaid > 0 ? 'partial' : 'open');
+
+          await tx.runQuery(
+            'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+            [newPaid, newPending, newStatus, targetSale.id]
+          );
+
+          allocationsToInsert.push({
+            sale_id: targetSale.id,
+            allocation_type: 'invoice',
+            amount_applied: allocSale,
+            notes: `Allocated to Invoice #${targetSale.invoice_number || targetSale.id}`,
+          });
+          remainingPayment = money(remainingPayment - allocSale);
+        }
+      }
+
+      // Step 5.1: Allocate to unsettled Opening Balance if remaining payment > 0
+      if (remainingPayment > 0) {
+        const settledOBRow = await tx.getRecord(
+          `SELECT COALESCE(SUM(amount_applied), 0) AS settled
+           FROM payment_allocations
+           WHERE customer_id = ? AND allocation_type = 'opening_balance' AND reversed_at IS NULL`,
+          [targetCustomerId]
+        );
+        const unsettledOB = Math.max(0, money(Number(customer.opening_balance) - Number(settledOBRow?.settled || 0)));
+
+        if (unsettledOB > 0) {
+          const allocOB = Math.min(remainingPayment, unsettledOB);
+          allocationsToInsert.push({
+            sale_id: null,
+            allocation_type: 'opening_balance',
+            amount_applied: allocOB,
+            notes: 'Applied towards Opening Balance',
+          });
+          remainingPayment = money(remainingPayment - allocOB);
+        }
+      }
+
+      // Step 5.2: Allocate to unpaid invoices in FIFO order
+      if (remainingPayment > 0) {
+        const unpaidSales = await tx.allRecords(
+          `SELECT * FROM sales 
+           WHERE customer_id = ? AND pending_amount > 0 AND (status != 'paid' OR status IS NULL)
+           ORDER BY COALESCE(invoice_date, sale_date::date, created_at::date) ASC, id ASC
+           FOR UPDATE`,
+          [targetCustomerId]
+        );
+
+        for (const s of unpaidSales) {
+          if (remainingPayment <= 0) break;
+          // Skip if already allocated in this transaction
+          if (sale_id && Number(s.id) === Number(sale_id)) continue;
+
+          const invDue = money(s.pending_amount);
+          if (invDue <= 0) continue;
+
+          const allocInv = Math.min(remainingPayment, invDue);
+          const newPaid = money(Number(s.paid_amount) + allocInv);
+          const newPending = Math.max(0, money(Number(s.total_amount) - newPaid));
+          const newStatus = newPending <= 0 ? 'paid' : (newPaid > 0 ? 'partial' : 'open');
+
+          await tx.runQuery(
+            'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+            [newPaid, newPending, newStatus, s.id]
+          );
+
+          allocationsToInsert.push({
+            sale_id: s.id,
+            allocation_type: 'invoice',
+            amount_applied: allocInv,
+            notes: `Allocated to Invoice #${s.invoice_number || s.id}`,
+          });
+          remainingPayment = money(remainingPayment - allocInv);
+        }
+      }
+
+      // Step 5.3: Any leftover payment amount becomes unallocated advance credit
+      const unallocatedAmount = remainingPayment > 0 ? remainingPayment : 0;
+      if (unallocatedAmount > 0) {
+        await tx.runQuery(
+          'UPDATE customers SET advance_balance = COALESCE(advance_balance, 0) + ? WHERE id = ?',
+          [unallocatedAmount, targetCustomerId]
+        );
+      }
+
+      // 6. Insert into payments table
+      let paymentRecord;
+      try {
+        paymentRecord = await tx.getRecord(
+          `INSERT INTO payments (
+            payment_number, customer_id, sale_id, amount, payment_date, payment_mode,
+            reference_number, note, notes, unallocated_amount, idempotency_key, shop_id, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING *`,
+          [
+            paymentNumber, targetCustomerId, sale_id || null, paymentAmount, payDate, payMode,
+            refNumber, note || null, note || null, unallocatedAmount, idempotencyKey, targetShopId, req.user?.id || null
+          ]
+        );
+      } catch (insertErr) {
+        // Fallback for race-condition idempotency conflict
+        if (idempotencyKey && (insertErr.code === '23505' || String(insertErr.message).includes('idempotency_key'))) {
+          const existing = await tx.getRecord('SELECT * FROM payments WHERE idempotency_key = ?', [idempotencyKey]);
+          if (existing) {
+            const existingAllocs = await tx.allRecords('SELECT * FROM payment_allocations WHERE payment_id = ?', [existing.id]);
+            return {
+              payment: existing,
+              allocations: existingAllocs,
+              pending_amount: 0,
+              excess_credited: Number(existing.unallocated_amount || 0),
+              idempotent_replay: true,
+            };
+          }
+        }
+        throw insertErr;
+      }
+
+      // 7. Insert all allocations with customer_id
+      for (const alloc of allocationsToInsert) {
+        await tx.runQuery(
+          `INSERT INTO payment_allocations (
+            payment_id, customer_id, sale_id, allocation_type, amount_applied, notes
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
+          [
+            paymentRecord.id, targetCustomerId, alloc.sale_id || null,
+            alloc.allocation_type, alloc.amount_applied, alloc.notes || null
+          ]
+        );
+      }
+
+      // 8. Calculate remaining dynamic customer pending balance
+      const totalPendingRow = await tx.getRecord(
+        `SELECT (
+           GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+             (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+              WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+           )))
+           + COALESCE((SELECT SUM(s.pending_amount) FROM sales s WHERE s.customer_id = c.id), 0)
+           - COALESCE(c.advance_balance, 0)
+         ) AS total_pending
+         FROM customers c WHERE c.id = ?`,
+        [targetCustomerId]
+      );
+      const remainingTotalPending = Math.max(0, money(totalPendingRow?.total_pending || 0));
+
+      return {
+        payment: paymentRecord,
+        allocations: allocationsToInsert,
+        pending_amount: remainingTotalPending,
+        excess_credited: unallocatedAmount,
+        unallocated_amount: unallocatedAmount,
+      };
+    });
+
+    await audit(
+      req,
+      'Recorded customer payment',
+      'customer',
+      result.payment.customer_id,
+      `Payment ${result.payment.payment_number} of ₹${paymentAmount} on ${payDate} via ${payMode}, remaining ₹${result.pending_amount}${result.excess_credited > 0 ? `, advance credited ₹${result.excess_credited}` : ''}`
+    );
+
+    return res.json({
+      success: true,
+      payment: result.payment,
+      allocations: result.allocations,
+      pending_amount: result.pending_amount,
+      excess_credited: result.excess_credited,
+      unallocated_amount: result.unallocated_amount,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || 'Unable to record customer payment.' });
+  }
+});
+
+// Idempotent Payment Reversal Endpoint
+app.post('/api/payments/:id/reverse', authenticateToken, requireShopStaff, async (req, res) => {
+  const paymentId = Number(req.params.id);
+  if (!Number.isInteger(paymentId) || paymentId <= 0) {
+    return res.status(400).json({ error: 'Valid payment ID is required.' });
   }
 
-  await audit(req, 'Recorded payment', 'sale', sale_id, `Paid ${paymentAmount} on ${payDate} via ${payMode}, remaining ${newPending}${excessPayment > 0 ? `, credited ₹${excessPayment} to advance balance` : ''}`);
-  res.json({ success: true, pending_amount: newPending, excess_credited: excessPayment });
+  try {
+    const result = await runTransaction(async (tx) => {
+      // 1. Lock payment row first
+      const payment = await tx.getRecord('SELECT * FROM payments WHERE id = ? FOR UPDATE', [paymentId]);
+      if (!payment) {
+        throw Object.assign(new Error('Payment not found.'), { status: 404 });
+      }
+
+      // 2. Idempotency guard: If already reversed, return current state without re-applying
+      if (payment.reversed_at) {
+        const allocations = await tx.allRecords('SELECT * FROM payment_allocations WHERE payment_id = ?', [paymentId]);
+        return {
+          payment,
+          allocations,
+          already_reversed: true,
+          message: 'Payment was already reversed.',
+        };
+      }
+
+      // 3. Lock customer row
+      const customer = await tx.getRecord(
+        'SELECT id, advance_balance FROM customers WHERE id = ? FOR UPDATE',
+        [payment.customer_id]
+      );
+
+      // 4. Mark payment as reversed
+      await tx.runQuery('UPDATE payments SET reversed_at = CURRENT_TIMESTAMP WHERE id = ?', [paymentId]);
+
+      // 5. Query active allocations for this payment
+      const allocations = await tx.allRecords(
+        'SELECT * FROM payment_allocations WHERE payment_id = ? AND reversed_at IS NULL',
+        [paymentId]
+      );
+
+      // 6. Mark allocations as reversed
+      await tx.runQuery('UPDATE payment_allocations SET reversed_at = CURRENT_TIMESTAMP WHERE payment_id = ?', [paymentId]);
+
+      // 7. For invoice allocations, restore invoice amounts and dynamically recompute status
+      for (const alloc of allocations) {
+        if (alloc.allocation_type === 'invoice' && alloc.sale_id) {
+          const invoice = await tx.getRecord('SELECT * FROM sales WHERE id = ? FOR UPDATE', [alloc.sale_id]);
+          if (invoice) {
+            const restoredPaid = Math.max(0, money(Number(invoice.paid_amount) - Number(alloc.amount_applied)));
+            const restoredPending = Math.max(0, money(Number(invoice.total_amount) - restoredPaid));
+            const restoredStatus = restoredPaid <= 0 ? 'open' : (restoredPaid < Number(invoice.total_amount) ? 'partial' : 'paid');
+
+            await tx.runQuery(
+              'UPDATE sales SET paid_amount = ?, pending_amount = ?, status = ? WHERE id = ?',
+              [restoredPaid, restoredPending, restoredStatus, invoice.id]
+            );
+          }
+        }
+      }
+
+      // 8. If payment had unallocated advance credit, deduct from customer advance_balance
+      if (Number(payment.unallocated_amount) > 0 && customer) {
+        const excess = money(Number(payment.unallocated_amount));
+        await tx.runQuery(
+          'UPDATE customers SET advance_balance = GREATEST(0, COALESCE(advance_balance, 0) - ?) WHERE id = ?',
+          [excess, customer.id]
+        );
+      }
+
+      const updatedPayment = await tx.getRecord('SELECT * FROM payments WHERE id = ?', [paymentId]);
+      return {
+        payment: updatedPayment,
+        allocations,
+        already_reversed: false,
+      };
+    });
+
+    await audit(
+      req,
+      'Reversed customer payment',
+      'payment',
+      paymentId,
+      `Reversed payment ${result.payment.payment_number || paymentId} of ₹${result.payment.amount}`
+    );
+
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || 'Unable to reverse payment.' });
+  }
 });
 
 app.get('/api/cash-customer', authenticateToken, requireShopStaff, async (req, res) => {

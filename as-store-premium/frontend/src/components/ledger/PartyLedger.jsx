@@ -21,6 +21,7 @@ const TYPE_STYLES = {
   opening_balance: { label: 'Opening', color: '#6366f1', bg: '#eef2ff' },
   sale:            { label: 'Invoice',  color: '#0284c7', bg: '#e0f2fe' },
   payment:         { label: 'Payment',  color: '#16a34a', bg: '#dcfce7' },
+  reversal:        { label: 'Reversal', color: '#b91c1c', bg: '#fee2e2' },
   credit_note:     { label: 'Cr. Note', color: '#dc2626', bg: '#fee2e2' },
   purchase_bill:   { label: 'Bill',     color: '#9333ea', bg: '#f3e8ff' },
   bill_payment:    { label: 'Payment',  color: '#16a34a', bg: '#dcfce7' },
@@ -88,6 +89,18 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
     const a = document.createElement('a'); a.href = url;
     a.download = `ledger_${partyName.replace(/\s+/g, '_')}_${today()}.csv`;
     a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleExportPDF = async () => {
+    if (!ledger?.rows?.length) return;
+    try {
+      const { generateLedgerPDFDoc } = await import('../../utils/pdfAndShareService.js');
+      const partyName = ledger.customer?.name || ledger.supplier?.name || 'party';
+      const doc = await generateLedgerPDFDoc(ledger);
+      doc.save(`ledger_${partyName.replace(/\s+/g, '_')}_${today()}.pdf`);
+    } catch (err) {
+      setGlobalToast && setGlobalToast({ type: 'error', message: 'Failed to generate PDF: ' + (err.message || 'Unknown error') });
+    }
   };
 
   const totalDebit  = ledger?.rows?.reduce((s, r) => s + money(r.debit), 0) || 0;
@@ -175,14 +188,24 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
           </button>
 
           {ledger?.rows?.length > 0 && (
-            <button onClick={handleExportCSV}
-              style={{
-                padding: '9px 16px', borderRadius: 10, border: '1.5px solid #e2e8f0',
-                background: '#fff', color: '#475569', fontSize: 13, fontWeight: 700,
-                display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer'
-              }}>
-              <Download size={14} /> CSV
-            </button>
+            <>
+              <button onClick={handleExportCSV}
+                style={{
+                  padding: '9px 16px', borderRadius: 10, border: '1.5px solid #e2e8f0',
+                  background: '#fff', color: '#475569', fontSize: 13, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer'
+                }}>
+                <Download size={14} /> CSV
+              </button>
+              <button onClick={handleExportPDF}
+                style={{
+                  padding: '9px 16px', borderRadius: 10, border: '1.5px solid #e2e8f0',
+                  background: '#fff', color: '#6366f1', fontSize: 13, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer'
+                }}>
+                <FileText size={14} /> PDF
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -202,6 +225,7 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
             { label: 'Total Debit (Dr)', value: totalDebit, icon: <ArrowUpRight size={16} />, color: '#dc2626', bg: '#fef2f2' },
             { label: 'Total Credit (Cr)', value: totalCredit, icon: <ArrowDownRight size={16} />, color: '#16a34a', bg: '#dcfce7' },
             { label: 'Closing Balance', value: closingBal, icon: <ChevronsRight size={16} />, color: closingBal > 0 ? '#b45309' : '#16a34a', bg: closingBal > 0 ? '#fef3c7' : '#dcfce7' },
+            ...(Number(ledger.advance_balance || 0) > 0 ? [{ label: 'Advance Credit', value: Number(ledger.advance_balance), icon: <TrendingDown size={16} />, color: '#2563eb', bg: '#eff6ff' }] : []),
             { label: 'Transactions', value: ledger.rows?.length || 0, icon: <FileText size={16} />, color: '#6366f1', bg: '#eef2ff', isCnt: true },
           ].map(c => (
             <div key={c.label} style={{
@@ -249,14 +273,54 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
                 </tr>
               </thead>
               <tbody>
-                {ledger.rows.map((row, i) => (
-                  <tr key={i} style={{ borderBottom: '1px solid #f1f5f9', transition: 'background 0.15s' }}
-                    onMouseEnter={e => e.currentTarget.style.background = '#f8fafc'}
-                    onMouseLeave={e => e.currentTarget.style.background = '#fff'}>
-                    <td style={{ padding: '10px 14px', color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatDMY(row.entry_date)}</td>
-                    <td style={{ padding: '10px 14px', color: '#0f172a', fontWeight: 700, fontFamily: 'monospace', fontSize: 12 }}>{row.ref_no}</td>
-                    <td style={{ padding: '10px 14px' }}><TypeBadge type={row.entry_type} /></td>
-                    <td style={{ padding: '10px 14px', color: '#334155', maxWidth: 260 }}>{row.description}</td>
+                {ledger.rows.map((row, i) => {
+                  const descParts = String(row.description || '').split(' → ');
+                  const mainDesc = descParts[0];
+                  const breakdown = row.allocation_breakdown || (descParts.length > 1 ? descParts[1].replace(' [REVERSED]', '') : null);
+
+                  return (
+                    <tr key={i} style={{ 
+                      borderBottom: '1px solid #f1f5f9', 
+                      background: row.entry_type === 'reversal' ? '#fffbeb' : '#fff',
+                      transition: 'background 0.15s' 
+                    }}
+                      onMouseEnter={e => e.currentTarget.style.background = row.entry_type === 'reversal' ? '#fef3c7' : '#f8fafc'}
+                      onMouseLeave={e => e.currentTarget.style.background = row.entry_type === 'reversal' ? '#fffbeb' : '#fff'}>
+                      <td style={{ padding: '10px 14px', color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatDMY(row.entry_date)}</td>
+                      <td style={{ padding: '10px 14px', color: '#0f172a', fontWeight: 700, fontFamily: 'monospace', fontSize: 12 }}>{row.ref_no}</td>
+                      <td style={{ padding: '10px 14px' }}><TypeBadge type={row.entry_type} /></td>
+                      <td style={{ padding: '10px 14px', color: '#334155', maxWidth: 320 }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{
+                            textDecoration: row.reversed ? 'line-through' : 'none',
+                            color: row.reversed ? '#94a3b8' : '#0f172a',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            flexWrap: 'wrap'
+                          }}>
+                            <span>{mainDesc}</span>
+                            {row.reversed && (
+                              <span style={{
+                                fontSize: 9, fontWeight: 800, color: '#dc2626', background: '#fee2e2',
+                                border: '1px solid #fca5a5', padding: '1px 5px', borderRadius: 4, textDecoration: 'none'
+                              }}>
+                                REVERSED
+                              </span>
+                            )}
+                          </div>
+                          {breakdown && (
+                            <div style={{
+                              fontSize: 11, color: '#4338ca', background: '#eef2ff',
+                              borderRadius: 6, padding: '3px 8px', border: '1px solid #c7d2fe',
+                              width: 'fit-content', lineHeight: 1.3
+                            }}>
+                              ↳ {breakdown}
+                            </div>
+                          )}
+                        </div>
+                      </td>
                     <td style={{ padding: '10px 14px', textAlign: 'right', color: money(row.debit) > 0 ? '#dc2626' : '#94a3b8', fontWeight: 700 }}>
                       {money(row.debit) > 0 ? currency(row.debit) : '—'}
                     </td>
@@ -270,7 +334,8 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
                       </span>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               <tfoot>
                 <tr style={{ background: '#f8fafc', borderTop: '2px solid #e2e8f0' }}>

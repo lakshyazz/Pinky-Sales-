@@ -415,7 +415,7 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
 /**
  * 2. GENERATE CUSTOMER ACCOUNT STATEMENT PDF
  */
-export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop = {}) => {
+export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop = {}, paymentsArg = []) => {
   const { jsPDF, autoTable } = await getJsPDF();
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -438,9 +438,15 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
   const firstInvoice = validInvoices[0];
   const lastInvoice = validInvoices[validInvoices.length - 1];
 
+  const allPayments = Array.isArray(paymentsArg) && paymentsArg.length > 0
+    ? paymentsArg
+    : (Array.isArray(customer?.payments) && customer.payments.length > 0 ? customer.payments : []);
+
   const totalBilled = validInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0) + (openingBal > 0 ? openingBal : 0);
-  const totalPaid = validInvoices.reduce((s, inv) => s + Number(inv.paid_amount || 0), 0);
-  const totalDue = Number(customer?.pending_amount ?? (validInvoices.reduce((s, inv) => s + Number(inv.pending_amount || 0), 0) + (openingBal > 0 ? openingBal : 0)));
+  const totalPaid = allPayments.length > 0
+    ? allPayments.reduce((s, pm) => s + Number(pm.amount || 0), 0)
+    : validInvoices.reduce((s, inv) => s + Number(inv.paid_amount || 0), 0);
+  const totalDue = Math.max(0, totalBilled - totalPaid);
 
   // Calculate customer's remaining available advance / store credit balance
   const prevBal = Number(firstInvoice?.previous_balance ?? firstInvoice?.old_balance ?? 0);
@@ -601,14 +607,16 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
 
   // Opening Balance event (Debit if pending, Credit if advance)
   if (openingBal > 0) {
+    const obDateStr = customer?.opening_balance_date ? String(customer.opening_balance_date).slice(0, 10) : '2026-01-01';
     chronologicalEvents.push({
-      date: '2026-01-01',
+      date: obDateStr,
       dateFormatted: 'Opening',
       ref: 'OPENING BAL',
       type: 'Opening Balance',
       particulars: 'Carry Forward (Opening) Debit Balance',
       debit: openingBal,
       credit: 0,
+      isOpening: true,
     });
   } else if (prevBal < 0 || openingBal < 0) {
     const openingCredit = Math.abs(prevBal < 0 ? prevBal : openingBal);
@@ -620,6 +628,7 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
       particulars: 'Previous Advance / Store Credit Balance Remaining with Shop',
       debit: 0,
       credit: openingCredit,
+      isOpening: true,
     });
   }
 
@@ -658,6 +667,7 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
       particulars: `Purchase: ${invNo}\n${itemsText}`,
       debit: Number(inv.total_amount || 0),
       credit: 0,
+      isOpening: false,
     });
 
     // Credit Note / Applied Credit
@@ -670,39 +680,98 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
         particulars: `Credit Note / Advance Adjusted on ${invNo}`,
         debit: 0,
         credit: Number(inv.applied_credit_amount || 0),
-      });
-    }
-
-    // Payment Events
-    if (Array.isArray(inv.payments) && inv.payments.length > 0) {
-      inv.payments.forEach((pm) => {
-        const pmDate = pm.payment_date || invDate;
-        chronologicalEvents.push({
-          date: pmDate,
-          dateFormatted: formatDMY(pmDate),
-          ref: invNo,
-          type: 'Payment',
-          particulars: `Payment received via ${String(pm.payment_mode || 'Cash').toUpperCase()}${pm.note ? ` (${pm.note})` : ''} on ${invNo}`,
-          debit: 0,
-          credit: Number(pm.amount || 0),
-        });
-      });
-    } else if (Number(inv.paid_amount || 0) > 0) {
-      const isCash = String(inv.payment_mode || '').trim().toLowerCase() === 'cash';
-      chronologicalEvents.push({
-        date: invDate,
-        dateFormatted: formatDMY(invDate),
-        ref: invNo,
-        type: 'Payment',
-        particulars: `Payment received via ${isCash ? 'CASH' : (inv.payment_mode || 'DIRECT')} on ${invNo}`,
-        debit: 0,
-        credit: Number(inv.paid_amount || 0),
+        isOpening: false,
       });
     }
   });
 
-  // Sort chronological events by date ascending
-  chronologicalEvents.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  // Payment Events (Unified from allPayments or fallback to validInvoices)
+  if (allPayments.length > 0) {
+    allPayments.forEach((pm) => {
+      const pmDate = pm.payment_date || pm.created_at || '';
+      const pmDateStr = String(pmDate).slice(0, 10);
+      const pmNum = pm.payment_number || `PAY-${String(pm.id).padStart(6, '0')}`;
+      const modeStr = String(pm.payment_mode || 'Cash').toUpperCase();
+
+      // Build breakdown of allocations
+      let descLines = [`Payment received via ${modeStr}${pm.reference_number ? ` [Ref: ${pm.reference_number}]` : ''}`];
+      if (Array.isArray(pm.allocations) && pm.allocations.length > 0) {
+        pm.allocations.forEach((alloc) => {
+          if (alloc.allocation_type === 'opening_balance') {
+            descLines.push(`• Deducted from Opening Balance: Rs. ${formatMoney(alloc.amount_applied)}`);
+          } else if (alloc.allocation_type === 'invoice' && alloc.sale_id) {
+            const matchedInv = validInvoices.find(v => Number(v.id) === Number(alloc.sale_id));
+            const invNum = matchedInv?.invoice_number || `INV-${String(alloc.sale_id).padStart(6, '0')}`;
+            descLines.push(`• Settled on ${invNum}: Rs. ${formatMoney(alloc.amount_applied)}`);
+          } else if (alloc.allocation_type === 'advance') {
+            descLines.push(`• Available Advance / Store Credit: Rs. ${formatMoney(alloc.amount_applied)}`);
+          }
+        });
+      } else if (pm.notes) {
+        descLines.push(`• ${pm.notes}`);
+      }
+
+      chronologicalEvents.push({
+        date: pmDateStr,
+        dateFormatted: formatDMY(pmDateStr),
+        ref: pmNum,
+        type: 'Payment',
+        particulars: descLines.join('\n'),
+        debit: 0,
+        credit: Number(pm.amount || 0),
+        isOpening: false,
+      });
+    });
+  } else {
+    // Legacy fallback: Extract from validInvoices
+    validInvoices.forEach((inv) => {
+      const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
+      const invDate = inv.invoice_date || inv.sale_date || '';
+      if (Array.isArray(inv.payments) && inv.payments.length > 0) {
+        inv.payments.forEach((pm) => {
+          const pmDate = pm.payment_date || invDate;
+          chronologicalEvents.push({
+            date: pmDate,
+            dateFormatted: formatDMY(pmDate),
+            ref: invNo,
+            type: 'Payment',
+            particulars: `Payment received via ${String(pm.payment_mode || 'Cash').toUpperCase()}${pm.note ? ` (${pm.note})` : ''} on ${invNo}`,
+            debit: 0,
+            credit: Number(pm.amount || 0),
+            isOpening: false,
+          });
+        });
+      } else if (Number(inv.paid_amount || 0) > 0) {
+        const isCash = String(inv.payment_mode || '').trim().toLowerCase() === 'cash';
+        chronologicalEvents.push({
+          date: invDate,
+          dateFormatted: formatDMY(invDate),
+          ref: invNo,
+          type: 'Payment',
+          particulars: `Payment received via ${isCash ? 'CASH' : (inv.payment_mode || 'DIRECT')} on ${invNo}`,
+          debit: 0,
+          credit: Number(inv.paid_amount || 0),
+          isOpening: false,
+        });
+      }
+    });
+  }
+
+  // Sort chronological events deterministically:
+  // 1. Opening balance row always comes first
+  // 2. Date ASC
+  // 3. Purchases before payments on the same date
+  chronologicalEvents.sort((a, b) => {
+    if (a.isOpening && !b.isOpening) return -1;
+    if (!a.isOpening && b.isOpening) return 1;
+    const da = String(a.date || '');
+    const db = String(b.date || '');
+    if (da < db) return -1;
+    if (da > db) return 1;
+    if (a.type === 'Purchase' && b.type === 'Payment') return -1;
+    if (a.type === 'Payment' && b.type === 'Purchase') return 1;
+    return 0;
+  });
 
   let runningBalance = 0;
   const statementRows = chronologicalEvents.map((evt, idx) => {
@@ -827,57 +896,80 @@ export const generateLedgerPDFDoc = async (customer = {}, invoices = [], payment
   doc.text(`Ledger Period: All active purchases and repayments as of ${new Date().toLocaleDateString('en-GB')}`, 14, 35);
 
   // Build Chronological Transactions list
-  const transactions = [];
-  invoices.forEach(inv => {
-    const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
-    const invDate = inv.invoice_date || inv.sale_date || '2026-08-27';
-    transactions.push({
-      date: invDate,
-      particulars: `Purchase: ${invNo} (${inv.items?.length || 1} items)`,
-      debit: Number(inv.total_amount || 0),
-      credit: 0,
-    });
-    if (Number(inv.applied_credit_amount || 0) > 0) {
-      transactions.push({
-        date: invDate,
-        particulars: `Credit Note applied on ${invNo}`,
-        debit: 0,
-        credit: Number(inv.applied_credit_amount || 0),
-      });
-    }
-    if (Array.isArray(inv.payments) && inv.payments.length > 0) {
-      inv.payments.forEach(p => {
-        transactions.push({
-          date: p.payment_date || invDate,
-          particulars: `Repayment via ${p.payment_mode || 'Cash'}${p.note ? ` (${p.note})` : ''} on ${invNo}`,
-          debit: 0,
-          credit: Number(p.amount || 0),
-        });
-      });
-    } else if (Number(inv.paid_amount || 0) > 0) {
-      transactions.push({
-        date: invDate,
-        particulars: `Repayment on ${invNo}`,
-        debit: 0,
-        credit: Number(inv.paid_amount || 0),
-      });
-    }
-  });
-
-  transactions.sort((a, b) => String(a.date).localeCompare(String(b.date)));
-
+  let ledgerRows = [];
   let runningBalance = 0;
-  const ledgerRows = transactions.map((t, idx) => {
-    runningBalance = runningBalance + t.debit - t.credit;
-    return [
+
+  // Support direct structured ledger object or rows array
+  const rawRows = customer?.rows || (Array.isArray(invoices) && invoices[0]?.entry_date !== undefined ? invoices : null);
+
+  if (rawRows) {
+    ledgerRows = rawRows.map((r, idx) => [
       idx + 1,
-      formatDMY(t.date),
-      t.particulars,
-      t.debit > 0 ? `Rs. ${formatMoney(t.debit)}` : '-',
-      t.credit > 0 ? `Rs. ${formatMoney(t.credit)}` : '-',
-      `Rs. ${formatMoney(runningBalance)}`
-    ];
-  });
+      formatDMY(r.entry_date),
+      r.ref_no || `TX-${idx + 1}`,
+      r.description || 'Transaction',
+      Number(r.debit || 0) > 0 ? `Rs. ${formatMoney(r.debit)}` : '-',
+      Number(r.credit || 0) > 0 ? `Rs. ${formatMoney(r.credit)}` : '-',
+      `Rs. ${formatMoney(Math.abs(Number(r.running_balance || 0)))}${Number(r.running_balance || 0) > 0 ? ' Dr' : Number(r.running_balance || 0) < 0 ? ' Cr' : ''}`
+    ]);
+    runningBalance = rawRows.length ? Number(rawRows[rawRows.length - 1].running_balance || 0) : 0;
+  } else {
+    const transactions = [];
+    invoices.forEach(inv => {
+      const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
+      const invDate = inv.invoice_date || inv.sale_date || '2026-08-27';
+      transactions.push({
+        date: invDate,
+        ref: invNo,
+        particulars: `Purchase: ${invNo} (${inv.items?.length || 1} items)`,
+        debit: Number(inv.total_amount || 0),
+        credit: 0,
+      });
+      if (Number(inv.applied_credit_amount || 0) > 0) {
+        transactions.push({
+          date: invDate,
+          ref: invNo,
+          particulars: `Credit Note applied on ${invNo}`,
+          debit: 0,
+          credit: Number(inv.applied_credit_amount || 0),
+        });
+      }
+      if (Array.isArray(inv.payments) && inv.payments.length > 0) {
+        inv.payments.forEach(p => {
+          transactions.push({
+            date: p.payment_date || invDate,
+            ref: p.payment_number || `PAY-${p.id}`,
+            particulars: `Repayment via ${p.payment_mode || 'Cash'}${p.note ? ` (${p.note})` : ''} on ${invNo}`,
+            debit: 0,
+            credit: Number(p.amount || 0),
+          });
+        });
+      } else if (Number(inv.paid_amount || 0) > 0) {
+        transactions.push({
+          date: invDate,
+          ref: invNo,
+          particulars: `Repayment on ${invNo}`,
+          debit: 0,
+          credit: Number(inv.paid_amount || 0),
+        });
+      }
+    });
+
+    transactions.sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+    ledgerRows = transactions.map((t, idx) => {
+      runningBalance = runningBalance + t.debit - t.credit;
+      return [
+        idx + 1,
+        formatDMY(t.date),
+        t.ref || `TX-${idx + 1}`,
+        t.particulars,
+        t.debit > 0 ? `Rs. ${formatMoney(t.debit)}` : '-',
+        t.credit > 0 ? `Rs. ${formatMoney(t.credit)}` : '-',
+        `Rs. ${formatMoney(runningBalance)}`
+      ];
+    });
+  }
 
   autoTable(doc, {
     startY: 38,

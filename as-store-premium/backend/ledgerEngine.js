@@ -40,265 +40,380 @@ function isoDate(d) {
  * @param {{ from?: string, to?: string }} options  - ISO date strings
  * @returns {Promise<{ opening_balance: number, rows: LedgerRow[], closing_balance: number }>}
  */
+function formatIndianCurrency(val) {
+  const num = Number(val || 0);
+  return '₹' + num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * Returns a date-filtered customer party ledger as an array of transaction rows
+ * with a running balance computed dynamically.
+ *
+ * Sources:
+ *   1. Immutable Opening Balance seed row (with real customer opening_balance_date)
+ *   2. Sales Invoices (debit: customer owes more)
+ *   3. Customer Payments (credit: customer paid, showing allocation breakdown)
+ *   4. Payment Reversals (debit: offset reversed payment, maintaining full audit trail)
+ *   5. Credit Note Redemptions (credit: reduces debt)
+ *
+ * @param {number} customerId
+ * @param {number|null} shopId
+ * @param {{ from?: string, to?: string }} options
+ * @returns {Promise<{ customer: object, opening_balance: number, rows: LedgerRow[], closing_balance: number, advance_balance: number }>}
+ */
 export async function getCustomerLedger(customerId, shopId, { from, to } = {}) {
   const fromDate = isoDate(from);
   const toDate   = isoDate(to);
 
   // Fetch customer
   const customer = await getRecord(
-    'SELECT id, name, mobile, COALESCE(opening_balance, 0) AS opening_balance FROM customers WHERE id = ?',
+    `SELECT id, name, mobile, address, 
+            COALESCE(opening_balance, 0) AS opening_balance,
+            COALESCE(opening_balance_date, created_at::date, CURRENT_DATE) AS opening_balance_date,
+            COALESCE(advance_balance, 0) AS advance_balance
+     FROM customers WHERE id = ?`,
     [customerId]
   );
   if (!customer) throw Object.assign(new Error('Customer not found.'), { status: 404 });
 
   const openingBal = money(customer.opening_balance);
 
-  // Build unified ledger via UNION ALL in SQL (runs in a single round-trip)
-  // Each source row has: entry_date, ref_no, type, description, debit, credit
-  const shopFilter   = shopId ? 'AND s.shop_id = $6'              : '';
-  const fromFilter   = fromDate ? 'AND entry_date >= $7::date'    : '';
-  const toFilter     = toDate   ? 'AND entry_date <= $8::date'    : '';
+  // Fetch all transactions for this customer
+  const rawRows = await fetchCustomerLedgerTransactions(customerId, shopId);
 
-  // We use plain parameterised SQL here (PostgreSQL syntax directly, not the ? shim,
-  // because this query has complex CTEs and positional params are cleaner).
-  const params = [customerId];
-  let paramIdx = 2;
+  // Compute running balance across all chronological transactions
+  let currentBal = 0;
+  const processedRows = [];
 
-  const shopParam  = shopId   ? `$${paramIdx++}` : 'NULL';
-  const fromParam  = fromDate ? `$${paramIdx++}` : 'NULL';
-  const toParam    = toDate   ? `$${paramIdx++}` : 'NULL';
+  for (const r of rawRows) {
+    const dr = money(r.debit_amount);
+    const cr = money(r.credit_amount);
+    currentBal = money(currentBal + dr - cr);
 
-  if (shopId)   params.push(shopId);
-  if (fromDate) params.push(fromDate);
-  if (toDate)   params.push(toDate);
+    processedRows.push({
+      id:              r.id,
+      entry_date:      r.entry_date,
+      created_at:      r.created_at,
+      ref_no:          r.ref_no,
+      entry_type:      r.entry_type,
+      description:     r.description,
+      allocation_breakdown: r.allocation_breakdown || null,
+      debit:           dr,
+      credit:          cr,
+      running_balance: currentBal,
+      reversed:        Boolean(r.reversed),
+      reversed_at:     r.reversed_at || null,
+    });
+  }
 
-  const shopCond = shopId   ? `AND s.shop_id = ${shopParam}` : '';
-  const fromCond = fromDate ? `AND entry_date >= ${fromParam}::date` : '';
-  const toCond   = toDate   ? `AND entry_date <= ${toParam}::date`   : '';
+  // Handle date filters: if fromDate or toDate specified
+  let displayRows = processedRows;
+  if (fromDate || toDate) {
+    let preBalance = 0;
+    const filtered = [];
 
-  const sql = `
-    WITH ledger_rows AS (
-      -- Opening balance (always shown, date = epoch)
-      SELECT
-        '1900-01-01'::date                   AS entry_date,
-        'OPEN-BAL'                           AS ref_no,
-        'opening_balance'                    AS entry_type,
-        'Opening Balance'                    AS description,
-        $1::numeric                          AS debit_amount,
-        0::numeric                           AS credit_amount
-      WHERE $1 > 0
+    for (const row of processedRows) {
+      const d = row.entry_date;
+      if (fromDate && d < fromDate) {
+        preBalance = row.running_balance;
+      } else if (toDate && d > toDate) {
+        // Excluded after toDate
+      } else {
+        filtered.push(row);
+      }
+    }
 
-      UNION ALL
+    if (fromDate && preBalance !== 0) {
+      displayRows = [
+        {
+          id: 'b-fwd',
+          entry_date: fromDate,
+          created_at: fromDate + 'T00:00:00Z',
+          ref_no: 'BAL-FWD',
+          entry_type: 'opening_balance',
+          description: `Balance Brought Forward as of ${fromDate}`,
+          debit: preBalance > 0 ? preBalance : 0.00,
+          credit: preBalance < 0 ? Math.abs(preBalance) : 0.00,
+          running_balance: preBalance,
+          reversed: false,
+        },
+        ...filtered,
+      ];
+    } else {
+      displayRows = filtered;
+    }
+  }
 
-      -- Sales invoices
-      SELECT
-        COALESCE(s.invoice_date, s.created_at::date) AS entry_date,
-        COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::TEXT, 6, '0')) AS ref_no,
-        'sale'                               AS entry_type,
-        COALESCE(
-          'Invoice: ' || p.short_name,
-          'Invoice'
-        )                                    AS description,
-        s.total_amount                       AS debit_amount,
-        0::numeric                           AS credit_amount
-      FROM sales s
-      LEFT JOIN products p ON p.id = s.product_id
-      WHERE s.customer_id = $1
-        ${shopCond}
+  const closingBalance = processedRows.length
+    ? money(processedRows[processedRows.length - 1].running_balance)
+    : openingBal;
 
-      UNION ALL
-
-      -- Payments received
-      SELECT
-        pm.payment_date::date                AS entry_date,
-        COALESCE(s.invoice_number, 'INV-' || LPAD(pm.sale_id::TEXT, 6, '0')) AS ref_no,
-        'payment'                            AS entry_type,
-        COALESCE('Payment via ' || pm.payment_mode, 'Payment') AS description,
-        0::numeric                           AS debit_amount,
-        pm.amount                            AS credit_amount
-      FROM payments pm
-      JOIN sales s ON s.id = pm.sale_id
-      WHERE s.customer_id = $1
-        ${shopCond}
-
-      UNION ALL
-
-      -- Credit note redemptions (reduce what customer owes)
-      SELECT
-        cnr.created_at::date                 AS entry_date,
-        cn.credit_note_number                AS ref_no,
-        'credit_note'                        AS entry_type,
-        'Credit Note Applied: ' || cn.credit_note_number AS description,
-        0::numeric                           AS debit_amount,
-        cnr.amount                           AS credit_amount
-      FROM credit_note_redemptions cnr
-      JOIN credit_notes cn ON cn.id = cnr.credit_note_id
-      JOIN sales s ON s.id = cnr.sale_id
-      WHERE cn.customer_id = $1
-        ${shopCond}
-    ),
-    filtered AS (
-      SELECT * FROM ledger_rows
-      WHERE (entry_date = '1900-01-01' OR (
-        (${fromDate ? `entry_date >= ${fromParam}::date` : 'TRUE'})
-        AND
-        (${toDate ? `entry_date <= ${toParam}::date` : 'TRUE'})
-      ))
-    ),
-    with_balance AS (
-      SELECT
-        entry_date,
-        ref_no,
-        entry_type,
-        description,
-        ROUND(debit_amount::numeric, 2)       AS debit,
-        ROUND(credit_amount::numeric, 2)      AS credit,
-        ROUND(
-          SUM(debit_amount - credit_amount) OVER (
-            ORDER BY entry_date ASC, entry_type DESC, ref_no ASC
-            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-          )::numeric,
-          2
-        )                                     AS running_balance
-      FROM filtered
-    )
-    SELECT * FROM with_balance
-    ORDER BY entry_date ASC, entry_type DESC, ref_no ASC
-  `;
-
-  const { Pool } = await import('pg');
-  // Re-use the pool exported from database.js by importing the module directly
-  const { allRecords: dbAll } = await import('./database.js');
-
-  // We need raw pg query for positional params; use allRecords fallback approach
-  // by substituting params into the SQL string (safe — all are numbers/dates)
-  // Build a ? version for the convertSql shim in database.js
-  const safeRows = await runRawLedgerQuery(customerId, shopId, fromDate, toDate);
-
-  const rows = safeRows.map(r => ({
-    entry_date:      r.entry_date,
-    ref_no:          r.ref_no,
-    entry_type:      r.entry_type,
-    description:     r.description,
-    debit:           money(r.debit),
-    credit:          money(r.credit),
-    running_balance: money(r.running_balance),
-  }));
-
-  const closingBalance = rows.length ? money(rows[rows.length - 1].running_balance) : openingBal;
-
-  return { customer, opening_balance: openingBal, rows, closing_balance: closingBalance };
+  return {
+    customer,
+    opening_balance: openingBal,
+    advance_balance: money(customer.advance_balance),
+    rows: displayRows,
+    closing_balance: closingBalance,
+  };
 }
 
-// Use allRecords from database.js (which uses the ? shim → $N conversion)
-async function runRawLedgerQuery(customerId, shopId, fromDate, toDate) {
-  const shopCond = shopId   ? 'AND s.shop_id = ?'                    : '';
-  const fromCond = fromDate ? "AND entry_date >= ?::date"             : '';
-  const toCond   = toDate   ? "AND entry_date <= ?::date"             : '';
+/**
+ * Fetches all ledger component rows for a customer, including allocation breakdown strings
+ * and reversal entries.
+ */
+async function fetchCustomerLedgerTransactions(customerId, shopId) {
+  const shopCondSales = shopId ? 'AND s.shop_id = ?' : '';
+  const shopCondPayments = shopId ? 'AND pm.shop_id = ?' : '';
+  const shopCondCn = shopId ? 'AND s.shop_id = ?' : '';
 
-  // Params for all ? placeholders in order
-  // opening_balance placeholder uses customerId twice (once for $1 amount lookup)
-  const params = [];
+  // 1. Immutable Opening Balance seed row
+  const cust = await getRecord(
+    `SELECT id, COALESCE(opening_balance, 0) AS ob, 
+            COALESCE(opening_balance_date, created_at::date, CURRENT_DATE) AS ob_date,
+            created_at
+     FROM customers WHERE id = ?`,
+    [customerId]
+  );
 
-  // We embed the opening balance lookup as a subselect to keep the ? param order clean
-  const sqlQuery = `
-    WITH customer_ob AS (
-      SELECT COALESCE(opening_balance, 0) AS ob FROM customers WHERE id = ?
-    ),
-    ledger_rows AS (
-      SELECT
-        '1900-01-01'::date         AS entry_date,
-        'OPEN-BAL'                 AS ref_no,
-        'opening_balance'          AS entry_type,
-        'Opening Balance'          AS description,
-        ob                         AS debit_amount,
-        0.00::numeric              AS credit_amount
-      FROM customer_ob WHERE ob > 0
+  const obRows = [];
+  if (cust && Number(cust.ob) > 0) {
+    // Ensure Opening Balance date precedes or equals the earliest transaction date
+    const earliestTx = await getRecord(
+      `SELECT MIN(LEAST(
+         COALESCE(s.invoice_date::date, s.sale_date::date, s.created_at::date),
+         COALESCE((SELECT MIN(pm.payment_date::date) FROM payments pm WHERE pm.customer_id = ?), CURRENT_DATE)
+       )) AS earliest_date FROM sales s WHERE s.customer_id = ?`,
+      [customerId, customerId]
+    );
 
-      UNION ALL
+    let effectiveObDate = cust.ob_date;
+    if (earliestTx?.earliest_date) {
+      const edStr = new Date(earliestTx.earliest_date).toISOString().slice(0, 10);
+      const obStr = new Date(cust.ob_date).toISOString().slice(0, 10);
+      if (edStr < obStr) {
+        effectiveObDate = edStr;
+      }
+    }
 
-      SELECT
-        COALESCE(s.invoice_date, s.created_at::date) AS entry_date,
-        COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::TEXT, 6, '0')) AS ref_no,
-        'sale'                    AS entry_type,
-        COALESCE('Invoice: ' || p.short_name, 'Invoice') AS description,
-        s.total_amount            AS debit_amount,
-        0.00::numeric             AS credit_amount
-      FROM sales s
-      LEFT JOIN products p ON p.id = s.product_id
-      WHERE s.customer_id = ? ${shopId ? 'AND s.shop_id = ?' : ''}
+    obRows.push({
+      id: cust.id,
+      entry_date: effectiveObDate,
+      created_at: '1970-01-01T00:00:00Z', // Guarantees opening balance precedes same-day tx
+      ref_no: 'OB-' + String(cust.id).padStart(6, '0'),
+      entry_type: 'opening_balance',
+      description: 'Opening Balance',
+      allocation_breakdown: null,
+      debit_amount: money(cust.ob),
+      credit_amount: 0.00,
+      reversed: false,
+      reversed_at: null,
+    });
+  }
 
-      UNION ALL
+  // 2. Sales Invoices
+  const salesParams = [customerId];
+  if (shopId) salesParams.push(shopId);
 
-      SELECT
-        pm.payment_date::date     AS entry_date,
-        COALESCE(s.invoice_number, 'INV-' || LPAD(pm.sale_id::TEXT, 6, '0')) AS ref_no,
-        'payment'                 AS entry_type,
-        COALESCE('Payment via ' || pm.payment_mode, 'Payment') AS description,
-        0.00::numeric             AS debit_amount,
-        pm.amount                 AS credit_amount
-      FROM payments pm
-      JOIN sales s ON s.id = pm.sale_id
-      WHERE s.customer_id = ? ${shopId ? 'AND s.shop_id = ?' : ''}
+  const salesRecords = await allRecords(
+    `SELECT s.id,
+            COALESCE(s.invoice_date, s.sale_date::date, s.created_at::date) AS entry_date,
+            s.created_at,
+            COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0')) AS ref_no,
+            'sale' AS entry_type,
+            COALESCE('Invoice #' || COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0')) || ' (' || p.short_name || ')', 'Invoice #' || COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0'))) AS description,
+            s.total_amount AS debit_amount,
+            0.00::numeric AS credit_amount
+     FROM sales s
+     LEFT JOIN products p ON p.id = s.product_id
+     WHERE s.customer_id = ? ${shopCondSales}`,
+    salesParams
+  );
 
-      UNION ALL
+  const saleRows = salesRecords.map(s => ({
+    id: s.id,
+    entry_date: s.entry_date,
+    created_at: s.created_at,
+    ref_no: s.ref_no,
+    entry_type: 'sale',
+    description: s.description,
+    allocation_breakdown: null,
+    debit_amount: money(s.debit_amount),
+    credit_amount: 0.00,
+    reversed: false,
+    reversed_at: null,
+  }));
 
-      SELECT
-        cnr.created_at::date      AS entry_date,
-        cn.credit_note_number     AS ref_no,
-        'credit_note'             AS entry_type,
-        'Credit Note: ' || cn.credit_note_number AS description,
-        0.00::numeric             AS debit_amount,
-        cnr.amount                AS credit_amount
-      FROM credit_note_redemptions cnr
-      JOIN credit_notes cn ON cn.id = cnr.credit_note_id
-      JOIN sales s ON s.id = cnr.sale_id
-      WHERE cn.customer_id = ? ${shopId ? 'AND s.shop_id = ?' : ''}
-    ),
-    filtered AS (
-      SELECT * FROM ledger_rows
-      WHERE (
-        entry_date = '1900-01-01'
-        OR (
-          ${fromDate ? 'entry_date >= ?::date AND' : ''}
-          ${toDate   ? 'entry_date <= ?::date AND' : ''}
-          TRUE
-        )
-      )
-    ),
-    with_balance AS (
-      SELECT
-        entry_date,
-        ref_no,
-        entry_type,
-        description,
-        ROUND(debit_amount::numeric, 2)  AS debit,
-        ROUND(credit_amount::numeric, 2) AS credit,
-        ROUND(
-          SUM(debit_amount - credit_amount) OVER (
-            ORDER BY entry_date ASC, entry_type DESC, ref_no ASC
-            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-          )::numeric,
-          2
-        )                                AS running_balance
-      FROM filtered
-    )
-    SELECT * FROM with_balance
-    ORDER BY entry_date ASC, entry_type DESC, ref_no ASC
-  `;
+  // 3. Customer Payments & Allocation Breakdowns
+  const paymentParams = [customerId];
+  if (shopId) paymentParams.push(shopId);
 
-  // Build params array matching the ? placeholders in order
-  params.push(customerId);         // customer_ob
-  params.push(customerId);         // sales WHERE customer_id
-  if (shopId) params.push(shopId); // sales shop_id
-  params.push(customerId);         // payments via sales
-  if (shopId) params.push(shopId); // payments shop_id
-  params.push(customerId);         // credit notes
-  if (shopId) params.push(shopId); // credit notes shop_id
-  if (fromDate) params.push(fromDate);
-  if (toDate)   params.push(toDate);
+  const paymentRecords = await allRecords(
+    `SELECT pm.id,
+            pm.payment_date::date AS entry_date,
+            pm.created_at,
+            COALESCE(pm.payment_number, 'PAY-' || LPAD(pm.id::text, 6, '0')) AS ref_no,
+            pm.amount,
+            pm.payment_mode,
+            pm.reference_number,
+            pm.unallocated_amount,
+            pm.reversed_at
+     FROM payments pm
+     WHERE pm.customer_id = ? ${shopCondPayments}`,
+    paymentParams
+  );
 
-  return allRecords(sqlQuery, params);
+  // Fetch allocations for all payments of this customer
+  const allocations = await allRecords(
+    `SELECT pa.payment_id,
+            pa.allocation_type,
+            pa.amount_applied,
+            pa.sale_id,
+            COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0')) AS invoice_number
+     FROM payment_allocations pa
+     LEFT JOIN sales s ON s.id = pa.sale_id
+     WHERE pa.customer_id = ? AND pa.reversed_at IS NULL
+     ORDER BY pa.id ASC`,
+    [customerId]
+  );
+
+  const allocMap = new Map();
+  for (const a of allocations) {
+    if (!allocMap.has(a.payment_id)) allocMap.set(a.payment_id, []);
+    allocMap.get(a.payment_id).push(a);
+  }
+
+  const paymentRows = [];
+  const reversalRows = [];
+
+  for (const pm of paymentRecords) {
+    const pAllocs = allocMap.get(pm.id) || [];
+    const breakdownParts = [];
+
+    for (const pa of pAllocs) {
+      if (pa.allocation_type === 'opening_balance') {
+        breakdownParts.push(`Opening Balance: ${formatIndianCurrency(pa.amount_applied)}`);
+      } else if (pa.allocation_type === 'invoice') {
+        breakdownParts.push(`Invoice #${pa.invoice_number}: ${formatIndianCurrency(pa.amount_applied)}`);
+      } else if (pa.allocation_type === 'advance') {
+        breakdownParts.push(`Advance Credit: ${formatIndianCurrency(pa.amount_applied)}`);
+      }
+    }
+
+    if (Number(pm.unallocated_amount) > 0 && !pAllocs.some(a => a.allocation_type === 'advance')) {
+      breakdownParts.push(`Advance Credit: ${formatIndianCurrency(pm.unallocated_amount)}`);
+    }
+
+    const breakdownStr = breakdownParts.join(', ');
+
+    let desc = `Payment received via ${pm.payment_mode || 'Payment'}`;
+    if (pm.reference_number) desc += ` [Ref: ${pm.reference_number}]`;
+    if (breakdownStr) desc += ` → ${breakdownStr}`;
+
+    const isReversed = pm.reversed_at !== null;
+    if (isReversed) {
+      desc += ' [REVERSED]';
+    }
+
+    // Original payment row (always visible)
+    paymentRows.push({
+      id: pm.id,
+      entry_date: pm.entry_date,
+      created_at: pm.created_at,
+      ref_no: pm.ref_no,
+      entry_type: 'payment',
+      description: desc,
+      allocation_breakdown: breakdownStr || null,
+      debit_amount: 0.00,
+      credit_amount: money(pm.amount),
+      reversed: isReversed,
+      reversed_at: pm.reversed_at,
+    });
+
+    // If reversed, insert offsetting reversal row dated at reversal timestamp
+    if (isReversed) {
+      const revDate = new Date(pm.reversed_at).toISOString().slice(0, 10);
+      let revDesc = `Reversal of Payment ${pm.ref_no}`;
+      if (pm.reference_number) revDesc += ` [Ref: ${pm.reference_number}]`;
+
+      reversalRows.push({
+        id: pm.id + 9000000,
+        entry_date: revDate,
+        created_at: pm.reversed_at,
+        ref_no: 'REV-' + pm.ref_no,
+        entry_type: 'reversal',
+        description: revDesc,
+        allocation_breakdown: null,
+        debit_amount: money(pm.amount), // Offsets original credit
+        credit_amount: 0.00,
+        reversed: false,
+        reversed_at: null,
+      });
+    }
+  }
+
+  // 4. Credit Note Redemptions
+  const cnParams = [customerId];
+  if (shopId) cnParams.push(shopId);
+
+  const cnRecords = await allRecords(
+    `SELECT cnr.id,
+            cnr.created_at::date AS entry_date,
+            cnr.created_at,
+            cn.credit_note_number AS ref_no,
+            'credit_note' AS entry_type,
+            'Credit Note: ' || cn.credit_note_number AS description,
+            0.00::numeric AS debit_amount,
+            cnr.amount AS credit_amount
+     FROM credit_note_redemptions cnr
+     JOIN credit_notes cn ON cn.id = cnr.credit_note_id
+     JOIN sales s ON s.id = cnr.sale_id
+     WHERE cn.customer_id = ? ${shopCondCn}`,
+    cnParams
+  );
+
+  const cnRows = cnRecords.map(c => ({
+    id: c.id,
+    entry_date: c.entry_date,
+    created_at: c.created_at,
+    ref_no: c.ref_no,
+    entry_type: 'credit_note',
+    description: c.description,
+    allocation_breakdown: null,
+    debit_amount: 0.00,
+    credit_amount: money(c.credit_amount),
+    reversed: false,
+    reversed_at: null,
+  }));
+
+  // Combine and sort chronologically
+  const allRows = [
+    ...obRows,
+    ...saleRows,
+    ...paymentRows,
+    ...reversalRows,
+    ...cnRows,
+  ];
+
+  allRows.sort((a, b) => {
+    // 1. Entry date ASC
+    if (a.entry_date < b.entry_date) return -1;
+    if (a.entry_date > b.entry_date) return 1;
+
+    // 2. Opening balance always precedes any same-day transactions
+    if (a.entry_type === 'opening_balance' && b.entry_type !== 'opening_balance') return -1;
+    if (b.entry_type === 'opening_balance' && a.entry_type !== 'opening_balance') return 1;
+
+    // 3. Created at ASC
+    if (a.created_at && b.created_at) {
+      if (a.created_at < b.created_at) return -1;
+      if (a.created_at > b.created_at) return 1;
+    }
+
+    // 4. Fallback to ID
+    return Number(a.id || 0) - Number(b.id || 0);
+  });
+
+  return allRows;
 }
 
 // ─── Vendor Party Ledger ──────────────────────────────────────────────────────
@@ -423,14 +538,26 @@ export async function getARAgingReport(shopId, asOfDate) {
   const shopCondC = shopId ? 'AND c2.shop_id = ?' : '';
 
   const sql = `
+    WITH cust_unsettled_ob AS (
+      SELECT 
+        c_sub.id,
+        GREATEST(0, COALESCE(c_sub.opening_balance, 0) - COALESCE(
+          (SELECT SUM(pa.amount_applied) 
+           FROM payment_allocations pa 
+           WHERE pa.customer_id = c_sub.id 
+             AND pa.allocation_type = 'opening_balance' 
+             AND pa.reversed_at IS NULL), 0
+        )) AS unsettled_ob
+      FROM customers c_sub
+    )
     SELECT
       c.id                                                                       AS customer_id,
       c.name                                                                     AS customer_name,
       c.mobile,
-      -- opening_balance is added to the current bucket (no due date association)
+      -- unsettled opening_balance is added to the current bucket (no due date association)
       ROUND((COALESCE(SUM(CASE
         WHEN s.due_date::date > ?::date THEN s.pending_amount
-        ELSE 0 END), 0) + COALESCE(MAX(c.opening_balance), 0))::numeric, 2)     AS current_bucket,
+        ELSE 0 END), 0) + COALESCE(MAX(uob.unsettled_ob), 0))::numeric, 2)       AS current_bucket,
       ROUND(COALESCE(SUM(CASE
         WHEN s.due_date::date BETWEEN ?::date - 30 AND ?::date THEN s.pending_amount
         ELSE 0 END), 0)::numeric, 2)                                             AS d1_30,
@@ -443,19 +570,21 @@ export async function getARAgingReport(shopId, asOfDate) {
       ROUND(COALESCE(SUM(CASE
         WHEN s.due_date::date < ?::date - 90 THEN s.pending_amount
         ELSE 0 END), 0)::numeric, 2)                                             AS d90_plus,
-      -- total = sum of all pending sales + opening_balance (matches pending page)
-      ROUND((COALESCE(SUM(s.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0))::numeric, 2)
+      -- total = sum of all pending sales + unsettled opening_balance
+      ROUND((COALESCE(SUM(s.pending_amount), 0) + COALESCE(MAX(uob.unsettled_ob), 0))::numeric, 2)
                                                                                  AS total_outstanding
     FROM customers c
+    JOIN cust_unsettled_ob uob ON uob.id = c.id
     LEFT JOIN sales s ON s.customer_id = c.id AND s.pending_amount > 0 ${shopCond}
-    WHERE (s.id IS NOT NULL OR COALESCE(c.opening_balance, 0) > 0)
+    WHERE (s.id IS NOT NULL OR uob.unsettled_ob > 0)
       AND c.id IN (
         SELECT DISTINCT c2.id FROM customers c2
+        JOIN cust_unsettled_ob uob2 ON uob2.id = c2.id
         LEFT JOIN sales s2 ON s2.customer_id = c2.id AND s2.pending_amount > 0 ${shopCondC}
-        WHERE s2.id IS NOT NULL OR COALESCE(c2.opening_balance, 0) > 0
+        WHERE s2.id IS NOT NULL OR uob2.unsettled_ob > 0
       )
     GROUP BY c.id, c.name, c.mobile
-    HAVING (COALESCE(SUM(s.pending_amount), 0) + COALESCE(MAX(c.opening_balance), 0)) > 0
+    HAVING (COALESCE(SUM(s.pending_amount), 0) + COALESCE(MAX(uob.unsettled_ob), 0)) > 0
     ORDER BY total_outstanding DESC
   `;
 

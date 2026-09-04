@@ -6112,7 +6112,7 @@ function App() {
         const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
         if (resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
           salesData = resp.sales;
-          if (resp.customer) customerData = { ...customer, ...resp.customer };
+          if (resp.customer) customerData = { ...customer, ...resp.customer, payments: resp.payments || [] };
           if (resp.shop) shopData = { ...targetShop, ...resp.shop };
         }
       } catch (err) {
