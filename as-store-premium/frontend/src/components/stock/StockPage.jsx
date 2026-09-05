@@ -279,12 +279,17 @@ const StockTableRow = React.memo(function StockTableRow({
             type="button"
             title="Set Stock Level"
             onClick={() => {
+              const prod = (data.products || []).find(p => String(p.id) === String(item.product_id)) || item;
               setForms((prev) => ({
                 ...prev,
                 stock: { 
                   product_id: String(item.product_id), 
                   quantity: '',
-                  colour: '' 
+                  colour: '',
+                  purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
+                  sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
+                  retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
+                  supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (item?.supplier_id ? String(item.supplier_id) : ''),
                 }
               }));
               setColorSplitQuantities({});
@@ -453,12 +458,17 @@ const StockCardItem = React.memo(function StockCardItem({
         <button
           type="button"
           onClick={() => {
+            const prod = (data.products || []).find(p => String(p.id) === String(item.product_id)) || item;
             setForms((prev) => ({
               ...prev,
               stock: { 
                 product_id: String(item.product_id), 
                 quantity: '',
-                colour: '' 
+                colour: '',
+                purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
+                sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
+                retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
+                supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (item?.supplier_id ? String(item.supplier_id) : ''),
               }
             }));
             setColorSplitQuantities({});
@@ -1235,13 +1245,18 @@ export default function StockPage({
                 label="Select Product to Update" 
                 value={forms.stock.product_id} 
                 onChange={(v) => {
+                  const prod = (data.products || []).find(p => String(p.id) === String(v));
                   setForms((prev) => ({
                     ...prev,
                     stock: { 
                       ...prev.stock, 
                       product_id: v, 
                       colour: '', 
-                      quantity: '' 
+                      quantity: '',
+                      purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
+                      sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
+                      retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
+                      supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (prev.stock?.supplier_id || ''),
                     }
                   }));
                   setColorSplitQuantities({});
@@ -1443,9 +1458,39 @@ export default function StockPage({
                     );
                   })}
                 </div>
+                {/* Price Adjustment Row for Color Split Mode */}
+                <div style={{ display: 'grid', gridTemplateColumns: role === 'shopkeeper' ? '1fr 1fr' : 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginTop: '12px' }}>
+                  {role !== 'shopkeeper' && (
+                    <Select 
+                      label="Supplier (Optional)"
+                      value={forms.stock.supplier_id || ''}
+                      onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, supplier_id: v } }))}
+                      options={[
+                        ['', 'Choose Supplier'],
+                        ...(data.reference?.suppliers || [])
+                          .filter(s => s.is_active)
+                          .map(s => [s.id, s.name])
+                      ]}
+                    />
+                  )}
+                  <Input 
+                    label="Purchase Price (Cost)" 
+                    type="number" 
+                    placeholder="₹ 0.00"
+                    value={forms.stock.purchase_price ?? ''} 
+                    onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, purchase_price: v } }))} 
+                  />
+                  <Input 
+                    label="Selling Price (Retail)" 
+                    type="number" 
+                    placeholder="₹ 0.00"
+                    value={forms.stock.sale_price ?? ''} 
+                    onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, sale_price: v, retail_price: v } }))} 
+                  />
+                </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gridTemplateColumns: role === 'shopkeeper' ? '1fr' : '1fr 1fr', gap: '16px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: role === 'shopkeeper' ? '1fr 1fr' : 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
                 <Input 
                   label={
                     adjustmentMode === 'add' 
@@ -1472,6 +1517,20 @@ export default function StockPage({
                     ]}
                   />
                 )}
+                <Input 
+                  label="Purchase Price (Cost)" 
+                  type="number" 
+                  placeholder="₹ 0.00"
+                  value={forms.stock.purchase_price ?? ''} 
+                  onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, purchase_price: v } }))} 
+                />
+                <Input 
+                  label="Selling Price (Retail)" 
+                  type="number" 
+                  placeholder="₹ 0.00"
+                  value={forms.stock.sale_price ?? ''} 
+                  onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, sale_price: v, retail_price: v } }))} 
+                />
               </div>
             )}
           </div>
@@ -1845,11 +1904,11 @@ export default function StockPage({
                   {/* Pricing Row */}
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <Input 
-                      label="SELLING PRICE (RETAIL)" 
+                      label="PURCHASE PRICE (COST)" 
                       type="number" 
                       placeholder="₹ 0.00"
-                      value={forms.product.sale_price} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, sale_price: v } }))} 
+                      value={forms.product.purchase_price} 
+                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, purchase_price: v } }))} 
                     />
                     <Input 
                       label="WHOLESALE PRICE (OPTIONAL)" 
@@ -1859,11 +1918,11 @@ export default function StockPage({
                       onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, wholesale_price: v } }))} 
                     />
                     <Input 
-                      label="PURCHASE PRICE (COST)" 
+                      label="SELLING PRICE (RETAIL)" 
                       type="number" 
                       placeholder="₹ 0.00"
-                      value={forms.product.purchase_price} 
-                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, purchase_price: v } }))} 
+                      value={forms.product.sale_price} 
+                      onChange={(v) => setForms(prev => ({ ...prev, product: { ...prev.product, sale_price: v } }))} 
                     />
                   </div>
 
@@ -2576,7 +2635,11 @@ export default function StockPage({
                         ...prev.stock,
                         product_id: String(prod.id),
                         colour: '',
-                        quantity: ''
+                        quantity: '',
+                        purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
+                        sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
+                        retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
+                        supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (prev.stock?.supplier_id || ''),
                       }
                     }));
                     setIsModelPickerOpen(false);

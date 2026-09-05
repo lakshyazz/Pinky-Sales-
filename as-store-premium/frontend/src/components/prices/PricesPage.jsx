@@ -177,77 +177,41 @@ export default function PricesPage({
 
   const isSuperAdmin = role === 'superadmin';
   const hasPurchase = isSuperAdmin;
-  const isShopkeeper = role === 'shopkeeper' || role !== 'superadmin';
+  const isShopkeeper = role === 'shopkeeper';
 
-  // Wholesale Price Privacy Visibility
-  // For shopkeepers, wholesale price is hidden by default until the eye button is clicked
-  const [globalShowWholesale, setGlobalShowWholesale] = useState(!isShopkeeper);
-  const [revealedWholesaleIds, setRevealedWholesaleIds] = useState(() => new Set());
-  const [hiddenWholesaleIds, setHiddenWholesaleIds] = useState(() => new Set());
-
-  const isWholesaleRevealed = (productId) => {
-    const pId = String(productId || '');
-    if (globalShowWholesale) {
-      return !hiddenWholesaleIds.has(pId);
-    }
-    return revealedWholesaleIds.has(pId);
-  };
-
-  const toggleWholesaleVisibility = (productId) => {
-    const pId = String(productId || '');
-    if (globalShowWholesale) {
-      setHiddenWholesaleIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(pId)) next.delete(pId);
-        else next.add(pId);
-        return next;
-      });
-    } else {
-      setRevealedWholesaleIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(pId)) next.delete(pId);
-        else next.add(pId);
-        return next;
-      });
-    }
-  };
-
-  const toggleGlobalWholesale = () => {
-    if (globalShowWholesale) {
-      setGlobalShowWholesale(false);
-      setRevealedWholesaleIds(new Set());
-      setHiddenWholesaleIds(new Set());
-    } else {
-      setGlobalShowWholesale(true);
-      setRevealedWholesaleIds(new Set());
-      setHiddenWholesaleIds(new Set());
-    }
-  };
-
-  // Cost Price Privacy Visibility (Super Admin)
-  const [globalShowCost, setGlobalShowCost] = useState(true);
+  // Cost Price Privacy Visibility (Warehouse Login / Superadmin)
+  // Warehouse login / role: hideCost defaults to true on initial page load (values hidden until explicitly toggled)
+  // Preserved in sessionStorage during the browser session
+  const [hideCost, setHideCost] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem('prices_hide_cost');
+      if (stored !== null) return stored === 'true';
+    } catch (e) {}
+    // Default: Warehouse Login / Role defaults to true (Cost Price column and values hidden)
+    return true;
+  });
   const [revealedCostIds, setRevealedCostIds] = useState(() => new Set());
   const [hiddenCostIds, setHiddenCostIds] = useState(() => new Set());
 
   const isCostRevealed = (productId) => {
     const pId = String(productId || '');
-    if (globalShowCost) {
-      return !hiddenCostIds.has(pId);
+    if (hideCost) {
+      return revealedCostIds.has(pId);
     }
-    return revealedCostIds.has(pId);
+    return !hiddenCostIds.has(pId);
   };
 
   const toggleCostVisibility = (productId) => {
     const pId = String(productId || '');
-    if (globalShowCost) {
-      setHiddenCostIds((prev) => {
+    if (hideCost) {
+      setRevealedCostIds((prev) => {
         const next = new Set(prev);
         if (next.has(pId)) next.delete(pId);
         else next.add(pId);
         return next;
       });
     } else {
-      setRevealedCostIds((prev) => {
+      setHiddenCostIds((prev) => {
         const next = new Set(prev);
         if (next.has(pId)) next.delete(pId);
         else next.add(pId);
@@ -257,15 +221,70 @@ export default function PricesPage({
   };
 
   const toggleGlobalCost = () => {
-    if (globalShowCost) {
-      setGlobalShowCost(false);
-      setRevealedCostIds(new Set());
-      setHiddenCostIds(new Set());
-    } else {
-      setGlobalShowCost(true);
-      setRevealedCostIds(new Set());
-      setHiddenCostIds(new Set());
+    setHideCost((prev) => {
+      const next = !prev;
+      try {
+        sessionStorage.setItem('prices_hide_cost', String(next));
+      } catch (e) {}
+      return next;
+    });
+    setRevealedCostIds(new Set());
+    setHiddenCostIds(new Set());
+  };
+
+  // Wholesale Price Privacy Visibility
+  // Shopkeeper Login / Role: hideWholesale defaults to true on initial page load (Wholesale Price hidden until explicitly toggled)
+  // Preserved in sessionStorage during the browser session
+  const [hideWholesale, setHideWholesale] = useState(() => {
+    try {
+      const stored = sessionStorage.getItem('prices_hide_wholesale');
+      if (stored !== null) return stored === 'true';
+    } catch (e) {
+      // fallback
     }
+    // Default: Shopkeeper Login / Role defaults to true; Warehouse/Admin defaults to false
+    return isShopkeeper;
+  });
+  const [revealedWholesaleIds, setRevealedWholesaleIds] = useState(() => new Set());
+  const [hiddenWholesaleIds, setHiddenWholesaleIds] = useState(() => new Set());
+
+  const isWholesaleRevealed = (productId) => {
+    const pId = String(productId || '');
+    if (hideWholesale) {
+      return revealedWholesaleIds.has(pId);
+    }
+    return !hiddenWholesaleIds.has(pId);
+  };
+
+  const toggleWholesaleVisibility = (productId) => {
+    const pId = String(productId || '');
+    if (hideWholesale) {
+      setRevealedWholesaleIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(pId)) next.delete(pId);
+        else next.add(pId);
+        return next;
+      });
+    } else {
+      setHiddenWholesaleIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(pId)) next.delete(pId);
+        else next.add(pId);
+        return next;
+      });
+    }
+  };
+
+  const toggleGlobalWholesale = () => {
+    setHideWholesale((prev) => {
+      const next = !prev;
+      try {
+        sessionStorage.setItem('prices_hide_wholesale', String(next));
+      } catch (e) {}
+      return next;
+    });
+    setRevealedWholesaleIds(new Set());
+    setHiddenWholesaleIds(new Set());
   };
 
   const selectedShopRecord = useMemo(() => {
@@ -445,18 +464,19 @@ export default function PricesPage({
               type="button"
               onClick={toggleGlobalCost}
               className={`flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
-                globalShowCost
-                  ? 'bg-rose-50 border-rose-200 text-rose-700 hover:bg-rose-100'
+                hideCost
+                  ? 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100 ring-1 ring-rose-200'
                   : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-rose-700'
               }`}
-              title={globalShowCost ? "Hide all cost prices" : "Reveal all cost prices"}
+              title={hideCost ? "Cost Price is hidden (Filter active) — Click to show" : "Cost Price is visible — Click to hide"}
+              aria-label="Hide Cost"
             >
-              {globalShowCost ? (
+              {hideCost ? (
                 <EyeOff className="w-3.5 h-3.5 text-rose-600" />
               ) : (
                 <Eye className="w-3.5 h-3.5 text-slate-500" />
               )}
-              <span>{globalShowCost ? 'Hide Cost' : 'Show Cost'}</span>
+              <span>{hideCost ? 'Show Cost' : 'Hide Cost'}</span>
             </button>
           )}
 
@@ -464,18 +484,19 @@ export default function PricesPage({
             type="button"
             onClick={toggleGlobalWholesale}
             className={`flex items-center gap-1.5 px-3.5 py-2 border rounded-xl text-xs font-bold transition-all shadow-2xs cursor-pointer ${
-              globalShowWholesale
-                ? 'bg-indigo-50 border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+              hideWholesale
+                ? 'bg-indigo-50 border-indigo-300 text-indigo-700 hover:bg-indigo-100 ring-1 ring-indigo-200'
                 : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-indigo-700'
             }`}
-            title={globalShowWholesale ? "Hide all wholesale prices" : "Reveal all wholesale prices"}
+            title={hideWholesale ? "Wholesale Price is hidden (Filter active) — Click to show" : "Wholesale Price is visible — Click to hide"}
+            aria-label="Hide Wholesale"
           >
-            {globalShowWholesale ? (
+            {hideWholesale ? (
               <EyeOff className="w-3.5 h-3.5 text-indigo-600" />
             ) : (
               <Eye className="w-3.5 h-3.5 text-slate-500" />
             )}
-            <span>{globalShowWholesale ? 'Hide Wholesale' : 'Show Wholesale'}</span>
+            <span>{hideWholesale ? 'Show Wholesale' : 'Hide Wholesale'}</span>
           </button>
 
           <button

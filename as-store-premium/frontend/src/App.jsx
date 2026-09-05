@@ -773,7 +773,7 @@ const initialForms = {
     opening_stock: '', description: '', colours: '', manufacturing_brand_id: '', supplier_id: '',
     image_url: '', image_urls: [],
   },
-  stock: { product_id: '', quantity: '', colour: '', supplier_id: '' },
+  stock: { product_id: '', quantity: '', colour: '', supplier_id: '', purchase_price: '', sale_price: '', retail_price: '' },
   customer: { name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' },
   sale: {
     product_id: '',

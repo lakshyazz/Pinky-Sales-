@@ -2797,6 +2797,7 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
       wholesale_price,
       official_price,
       retail_price,
+      sale_price,
       colour,
       received_date,
       notes,
@@ -2809,6 +2810,20 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     const effectiveAssignedUserId = isShopStaffRole(req.user.role) ? req.user.id : assigned_user_id || null;
     const product = await getRecord('SELECT purchase_price, wholesale_price, official_price, retail_price, manufacturing_brand_id FROM products WHERE id = ?', [product_id]);
     if (!product) return res.status(404).json({ error: 'Product not found.' });
+
+    const effectiveRetailPrice = (retail_price !== undefined && retail_price !== null && String(retail_price).trim() !== '')
+      ? Number(retail_price)
+      : ((sale_price !== undefined && sale_price !== null && String(sale_price).trim() !== '')
+        ? Number(sale_price)
+        : ((official_price !== undefined && official_price !== null && String(official_price).trim() !== '') ? Number(official_price) : null));
+
+    const effectivePurchasePrice = (purchase_price !== undefined && purchase_price !== null && String(purchase_price).trim() !== '')
+      ? Number(purchase_price)
+      : null;
+
+    const effectiveWholesalePrice = (wholesale_price !== undefined && wholesale_price !== null && String(wholesale_price).trim() !== '')
+      ? Number(wholesale_price)
+      : null;
 
     // Prepare color map if multi-color split is provided
     let colorEntries = null;
@@ -2863,8 +2878,12 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
                 colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
-                shopId, product_id, effectiveAssignedUserId, purchase_price ?? product?.purchase_price, wholesale_price ?? product?.wholesale_price,
-                official_price ?? product?.official_price, retail_price ?? product?.retail_price, colName || null,
+                shopId, product_id, effectiveAssignedUserId,
+                (effectivePurchasePrice !== null && !isNaN(effectivePurchasePrice)) ? effectivePurchasePrice : product?.purchase_price,
+                (effectiveWholesalePrice !== null && !isNaN(effectiveWholesalePrice)) ? effectiveWholesalePrice : product?.wholesale_price,
+                (effectiveRetailPrice !== null && !isNaN(effectiveRetailPrice)) ? effectiveRetailPrice : product?.official_price,
+                (effectiveRetailPrice !== null && !isNaN(effectiveRetailPrice)) ? effectiveRetailPrice : product?.retail_price,
+                colName || null,
                 delta, delta, received_date || today(), notes || (colName ? `Stock update for colour ${colName}` : 'Stock quantity update'), req.user.id, product?.manufacturing_brand_id,
                 req.user.role === 'superadmin' && supplier_id ? Number(supplier_id) : null
               ]
@@ -2922,8 +2941,12 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
               colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
-              shopId, product_id, effectiveAssignedUserId, (purchase_price !== undefined && purchase_price !== null && purchase_price !== '') ? Number(purchase_price) : product?.purchase_price, wholesale_price ?? product?.wholesale_price,
-              official_price ?? product?.official_price, retail_price ?? product?.retail_price, colour || null,
+              shopId, product_id, effectiveAssignedUserId,
+              (effectivePurchasePrice !== null && !isNaN(effectivePurchasePrice)) ? effectivePurchasePrice : product?.purchase_price,
+              (effectiveWholesalePrice !== null && !isNaN(effectiveWholesalePrice)) ? effectiveWholesalePrice : product?.wholesale_price,
+              (effectiveRetailPrice !== null && !isNaN(effectiveRetailPrice)) ? effectiveRetailPrice : product?.official_price,
+              (effectiveRetailPrice !== null && !isNaN(effectiveRetailPrice)) ? effectiveRetailPrice : product?.retail_price,
+              colour || null,
               delta, delta, received_date || today(), notes || 'Stock quantity update', req.user.id, product?.manufacturing_brand_id,
               supplier_id ? Number(supplier_id) : (product?.supplier_id ? Number(product.supplier_id) : null)
             ]
@@ -2950,25 +2973,44 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
         }
       }
 
-      if (retail_price || official_price) {
-        const updatePrice = Number(retail_price || official_price);
-        if (!isNaN(updatePrice) && updatePrice > 0) {
-          await tx.runQuery(
-            'UPDATE inventory_batches SET retail_price = ?, official_price = ? WHERE shop_id = ? AND product_id = ?',
-            [updatePrice, updatePrice, shopId, product_id]
-          );
-          await tx.runQuery(
-            'UPDATE products SET sale_price = ?, retail_price = ? WHERE id = ?',
-            [updatePrice, updatePrice, product_id]
-          );
-        }
+      // Update product retail/selling price if supplied
+      if (effectiveRetailPrice !== null && !isNaN(effectiveRetailPrice) && effectiveRetailPrice >= 0) {
+        await tx.runQuery(
+          'UPDATE inventory_batches SET retail_price = ?, official_price = ? WHERE shop_id = ? AND product_id = ?',
+          [effectiveRetailPrice, effectiveRetailPrice, shopId, product_id]
+        );
+        await tx.runQuery(
+          'UPDATE products SET sale_price = ?, retail_price = ? WHERE id = ?',
+          [effectiveRetailPrice, effectiveRetailPrice, product_id]
+        );
+      }
+
+      // Update product purchase/cost price if supplied
+      if (effectivePurchasePrice !== null && !isNaN(effectivePurchasePrice) && effectivePurchasePrice >= 0) {
+        await tx.runQuery(
+          'UPDATE products SET purchase_price = ? WHERE id = ?',
+          [effectivePurchasePrice, product_id]
+        );
+      }
+
+      // Update product wholesale price if supplied
+      if (effectiveWholesalePrice !== null && !isNaN(effectiveWholesalePrice) && effectiveWholesalePrice >= 0) {
+        await tx.runQuery(
+          'UPDATE products SET wholesale_price = ? WHERE id = ?',
+          [effectiveWholesalePrice, product_id]
+        );
       }
 
       await syncStockFromBatches(tx, shopId, product_id);
     });
 
     invalidateCache('reference-data', 'catalog', 'products');
-    await audit(req, 'Updated stock', 'stock', product_id, `Shop ${shopId} updated stock`);
+    const priceAuditNotes = [
+      effectivePurchasePrice !== null && !isNaN(effectivePurchasePrice) ? `Cost Price: ₹${effectivePurchasePrice}` : '',
+      effectiveRetailPrice !== null && !isNaN(effectiveRetailPrice) ? `Retail Price: ₹${effectiveRetailPrice}` : ''
+    ].filter(Boolean).join(' | ');
+
+    await audit(req, 'Updated stock', 'stock', product_id, `Shop ${shopId} updated stock${priceAuditNotes ? ` with pricing [${priceAuditNotes}]` : ''}`);
     res.json({ success: true, message: 'Stock updated successfully' });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to update stock.' });
