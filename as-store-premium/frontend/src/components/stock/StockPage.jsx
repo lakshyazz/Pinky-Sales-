@@ -1273,19 +1273,19 @@ export default function StockPage({
 
             {/* Current Stock Preview & Mode Selector */}
             {forms.stock.product_id && (
-              <div style={{ padding: '16px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <div style={{ padding: '16px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div>
-                    <span style={{ fontSize: '11.5px', opacity: 0.6, textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700' }}>Current Warehouse Metrics</span>
+                    <span style={{ fontSize: '11.5px', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700' }}>Current Warehouse Metrics</span>
                     <div style={{ display: 'flex', gap: '16px', marginTop: '4px' }}>
-                      <span style={{ fontSize: '13.5px' }}>Total Available: <b style={{ color: '#14b8a6', fontWeight: '800' }}>{stockPreview?.quantity || 0} pcs</b></span>
-                      <span style={{ fontSize: '13px', opacity: 0.8 }}>{ownerQuantityLabel}: <b>{stockPreview?.owner_quantity || 0}</b></span>
-                      <span style={{ fontSize: '13px', opacity: 0.8 }}>{assignedQuantityLabel}: <b>{role === 'shopkeeper' ? stockPreview?.my_quantity || 0 : stockPreview?.shopkeeper_quantity || 0}</b></span>
+                      <span style={{ fontSize: '13.5px', color: '#1e293b' }}>Total Available: <b style={{ color: '#0d9488', fontWeight: '800' }}>{stockPreview?.quantity || 0} pcs</b></span>
+                      <span style={{ fontSize: '13px', color: '#475569' }}>{ownerQuantityLabel}: <b style={{ color: '#0f172a' }}>{stockPreview?.owner_quantity || 0}</b></span>
+                      <span style={{ fontSize: '13px', color: '#475569' }}>{assignedQuantityLabel}: <b style={{ color: '#0f172a' }}>{role === 'shopkeeper' ? stockPreview?.my_quantity || 0 : stockPreview?.shopkeeper_quantity || 0}</b></span>
                     </div>
                   </div>
 
                   {/* Segmented Adjustment Mode Selector */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255,255,255,0.04)', padding: '4px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.08)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: '#e2e8f0', padding: '4px', borderRadius: '10px', border: '1px solid #cbd5e1' }}>
                     <button
                       type="button"
                       onClick={() => setAdjustmentMode('add')}
@@ -1297,7 +1297,7 @@ export default function StockPage({
                         fontWeight: '800',
                         cursor: 'pointer',
                         background: adjustmentMode === 'add' ? '#0d9488' : 'transparent',
-                        color: adjustmentMode === 'add' ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                        color: adjustmentMode === 'add' ? '#ffffff' : '#475569',
                         boxShadow: adjustmentMode === 'add' ? '0 2px 8px rgba(13,148,136,0.3)' : 'none',
                         transition: 'all 0.15s ease',
                       }}
@@ -1315,7 +1315,7 @@ export default function StockPage({
                         fontWeight: '800',
                         cursor: 'pointer',
                         background: adjustmentMode === 'deduct' ? '#e11d48' : 'transparent',
-                        color: adjustmentMode === 'deduct' ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                        color: adjustmentMode === 'deduct' ? '#ffffff' : '#475569',
                         boxShadow: adjustmentMode === 'deduct' ? '0 2px 8px rgba(225,29,72,0.3)' : 'none',
                         transition: 'all 0.15s ease',
                       }}
@@ -1333,7 +1333,7 @@ export default function StockPage({
                         fontWeight: '800',
                         cursor: 'pointer',
                         background: adjustmentMode === 'set' ? '#0284c7' : 'transparent',
-                        color: adjustmentMode === 'set' ? '#ffffff' : 'rgba(255,255,255,0.6)',
+                        color: adjustmentMode === 'set' ? '#ffffff' : '#475569',
                         boxShadow: adjustmentMode === 'set' ? '0 2px 8px rgba(2,132,199,0.3)' : 'none',
                         transition: 'all 0.15s ease',
                       }}
@@ -1346,7 +1346,7 @@ export default function StockPage({
                 {/* Live Formula Preview Badge */}
                 {!isColorSplitMode && forms.stock.quantity !== '' && !isNaN(Number(forms.stock.quantity)) && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 14px', borderRadius: '8px', background: adjustmentMode === 'add' ? 'rgba(13,148,136,0.08)' : adjustmentMode === 'deduct' ? 'rgba(225,29,72,0.08)' : 'rgba(2,132,199,0.08)', border: `1px solid ${adjustmentMode === 'add' ? 'rgba(13,148,136,0.2)' : adjustmentMode === 'deduct' ? 'rgba(225,29,72,0.2)' : 'rgba(2,132,199,0.2)'}` }}>
-                    <span style={{ fontSize: '11.5px', fontWeight: '700', color: adjustmentMode === 'add' ? '#14b8a6' : adjustmentMode === 'deduct' ? '#f43f5e' : '#38bdf8' }}>
+                    <span style={{ fontSize: '11.5px', fontWeight: '700', color: adjustmentMode === 'add' ? '#0f766e' : adjustmentMode === 'deduct' ? '#e11d48' : '#0284c7' }}>
                       {adjustmentMode === 'add' && `Additive Formula: Current (${stockPreview?.quantity || 0}) + Input (${Number(forms.stock.quantity)}) = New Total: ${(stockPreview?.quantity || 0) + Number(forms.stock.quantity)} pcs`}
                       {adjustmentMode === 'deduct' && `Deductive Formula: Current (${stockPreview?.quantity || 0}) - Input (${Number(forms.stock.quantity)}) = New Total: ${Math.max(0, (stockPreview?.quantity || 0) - Number(forms.stock.quantity))} pcs`}
                       {adjustmentMode === 'set' && `Direct Override Formula: Total will be directly set to ${Number(forms.stock.quantity)} pcs`}
@@ -1356,22 +1356,23 @@ export default function StockPage({
 
                 {/* Toggle Color Variant Split vs Lump-Sum Mode */}
                 {selectedProductColours.length > 0 && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                    <span style={{ fontSize: '12px', fontWeight: '600', color: '#94a3b8' }}>
-                      Tagged Colours: <b style={{ color: '#e2e8f0' }}>{selectedProductColours.join(', ')}</b>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: '10px', borderTop: '1px solid #e2e8f0' }}>
+                    <span style={{ fontSize: '12px', fontWeight: '600', color: '#475569' }}>
+                      Tagged Colours: <b style={{ color: '#0f172a', fontWeight: '700' }}>{selectedProductColours.join(', ')}</b>
                     </span>
                     <button
                       type="button"
                       onClick={() => setIsColorSplitMode(!isColorSplitMode)}
                       style={{
-                        padding: '5px 12px',
-                        borderRadius: '6px',
-                        border: '1px solid rgba(20,184,166,0.3)',
-                        background: isColorSplitMode ? 'rgba(20,184,166,0.15)' : 'transparent',
-                        color: '#14b8a6',
+                        padding: '6px 14px',
+                        borderRadius: '8px',
+                        border: '1.5px solid #0d9488',
+                        background: isColorSplitMode ? '#f0fdfa' : '#ffffff',
+                        color: '#0f766e',
                         fontSize: '11px',
                         fontWeight: '700',
                         cursor: 'pointer',
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
                       }}
                     >
                       {isColorSplitMode ? 'Switch to Single Input' : '⚡ Split Stock Across Colours'}
@@ -1383,28 +1384,43 @@ export default function StockPage({
 
             {/* Color-Variant Stock Split Grid */}
             {forms.stock.product_id && isColorSplitMode && selectedProductColours.length > 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', background: 'rgba(20,184,166,0.03)', border: '1px solid rgba(20,184,166,0.15)', borderRadius: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '12px', fontWeight: '800', color: '#14b8a6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '18px', background: '#f0fdfa', border: '1.5px solid #99f6e4', borderRadius: '14px', boxShadow: '0 1px 3px rgba(0,0,0,0.03)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: '800', color: '#0f766e', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#0d9488', display: 'inline-block' }}></span>
                     Color-Variant Stock Allocation ({adjustmentMode === 'add' ? '+ Add per Colour' : adjustmentMode === 'deduct' ? '- Deduct per Colour' : '= Set Total per Colour'})
                   </span>
-                  <span style={{ fontSize: '12px', fontWeight: '800', color: '#ffffff' }}>
-                    Total Variant Stock: <b style={{ color: '#14b8a6' }}>{Object.values(colorSplitQuantities).reduce((a, b) => a + Number(b || 0), 0)} pcs</b>
+                  <span style={{ fontSize: '12.5px', fontWeight: '700', color: '#334155' }}>
+                    Total Variant Stock: <b style={{ color: '#0f766e', fontWeight: '900', fontSize: '13.5px' }}>{Object.values(colorSplitQuantities).reduce((a, b) => a + Number(b || 0), 0)} pcs</b>
                   </span>
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '12px' }}>
                   {selectedProductColours.map((colourName) => {
                     const currentColourQty = Number(selectedProductDetails?.colour_stock?.[colourName] || 0);
                     return (
-                      <div key={colourName} style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: '8px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: '700', color: '#e2e8f0' }}>{colourName}</span>
-                          <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>Curr: <b>{currentColourQty}</b></span>
+                      <div
+                        key={colourName}
+                        style={{
+                          padding: '12px 14px',
+                          background: '#ffffff',
+                          border: '1.5px solid #cbd5e1',
+                          borderRadius: '10px',
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.04)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '8px'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: '13px', fontWeight: '800', color: '#0f172a' }}>{colourName}</span>
+                          <span style={{ fontSize: '11px', fontWeight: '600', color: '#475569', background: '#f1f5f9', padding: '2px 7px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                            Curr: <b style={{ color: '#0f172a' }}>{currentColourQty}</b>
+                          </span>
                         </div>
                         <input
                           type="number"
                           min="0"
-                          placeholder="Qty"
+                          placeholder="Qty to allocate"
                           value={colorSplitQuantities[colourName] ?? ''}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -1412,14 +1428,15 @@ export default function StockPage({
                           }}
                           style={{
                             width: '100%',
-                            padding: '6px 10px',
-                            background: 'rgba(255,255,255,0.05)',
-                            border: '1px solid rgba(255,255,255,0.1)',
-                            borderRadius: '6px',
-                            color: '#ffffff',
-                            fontWeight: '700',
-                            fontSize: '12px',
+                            padding: '8px 12px',
+                            background: '#f8fafc',
+                            border: '1.5px solid #94a3b8',
+                            borderRadius: '8px',
+                            color: '#0f172a',
+                            fontWeight: '800',
+                            fontSize: '13px',
                             outline: 'none',
+                            boxSizing: 'border-box',
                           }}
                         />
                       </div>
