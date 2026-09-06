@@ -1753,7 +1753,7 @@ function SalesCreationWorkspace({
 
           {/* Card 4: Dynamic Extra Expenses */}
           <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2.5">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Extra Expenses</span>
                 {extraExpensesTotal > 0 ? (
@@ -1765,32 +1765,87 @@ function SalesCreationWorkspace({
                 )}
               </div>
 
-              <button
-                type="button"
-                onClick={() => addSaleExpense()}
-                className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
-              >
-                <Plus size={14} />
-                <span>Add Expense</span>
-              </button>
+              {/* Quick-select preset chips + Add Expense Button */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[10.5px] text-slate-400 font-semibold hidden sm:inline mr-1">Presets:</span>
+                {[
+                  { label: 'Courier', val: 'COURIER', icon: <Truck size={12} /> },
+                  { label: 'Packaging', val: 'PACKAGING', icon: <Package size={12} /> },
+                  { label: 'Transport', val: 'TRANSPORT' },
+                  { label: 'Other', val: 'OTHER' },
+                ].map((chip) => (
+                  <button
+                    key={chip.val}
+                    type="button"
+                    onClick={() => addSaleExpense(chip.val)}
+                    className="px-2.5 py-1 text-[11px] font-bold rounded-lg border border-slate-200 hover:border-teal-300 bg-slate-50 hover:bg-teal-50 text-slate-700 hover:text-teal-800 transition-all flex items-center gap-1 cursor-pointer shadow-2xs active:scale-95"
+                    title={`Add ${chip.label} expense`}
+                  >
+                    {chip.icon && chip.icon}
+                    <span>+ {chip.label}</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => addSaleExpense('COURIER')}
+                  className="px-3 py-1.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 border border-teal-600 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-95"
+                >
+                  <Plus size={14} />
+                  <span>Add Expense</span>
+                </button>
+              </div>
             </div>
 
             {/* Dynamic Expense Rows */}
             {(forms.sale.expenses || []).length > 0 ? (
               <div className="space-y-2.5 pt-1">
+                <datalist id="sale-expense-presets">
+                  <option value="COURIER" />
+                  <option value="PACKAGING" />
+                  <option value="TRANSPORT" />
+                  <option value="LABOUR" />
+                  <option value="DELIVERY" />
+                  <option value="OTHER" />
+                </datalist>
+
                 {(forms.sale.expenses || []).map((exp, expIdx) => (
                   <div key={exp.id || expIdx} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end bg-slate-50/90 p-3 rounded-xl border border-slate-200/80">
-                    <div className="sm:col-span-7">
-                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
-                        Expense Name / Description
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Courier, Delivery, Labour, Packing, Transport..."
-                        value={exp.expense_name || ''}
-                        onChange={(e) => updateSaleExpense(expIdx, 'expense_name', e.target.value)}
-                        className="w-full h-10 px-3 text-xs font-bold border border-slate-200 rounded-xl bg-white focus:border-teal-500 focus:outline-none"
-                      />
+                    <div className="sm:col-span-7 space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                          Expense Name / Description
+                        </label>
+                        {/* Quick switch chips for this row */}
+                        <div className="flex items-center gap-1">
+                          {['COURIER', 'PACKAGING', 'TRANSPORT'].map((pName) => (
+                            <button
+                              key={pName}
+                              type="button"
+                              onClick={() => {
+                                updateSaleExpense(expIdx, 'expense_name', pName);
+                                updateSaleExpense(expIdx, 'expense_type', pName.toLowerCase());
+                              }}
+                              className={`text-[9.5px] px-2 py-0.5 rounded font-bold cursor-pointer transition-all ${
+                                String(exp.expense_name || '').toUpperCase() === pName
+                                  ? 'bg-teal-600 text-white shadow-2xs'
+                                  : 'bg-white text-slate-500 hover:bg-slate-200 border border-slate-200'
+                              }`}
+                            >
+                              {pName}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          list="sale-expense-presets"
+                          placeholder="e.g. COURIER, PACKAGING, TRANSPORT..."
+                          value={exp.expense_name !== undefined ? exp.expense_name : 'COURIER'}
+                          onChange={(e) => updateSaleExpense(expIdx, 'expense_name', e.target.value)}
+                          className="w-full h-10 px-3 text-xs font-bold border border-slate-200 rounded-xl bg-white focus:border-teal-500 focus:outline-none uppercase"
+                        />
+                      </div>
                     </div>
                     <div className="sm:col-span-4">
                       <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1">
@@ -1800,6 +1855,7 @@ function SalesCreationWorkspace({
                         type="number"
                         min="0"
                         placeholder="₹ 0"
+                        autoFocus={expIdx === (forms.sale.expenses || []).length - 1 && (exp.amount === '' || exp.amount === undefined)}
                         value={exp.amount !== undefined ? exp.amount : ''}
                         onChange={(e) => updateSaleExpense(expIdx, 'amount', e.target.value)}
                         className="w-full h-10 px-3 text-xs font-black border border-slate-200 rounded-xl bg-white focus:border-teal-500 focus:outline-none text-right"
@@ -1820,7 +1876,7 @@ function SalesCreationWorkspace({
               </div>
             ) : (
               <p className="text-[11px] text-slate-400 font-normal">
-                No extra expenses added. Click &ldquo;Add Expense&rdquo; if courier, freight, or other charges apply.
+                No extra expenses added. Click &ldquo;Add Expense&rdquo; or a preset button above if courier, packaging, or freight charges apply.
               </p>
             )}
           </div>
@@ -4526,13 +4582,13 @@ function App() {
     showToast('Cancelled invoice editing');
   };
 
-  const addSaleExpense = () => {
+  const addSaleExpense = (defaultName = 'COURIER', defaultAmount = '') => {
     const currentExpenses = [...(forms.sale.expenses || [])];
     currentExpenses.push({
       id: Date.now() + Math.random(),
-      expense_type: 'custom',
-      expense_name: '',
-      amount: '',
+      expense_type: String(defaultName || 'courier').toLowerCase(),
+      expense_name: defaultName || 'COURIER',
+      amount: defaultAmount,
     });
     const totals = calculateSaleTotals(forms.sale.items, currentExpenses);
     setForms((prev) => ({
