@@ -6258,7 +6258,7 @@ function App() {
       const key = String(sale.customer_id || sale.customer_name || 'unknown');
       if (!map.has(key)) {
         const custObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id));
-        const openingBalance = Number(custObj?.opening_balance || 0);
+        const openingBalance = Number(custObj?.opening_balance !== undefined ? custObj.opening_balance : (sale.customer_opening_balance || 0));
         const advanceBalance = Number(custObj?.advance_balance || 0);
         const custPending = custObj?.pending !== undefined && custObj?.pending !== null ? Number(custObj.pending) : null;
 
@@ -7710,6 +7710,16 @@ function App() {
                                   Customer Purchase Invoices ({group.invoices.length})
                                 </span>
                               </div>
+
+                              {Number(group.opening_balance || 0) > 0 && (
+                                <div className="p-3 bg-amber-50/80 border border-amber-200/80 rounded-xl flex items-center justify-between text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className="px-2 py-0.5 rounded bg-amber-200/60 text-amber-900 font-bold text-[11px]">Opening Balance</span>
+                                    <span className="text-slate-600 font-medium">Initial outstanding balance brought forward</span>
+                                  </div>
+                                  <span className="font-black text-amber-900">{currency(group.opening_balance)}</span>
+                                </div>
+                              )}
 
                               <div className="space-y-3">
                                 {group.invoices.map((sale) => {

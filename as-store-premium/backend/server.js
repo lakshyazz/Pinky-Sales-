@@ -3201,7 +3201,7 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
 app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const shopId = requireScopedShopId(req, req.body.shop_id);
-    const { name, mobile, address, notes, gstin, customer_type } = req.body;
+    const { name, mobile, address, notes, gstin, customer_type, opening_balance, opening_balance_date } = req.body;
     if (!name || !mobile) return res.status(400).json({ error: 'Customer name and mobile are required.' });
     
     const cleanName = String(name).trim();
@@ -3209,6 +3209,12 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
     const cleanAddress = String(address || '').trim();
     const cleanGstin = gstin ? String(gstin).trim().toUpperCase() : null;
     const cleanType = (customer_type && String(customer_type).trim().toLowerCase() === 'wholesaler') ? 'wholesaler' : 'retailer';
+    const cleanOpeningBalance = opening_balance !== undefined && !isNaN(Number(opening_balance))
+      ? money(Number(opening_balance))
+      : 0;
+    const cleanOpeningBalanceDate = opening_balance_date && /^\d{4}-\d{2}-\d{2}/.test(String(opening_balance_date))
+      ? String(opening_balance_date).slice(0, 10)
+      : today();
 
     // Only reuse existing customer if shop, name, mobile, AND address are all identical
     const existing = await getRecord(
@@ -3220,11 +3226,20 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
     }
 
     const result = await runQuery(
-      'INSERT INTO customers (shop_id, name, mobile, address, notes, gstin, customer_type, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [shopId, cleanName, cleanMobile, cleanAddress, notes || '', cleanGstin, cleanType, req.user.id]
+      'INSERT INTO customers (shop_id, name, mobile, address, notes, gstin, customer_type, opening_balance, opening_balance_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [shopId, cleanName, cleanMobile, cleanAddress, notes || '', cleanGstin, cleanType, cleanOpeningBalance, cleanOpeningBalanceDate, req.user.id]
     );
+
+    if (cleanOpeningBalance > 0) {
+      await runQuery(
+        `INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_by)
+         VALUES (?, ?, 'OPENING_BALANCE', ?, ?, ?, 0.00, ?, ?)`,
+        [shopId, result.id, `OB-${String(result.id).padStart(6, '0')}`, cleanOpeningBalanceDate, cleanOpeningBalance, `Opening Balance for ${cleanName}`, req.user.id]
+      );
+    }
+
     await audit(req, 'Created customer', 'customer', result.id, cleanName);
-    res.status(201).json({ id: result.id, shop_id: shopId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes, gstin: cleanGstin, customer_type: cleanType });
+    res.status(201).json({ id: result.id, shop_id: shopId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes, gstin: cleanGstin, customer_type: cleanType, opening_balance: cleanOpeningBalance, opening_balance_date: cleanOpeningBalanceDate });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create customer.' });
   }
@@ -3269,6 +3284,31 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
        WHERE id = ?`,
       [cleanName, cleanMobile, cleanAddress, cleanNotes, paymentTerms, cleanOpeningBalance, cleanGstin, cleanType, customerId]
     );
+
+    // Sync ledger_entries for OPENING_BALANCE
+    if (cleanOpeningBalance > 0) {
+      const existingOB = await getRecord(
+        'SELECT id FROM ledger_entries WHERE customer_id = ? AND entry_type = ?',
+        [customerId, 'OPENING_BALANCE']
+      );
+      if (existingOB) {
+        await runQuery(
+          'UPDATE ledger_entries SET debit = ?, description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+          [cleanOpeningBalance, `Opening Balance for ${cleanName}`, existingOB.id]
+        );
+      } else {
+        await runQuery(
+          `INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_by)
+           VALUES (?, ?, 'OPENING_BALANCE', ?, ?, ?, 0.00, ?, ?)`,
+          [customer.shop_id, customerId, `OB-${String(customerId).padStart(6, '0')}`, customer.opening_balance_date || today(), cleanOpeningBalance, `Opening Balance for ${cleanName}`, req.user.id]
+        );
+      }
+    } else if (cleanOpeningBalance === 0) {
+      await runQuery(
+        'DELETE FROM ledger_entries WHERE customer_id = ? AND entry_type = ?',
+        [customerId, 'OPENING_BALANCE']
+      );
+    }
 
     const updated = await getRecord(`
       SELECT c.*, sh.name AS shop_name, (COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0)) AS pending
@@ -3421,7 +3461,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
       COALESCE(se.expenses, '[]'::json) AS expenses,
       COALESCE(pm.payments, '[]'::json) AS payments,
       p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
-      c.name AS customer_name, c.mobile, c.address, COALESCE(c.advance_balance, 0) AS customer_advance_balance, COALESCE(c.advance_balance, 0) AS advance_balance,
+      c.name AS customer_name, c.mobile, c.address, COALESCE(c.opening_balance, 0) AS customer_opening_balance, COALESCE(c.advance_balance, 0) AS customer_advance_balance, COALESCE(c.advance_balance, 0) AS advance_balance,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
       p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
     ${baseSql}
@@ -4213,11 +4253,25 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         ? money(req.body.previous_balance)
         : livePrevBalance;
 
-      // [FIX A5] opening_balance is a fixed historical seed value — it must NEVER be mutated during
-      // a sale transaction. Mutating it made it impossible to produce a stable Party Ledger opening
-      // figure and caused running-balance drift on every invoice creation.
-      // Running balance is now computed from journal_entry_lines using a window function.
-      // opening_balance remains read-only after initial customer onboarding.
+      // If customer had 0 opening balance and 0 previous sales pending, but user entered a previous balance on invoice,
+      // record it as the customer's opening balance in customers and ledger_entries!
+      if (customerOpeningBal === 0 && existingSalesPending === 0 && previousBalance > 0) {
+        await tx.runQuery(
+          'UPDATE customers SET opening_balance = ?, opening_balance_date = COALESCE(opening_balance_date, ?) WHERE id = ?',
+          [previousBalance, invoiceDateStr, customer_id]
+        );
+        const existingOB = await tx.getRecord(
+          'SELECT id FROM ledger_entries WHERE customer_id = ? AND entry_type = ?',
+          [customer_id, 'OPENING_BALANCE']
+        );
+        if (!existingOB) {
+          await tx.runQuery(
+            `INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_by)
+             VALUES (?, ?, 'OPENING_BALANCE', ?, ?, ?, 0.00, ?, ?)`,
+            [shopId, customer_id, `OB-${String(customer_id).padStart(6, '0')}`, invoiceDateStr, previousBalance, `Opening Balance entered on invoice for ${customer.name}`, req.user.id]
+          );
+        }
+      }
 
       const preparedItems = [];
       const reservedByBatch = new Map();
@@ -5071,10 +5125,28 @@ const handleUpdateSale = async (req, res) => {
         productsTotal = Number(itemTotals?.pt || sale.total_amount || 0);
       }
 
-      // 5. Previous balance handling (opening_balance is immutable and must NEVER be mutated)
+      // 5. Previous balance handling
       let previousBalance = Number(sale.previous_balance || 0);
       if (req.body.previous_balance !== undefined && req.body.previous_balance !== null && req.body.previous_balance !== '' && !isNaN(Number(req.body.previous_balance))) {
         previousBalance = money(req.body.previous_balance);
+        const cust = await tx.getRecord('SELECT id, name, shop_id, COALESCE(opening_balance, 0) AS opening_balance, opening_balance_date FROM customers WHERE id = ?', [targetCustomerId]);
+        if (cust && Number(cust.opening_balance) === 0 && previousBalance > 0) {
+          await tx.runQuery(
+            'UPDATE customers SET opening_balance = ?, opening_balance_date = COALESCE(opening_balance_date, ?) WHERE id = ?',
+            [previousBalance, invoiceDateStr, targetCustomerId]
+          );
+          const existingOB = await tx.getRecord(
+            'SELECT id FROM ledger_entries WHERE customer_id = ? AND entry_type = ?',
+            [targetCustomerId, 'OPENING_BALANCE']
+          );
+          if (!existingOB) {
+            await tx.runQuery(
+              `INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_by)
+               VALUES (?, ?, 'OPENING_BALANCE', ?, ?, ?, 0.00, ?, ?)`,
+              [cust.shop_id || sale.shop_id, targetCustomerId, `OB-${String(targetCustomerId).padStart(6, '0')}`, invoiceDateStr, previousBalance, `Opening Balance recorded on invoice for ${cust.name}`, req.user.id]
+            );
+          }
+        }
       }
 
       // 6. Recalculate totals and financials

@@ -915,6 +915,15 @@ export const generateLedgerPDFDoc = async (customer = {}, invoices = [], payment
     runningBalance = rawRows.length ? Number(rawRows[rawRows.length - 1].running_balance || 0) : 0;
   } else {
     const transactions = [];
+    if (Number(customer?.opening_balance || 0) > 0) {
+      transactions.push({
+        date: customer.opening_balance_date || '2026-01-01',
+        ref: `OB-${String(customer.id || '').padStart(6, '0')}`,
+        particulars: 'Opening Balance',
+        debit: Number(customer.opening_balance),
+        credit: 0,
+      });
+    }
     invoices.forEach(inv => {
       const invNo = inv.invoice_number || `INV-${String(inv.id).padStart(6, '0')}`;
       const invDate = inv.invoice_date || inv.sale_date || '2026-08-27';

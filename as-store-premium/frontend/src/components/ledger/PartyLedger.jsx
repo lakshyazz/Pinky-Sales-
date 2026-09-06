@@ -222,6 +222,7 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
           style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 20 }}>
           {[
+            ...(Number(ledger.opening_balance || 0) > 0 ? [{ label: 'Opening Balance', value: Number(ledger.opening_balance), icon: <BookOpen size={16} />, color: '#d97706', bg: '#fffbeb' }] : []),
             { label: 'Total Debit (Dr)', value: totalDebit, icon: <ArrowUpRight size={16} />, color: '#dc2626', bg: '#fef2f2' },
             { label: 'Total Credit (Cr)', value: totalCredit, icon: <ArrowDownRight size={16} />, color: '#16a34a', bg: '#dcfce7' },
             { label: 'Closing Balance', value: closingBal, icon: <ChevronsRight size={16} />, color: closingBal > 0 ? '#b45309' : '#16a34a', bg: closingBal > 0 ? '#fef3c7' : '#dcfce7' },

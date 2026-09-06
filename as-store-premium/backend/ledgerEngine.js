@@ -166,7 +166,7 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
   const shopCondPayments = shopId ? 'AND pm.shop_id = ?' : '';
   const shopCondCn = shopId ? 'AND s.shop_id = ?' : '';
 
-  // 1. Immutable Opening Balance seed row
+  // 1. Immutable Opening Balance seed row (from ledger_entries or customers)
   const cust = await getRecord(
     `SELECT id, COALESCE(opening_balance, 0) AS ob, 
             COALESCE(opening_balance_date, created_at::date, CURRENT_DATE) AS ob_date,
@@ -175,8 +175,17 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
     [customerId]
   );
 
+  const leOb = await getRecord(
+    `SELECT id, debit, entry_date, ref_no, description, created_at 
+     FROM ledger_entries 
+     WHERE customer_id = ? AND entry_type = 'OPENING_BALANCE' 
+     ORDER BY id ASC LIMIT 1`,
+    [customerId]
+  );
+
   const obRows = [];
-  if (cust && Number(cust.ob) > 0) {
+  const obAmount = leOb ? Number(leOb.debit) : Number(cust?.ob || 0);
+  if (obAmount > 0) {
     // Ensure Opening Balance date precedes or equals the earliest transaction date
     const earliestTx = await getRecord(
       `SELECT MIN(LEAST(
@@ -186,29 +195,59 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
       [customerId, customerId]
     );
 
-    let effectiveObDate = cust.ob_date;
+    let effectiveObDate = leOb?.entry_date || cust?.ob_date;
     if (earliestTx?.earliest_date) {
       const edStr = new Date(earliestTx.earliest_date).toISOString().slice(0, 10);
-      const obStr = new Date(cust.ob_date).toISOString().slice(0, 10);
+      const obStr = new Date(effectiveObDate).toISOString().slice(0, 10);
       if (edStr < obStr) {
         effectiveObDate = edStr;
       }
     }
 
     obRows.push({
-      id: cust.id,
+      id: leOb?.id || cust?.id || customerId,
       entry_date: effectiveObDate,
       created_at: '1970-01-01T00:00:00Z', // Guarantees opening balance precedes same-day tx
-      ref_no: 'OB-' + String(cust.id).padStart(6, '0'),
+      ref_no: leOb?.ref_no || ('OB-' + String(customerId).padStart(6, '0')),
       entry_type: 'opening_balance',
-      description: 'Opening Balance',
+      description: leOb?.description || 'Opening Balance',
       allocation_breakdown: null,
-      debit_amount: money(cust.ob),
+      debit_amount: money(obAmount),
       credit_amount: 0.00,
       reversed: false,
       reversed_at: null,
     });
   }
+
+  // Fetch any additional ledger entries (other than OPENING_BALANCE)
+  const otherLedgerRecords = await allRecords(
+    `SELECT le.id,
+            le.entry_date,
+            le.created_at,
+            le.ref_no,
+            le.entry_type,
+            le.description,
+            le.debit AS debit_amount,
+            le.credit AS credit_amount
+     FROM ledger_entries le
+     WHERE le.customer_id = ? AND le.entry_type != 'OPENING_BALANCE'
+     ${shopId ? 'AND le.shop_id = ?' : ''}
+     ORDER BY le.entry_date ASC, le.id ASC`,
+    shopId ? [customerId, shopId] : [customerId]
+  );
+  const otherLedgerRows = otherLedgerRecords.map(r => ({
+    id: r.id,
+    entry_date: r.entry_date,
+    created_at: r.created_at,
+    ref_no: r.ref_no || `LE-${r.id}`,
+    entry_type: String(r.entry_type).toLowerCase(),
+    description: r.description || 'Ledger Entry',
+    allocation_breakdown: null,
+    debit_amount: money(r.debit_amount),
+    credit_amount: money(r.credit_amount),
+    reversed: false,
+    reversed_at: null,
+  }));
 
   // 2. Sales Invoices
   const salesParams = [customerId];
@@ -392,6 +431,7 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
     ...paymentRows,
     ...reversalRows,
     ...cnRows,
+    ...otherLedgerRows,
   ];
 
   allRows.sort((a, b) => {
