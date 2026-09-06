@@ -20,6 +20,7 @@ import {
 import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
 import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
+import CostWithBatchHistory from './CostWithBatchHistory';
 
 function getProductStockCount(product) {
   if (!product) return 0;
@@ -516,7 +517,7 @@ export default function PricesPage({
       </div>
 
       {/* Main Stock & Price Table View */}
-      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-2xl shadow-sm">
         {loading ? (
           <div className="p-12 text-center text-slate-400 font-semibold text-xs animate-pulse">
             Loading consolidated product catalog...
@@ -650,7 +651,7 @@ export default function PricesPage({
                       </button>
                     </div>
 
-                    {/* Cost / Purchase Price (Super Admin only - Weighted Average) */}
+                    {/* Cost / Purchase Price (Super Admin only - Weighted Average with Batch History) */}
                     {hasPurchase && (
                       <div className="flex flex-col justify-center">
                         <div className="flex items-center justify-end gap-1">
@@ -659,32 +660,18 @@ export default function PricesPage({
                             <span className="text-[8px] font-bold text-rose-600 bg-rose-50 px-1 py-0.2 rounded">Avg</span>
                           )}
                         </div>
-                        {isCostShown ? (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
+                        <div className="mt-0.5 flex items-center justify-end">
+                          <CostWithBatchHistory
+                            item={product}
+                            isCostVisible={isCostShown}
+                            onToggleVisibility={(e) => {
+                              if (e && e.stopPropagation) e.stopPropagation();
                               toggleCostVisibility(product.id);
                             }}
-                            title="Click to hide cost price"
-                            className="text-sm font-semibold text-rose-700 hover:text-rose-800 mt-0.5 inline-flex items-center justify-end gap-1 transition-colors cursor-pointer"
-                          >
-                            <span>{priceLabel(displayCostPrice)}</span>
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleCostVisibility(product.id);
-                            }}
-                            title="Click to reveal cost price"
-                            className="text-xs font-mono font-bold text-slate-400 hover:text-rose-600 hover:bg-rose-50/60 px-1.5 py-0.5 rounded transition-all cursor-pointer inline-flex items-center justify-end gap-1 self-end mt-0.5"
-                          >
-                            <span className="tracking-widest">••••••</span>
-                            <Eye className="w-3 h-3 opacity-60" />
-                          </button>
-                        )}
+                            formatPrice={priceLabel}
+                            currency="₹"
+                          />
+                        </div>
                       </div>
                     )}
 
