@@ -7481,30 +7481,6 @@ app.post('/api/debit-notes', authenticateToken, requireShopStaff, async (req, re
 // END ACCOUNTING ENGINE ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const isTransientDatabaseError = (error) => {
-  const message = `${error?.message || ''} ${error?.cause?.message || ''}`;
-  return /connection terminated|connection timeout|timeout|ECONNRESET|ETIMEDOUT/i.test(message)
-    || ['08003', '08006', '57P01', '53300'].includes(String(error?.code || ''));
-};
-
-app.use((error, req, res, next) => {
-  if (res.headersSent) return next(error);
-
-  const requestedStatus = Number(error?.status || error?.statusCode || 0);
-  const databaseUnavailable = isTransientDatabaseError(error);
-  const status = requestedStatus >= 400 && requestedStatus < 600
-    ? requestedStatus
-    : databaseUnavailable
-      ? 503
-      : 500;
-  const message = databaseUnavailable
-    ? 'Database connection timed out. Please retry.'
-    : error?.message || 'Unable to complete this request right now.';
-
-  console.error(`[Server] ${req.method} ${req.originalUrl} failed:`, error);
-  return res.status(status).json({ error: message });
-});
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // SCHEDULED AUTOMATION & CRON ENDPOINTS (Vercel Cron & External Webhooks)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -7516,7 +7492,7 @@ const verifyCronAuth = (req) => {
   return authHeader === `Bearer ${cronSecret}` || req.query.secret === cronSecret;
 };
 
-// 9:00 PM IST Scheduled Inward Stock Report endpoint (with ExcelJS attachment)
+// 10:00 PM IST Scheduled Master Stock & Products Report endpoint (with ExcelJS attachment)
 app.all(['/api/cron/inward-report', '/api/cron/daily-inward-report'], async (req, res) => {
   if (!verifyCronAuth(req)) {
     return res.status(401).json({ error: 'Unauthorized: Invalid or missing CRON_SECRET.' });
@@ -7548,6 +7524,30 @@ app.all(['/api/cron/daily-summary', '/api/cron/end-of-day-report'], async (req, 
   }
 });
 
+const isTransientDatabaseError = (error) => {
+  const message = `${error?.message || ''} ${error?.cause?.message || ''}`;
+  return /connection terminated|connection timeout|timeout|ECONNRESET|ETIMEDOUT/i.test(message)
+    || ['08003', '08006', '57P01', '53300'].includes(String(error?.code || ''));
+};
+
+app.use((error, req, res, next) => {
+  if (res.headersSent) return next(error);
+
+  const requestedStatus = Number(error?.status || error?.statusCode || 0);
+  const databaseUnavailable = isTransientDatabaseError(error);
+  const status = requestedStatus >= 400 && requestedStatus < 600
+    ? requestedStatus
+    : databaseUnavailable
+      ? 503
+      : 500;
+  const message = databaseUnavailable
+    ? 'Database connection timed out. Please retry.'
+    : error?.message || 'Unable to complete this request right now.';
+
+  console.error(`[Server] ${req.method} ${req.originalUrl} failed:`, error);
+  return res.status(status).json({ error: message });
+});
+
 if (process.env.VERCEL !== '1') {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] Multi-shop API is live on http://localhost:${PORT}`);
@@ -7556,3 +7556,4 @@ if (process.env.VERCEL !== '1') {
 }
 
 export default app;
+
