@@ -2,6 +2,16 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "installCommand": "npm install && npm --prefix as-store-premium/frontend ci",
   "buildCommand": "npm --prefix as-store-premium/frontend run build",
+  "crons": [
+    {
+      "path": "/api/cron/inward-report",
+      "schedule": "30 16 * * *"
+    },
+    {
+      "path": "/api/cron/daily-summary",
+      "schedule": "29 18 * * *"
+    }
+  ],
   "outputDirectory": "as-store-premium/frontend/dist",
   "functions": {
     "api/index.js": {

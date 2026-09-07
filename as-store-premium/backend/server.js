@@ -9,6 +9,15 @@ import { initDatabase, runQuery, getRecord, allRecords, runTransaction, executeT
 import { uploadImageToR2, deleteImageFromR2, isR2Configured, getImageBufferFromStorage } from './r2Storage.js';
 import { postSaleJournal, postPaymentJournal, postCreditNoteJournal, postPurchaseBillJournal, postDebitNoteJournal, reverseJournal } from './accountingEngine.js';
 import { getCustomerLedger, getVendorLedger, getARAgingReport, getAPAgingReport } from './ledgerEngine.js';
+import {
+  sendOrderInvoiceEmail,
+  sendLowStockAlertEmail,
+  sendStockAddedAlert,
+  sendDailyInwardStockReport,
+  generateAndSendDailyReport,
+  getTodayDateIST,
+} from './services/email/emailService.js';
+import { initScheduledEmailCrons } from './cron/dailySummaryCron.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -4214,7 +4223,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
 
     const result = await runTransaction(async (tx) => {
       // Lock customer record for race-condition safe balance tracking
-      const customer = await tx.getRecord('SELECT id, name, mobile, COALESCE(opening_balance, 0) AS opening_balance, COALESCE(advance_balance, 0) AS advance_balance FROM customers WHERE id = ? FOR UPDATE', [customer_id]);
+      const customer = await tx.getRecord('SELECT id, name, mobile, email, COALESCE(opening_balance, 0) AS opening_balance, COALESCE(advance_balance, 0) AS advance_balance FROM customers WHERE id = ? FOR UPDATE', [customer_id]);
       if (!customer) {
         const error = new Error('Selected customer not found.');
         error.status = 404;
@@ -4763,6 +4772,50 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
 
     await audit(req, 'Created sale', 'sale', result.id, `${result.invoice_number}, products total ${result.products_total}, prev balance ${result.previous_balance}, applied credit ${result.applied_credit_amount}, net payable ${result.net_payable_amount}, closing balance ${result.closing_balance}`);
     res.status(201).json(result);
+
+    // Asynchronous Post-Commit Email & Low Stock Alert Handlers
+    setImmediate(async () => {
+      try {
+        const customerRecipientEmail = req.body.customer_email || req.body.email || customer?.email || null;
+        if (customerRecipientEmail) {
+          const saleItemsForEmail = preparedItems.map((it) => ({
+            name: it.product?.name || it.product_name || it.custom_product_name || 'Item',
+            brand: it.custom_brand_name || it.product?.brand || '',
+            colour: it.selected_colour || it.colour || '',
+            quantity: it.saleQuantity,
+            unitPrice: it.unitPrice,
+            lineTotal: it.saleTotal,
+          }));
+
+          await sendOrderInvoiceEmail({
+            orderId: result.id,
+            invoiceNumber: result.invoice_number,
+            customerName: customer?.name || req.body.customer_name || 'Customer',
+            customerMobile: customer?.mobile || req.body.customer_mobile || '',
+            saleDate: result.invoice_date || result.due_date,
+            items: saleItemsForEmail,
+            subtotal: result.products_total,
+            extraExpenses: result.extra_expenses_total,
+            discountAmount: result.discount_amount,
+            discountPercentage: result.discount_percentage,
+            totalAmount: result.total_amount,
+            paymentMode: payment_mode,
+            paidAmount: result.paid_amount,
+            pendingAmount: result.pending_amount,
+            publicInvoiceUrl: result.public_token ? `/invoice/public/${result.public_token}` : null,
+          }, customerRecipientEmail);
+        }
+
+        // Evaluate low-stock alerts for every sold product
+        for (const it of preparedItems) {
+          if (it.product_id) {
+            await sendLowStockAlertEmail({ productId: it.product_id, shopId });
+          }
+        }
+      } catch (emailErr) {
+        console.error('[Sales] Post-sale email processing error:', emailErr.message);
+      }
+    });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create sale.' });
   }
@@ -7452,9 +7505,53 @@ app.use((error, req, res, next) => {
   return res.status(status).json({ error: message });
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCHEDULED AUTOMATION & CRON ENDPOINTS (Vercel Cron & External Webhooks)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const verifyCronAuth = (req) => {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) return true; // Fail open if no secret configured
+  const authHeader = req.headers.authorization;
+  return authHeader === `Bearer ${cronSecret}` || req.query.secret === cronSecret;
+};
+
+// 9:00 PM IST Scheduled Inward Stock Report endpoint (with ExcelJS attachment)
+app.all(['/api/cron/inward-report', '/api/cron/daily-inward-report'], async (req, res) => {
+  if (!verifyCronAuth(req)) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid or missing CRON_SECRET.' });
+  }
+
+  try {
+    const targetDate = String(req.query.date || '').trim() || getTodayDateIST();
+    const result = await sendDailyInwardStockReport({ targetDate });
+    res.status(200).json({ success: true, targetDate, result });
+  } catch (err) {
+    console.error('[CronRoute] Inward report error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 11:59 PM IST Scheduled End-of-Day Performance Digest endpoint
+app.all(['/api/cron/daily-summary', '/api/cron/end-of-day-report'], async (req, res) => {
+  if (!verifyCronAuth(req)) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid or missing CRON_SECRET.' });
+  }
+
+  try {
+    const targetDate = String(req.query.date || '').trim() || getTodayDateIST();
+    const result = await generateAndSendDailyReport({ targetDate });
+    res.status(200).json({ success: true, targetDate, result });
+  } catch (err) {
+    console.error('[CronRoute] Daily summary error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 if (process.env.VERCEL !== '1') {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] Multi-shop API is live on http://localhost:${PORT}`);
+    initScheduledEmailCrons();
   });
 }
 
