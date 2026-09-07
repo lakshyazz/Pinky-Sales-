@@ -82,7 +82,7 @@ export function renderLowStockAlertHtml({
             <!-- Footer -->
             <tr>
               <td style="background-color: #F8FAFC; padding: 14px 30px; text-align: center; border-top: 1px solid #E2E8F0; font-size: 11px; color: #94A3B8;">
-                AS Store Premium Automated Watchdog | Cooldown protection active (max 1 alert per 12 hrs per product).
+                Pinky Saless Automated Watchdog | Cooldown protection active (max 1 alert per 12 hrs per product).
               </td>
             </tr>
           </table>

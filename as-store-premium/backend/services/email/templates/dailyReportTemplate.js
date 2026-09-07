@@ -115,7 +115,7 @@ export function renderDailyReportHtml({
                 </table>
 
                 <div style="font-size: 11.5px; color: #94A3B8; border-top: 1px solid #E2E8F0; padding-top: 16px;">
-                  Daily summary generated automatically by AS Store Premium Automation Suite.
+                  Daily summary generated automatically by Pinky Saless Automation Suite.
                 </div>
               </td>
             </tr>

@@ -65,7 +65,7 @@ export function renderOrderInvoiceHtml({
                 <table width="100%">
                   <tr>
                     <td>
-                      <h1 style="color: #FFFFFF; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">AS Store Premium</h1>
+                      <h1 style="color: #FFFFFF; margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px;">Pinky Saless</h1>
                       <div style="color: #94A3B8; font-size: 12px; margin-top: 4px;">Electronic Invoice & Order Confirmation</div>
                     </td>
                     <td align="right" valign="top">
@@ -174,7 +174,7 @@ export function renderOrderInvoiceHtml({
             <!-- Footer -->
             <tr>
               <td style="background-color: #F8FAFC; padding: 18px 32px; text-align: center; border-top: 1px solid #E2E8F0; font-size: 11.5px; color: #94A3B8;">
-                AS Store Premium Management Suite | Thank you for your business.<br>
+                Pinky Saless Management Suite | Thank you for your business.<br>
                 For questions regarding this invoice, please reach out with your Invoice ID.
               </td>
             </tr>

@@ -75,7 +75,7 @@ export function renderInwardStockReportEmailHtml({
                 </div>
 
                 <div style="font-size: 11.5px; color: #94A3B8; border-top: 1px solid #E2E8F0; padding-top: 16px;">
-                  Automated nightly by AS Store Premium Management Suite (10:00 PM Asia/Kolkata IST).
+                  Automated nightly by Pinky Saless Management Suite (10:00 PM Asia/Kolkata IST).
                 </div>
               </td>
             </tr>

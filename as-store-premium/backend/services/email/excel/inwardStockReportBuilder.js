@@ -9,7 +9,7 @@ import ExcelJS from 'exceljs';
  */
 export async function buildInwardStockExcelBuffer(rows, reportDate) {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = 'AS Store Premium Automation';
+  workbook.creator = 'Pinky Saless Automation';
   workbook.created = new Date();
 
   const worksheet = workbook.addWorksheet('Master Product & Stock Report', {
@@ -20,7 +20,7 @@ export async function buildInwardStockExcelBuffer(rows, reportDate) {
   // 1. Title Banner Row
   worksheet.mergeCells('A1:K1');
   const titleCell = worksheet.getCell('A1');
-  titleCell.value = `AS STORE PREMIUM - COMPLETE PRODUCT & INVENTORY REPORT (${reportDate})`;
+  titleCell.value = `PINKY SALESS - COMPLETE PRODUCT & INVENTORY REPORT (${reportDate})`;
   titleCell.font = { name: 'Arial', size: 14, bold: true, color: { argb: 'FFFFFFFF' } };
   titleCell.fill = {
     type: 'pattern',
