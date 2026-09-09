@@ -888,7 +888,17 @@ const RedesignedDashboard = React.memo(function RedesignedDashboard({
             <div className="flex items-end justify-between pt-1">
               <div>
                 <strong className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white block">
-                  <AnimatedCounter value={data.dashboard?.totals?.pending_payments || 0} prefix="₹" />
+                  <AnimatedCounter
+                    value={
+                      role === 'superadmin'
+                        ? (data.dashboard?.totals?.pending_payments || 0)
+                        : (
+                            // For branch staff, strictly display their assigned branch's pending dues, never warehouse
+                            Number(data.shops?.find((s) => String(s.id) === String(session?.shop_id) && s.location_type !== 'warehouse')?.pending || 0)
+                          )
+                    }
+                    prefix="₹"
+                  />
                 </strong>
                 <span className="text-[11px] font-bold text-slate-400 block mt-1">Collectible Balance</span>
               </div>

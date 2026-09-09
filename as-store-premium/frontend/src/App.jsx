@@ -3362,7 +3362,7 @@ function App() {
     setTabLoading(true);
     try {
       setLoadError('');
-      const dashboardShopId = role === 'superadmin' ? '' : currentShop;
+      const dashboardShopId = role === 'superadmin' ? '' : (currentShop || session?.shop_id || '');
       const scoped = currentShop ? `?shopId=${currentShop}` : '';
       const dashboardScoped = dashboardShopId ? `?shopId=${dashboardShopId}` : '';
       const set = (key, value) => setData((prev) => ({ ...prev, [key]: value }));
@@ -6870,10 +6870,13 @@ function App() {
                           <span className="text-[10px] text-slate-400 uppercase font-black">Stock Qty</span>
                           <span className="text-slate-700 font-bold mt-0.5">{shop.stock} pcs</span>
                         </div>
-                        <div className="flex flex-col items-end">
-                          <span className="text-[10px] text-slate-400 uppercase font-black">Pending Payments</span>
-                          <span className={`font-bold mt-0.5 ${Number(shop.pending) > 0 ? 'text-rose-600' : 'text-slate-700'}`}>{currency(shop.pending)}</span>
-                        </div>
+                        {/* Only Super Admin can see pending across all shops; shopkeepers only see their own shop's pending, never warehouse */}
+                        {(role === 'superadmin' || (String(shop.id) === String(shopId) && shop.location_type !== 'warehouse')) && (
+                          <div className="flex flex-col items-end">
+                            <span className="text-[10px] text-slate-400 uppercase font-black">Pending Payments</span>
+                            <span className={`font-bold mt-0.5 ${Number(shop.pending) > 0 ? 'text-rose-600' : 'text-slate-700'}`}>{currency(shop.pending)}</span>
+                          </div>
+                        )}
                       </div>
                     </>
                   )} 
@@ -8335,12 +8338,16 @@ function App() {
                   <section className="panel reports-panel">
                     <h2>Pending by shop</h2>
                     <div className="report-table pending-report-table">
-                      {data.reports.pendingByShop?.length ? data.reports.pendingByShop.map((row) => (
-                        <div className="report-row" key={row.shop_name}>
-                          <span>{row.shop_name}</span>
-                          <strong>{currency(row.pending)}</strong>
-                        </div>
-                      )) : <Empty title="No pending payments by shop" />}
+                      {data.reports.pendingByShop?.filter((row) => role === 'superadmin' || (row.shop_name !== 'Warehouse' && (!session?.shop_name || row.shop_name === session.shop_name)))?.length ? (
+                        data.reports.pendingByShop
+                          .filter((row) => role === 'superadmin' || (row.shop_name !== 'Warehouse' && (!session?.shop_name || row.shop_name === session.shop_name)))
+                          .map((row) => (
+                            <div className="report-row" key={row.shop_name}>
+                              <span>{row.shop_name}</span>
+                              <strong>{currency(row.pending)}</strong>
+                            </div>
+                          ))
+                      ) : <Empty title="No pending payments by shop" />}
                     </div>
                   </section>
                   <section className="panel audit-history-panel reports-panel">

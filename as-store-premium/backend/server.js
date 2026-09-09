@@ -634,15 +634,19 @@ const getShopsForUser = async (user) => {
       ORDER BY id ASC
     `);
   }
+  const isSuper = user?.role === 'superadmin';
   const shopId = isShopStaffRole(user.role) ? Number(user.shop_id) : null;
   return allRecords(`
     SELECT sh.*,
       COALESCE((SELECT SUM(st.quantity) FROM stock st WHERE st.shop_id = sh.id), 0) AS stock,
-      (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) AS pending
+      ${isSuper
+        ? '(COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0))'
+        : 'CASE WHEN sh.id = ? THEN (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) ELSE 0 END'
+      } AS pending
     FROM shops sh
     ${shopId ? "WHERE sh.id = ? OR sh.location_type = 'warehouse'" : ''}
     ORDER BY CASE WHEN sh.location_type = 'warehouse' THEN 0 ELSE 1 END, sh.id ASC
-  `, shopId ? [shopId] : []);
+  `, shopId ? (isSuper ? [shopId] : [shopId, shopId]) : []);
 };
 const batchAccessSql = (user, alias = 'ib') => isShopStaffRole(user.role)
   ? ` AND (${alias}.assigned_user_id IS NULL OR ${alias}.assigned_user_id = ${Number(user.id)})`
@@ -857,7 +861,8 @@ app.get('/api/bootstrap', authenticateToken, async (req, res) => {
 });
 
 app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) => {
-  const shopId = scopeShopId(req);
+  const isSuper = req.user.role === 'superadmin';
+  const shopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : scopeShopId(req);
   const trendDays = lastDays();
   const trendPlaceholders = trendDays.map(() => '?').join(', ');
   const visibleBatchAccess = batchAccessSql(req.user);
@@ -889,12 +894,15 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     allRecords(`
       SELECT sh.id, sh.name, sh.area, sh.location_type,
         COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = sh.id ${visibleBatchAccess}), 0) AS stock,
-        (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) AS pending,
+        ${isSuper
+          ? '(COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0))'
+          : 'CASE WHEN sh.id = ? THEN (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) ELSE 0 END'
+        } AS pending,
         COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND sa.sale_date = ?), 0) AS sales_today
       FROM shops sh
       ${shopId ? 'WHERE sh.id = ?' : ''}
       ORDER BY sales_today DESC, pending DESC
-    `, shopId ? [today(), shopId] : [today()]),
+    `, shopId ? (isSuper ? [today(), shopId] : [shopId, today(), shopId]) : [today()]),
     allRecords(`
       SELECT p.name, p.short_name, p.brand, COALESCE(SUM(sa.quantity), 0) AS sold
       FROM products p
@@ -5901,11 +5909,16 @@ app.put('/api/stock-requests/:id', authenticateToken, requireSuperAdmin, async (
 });
 
 app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req, res) => {
-  const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
+  const isSuper = req.user.role === 'superadmin';
+  const shopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : scopeShopId(req);
   const pagination = parsePagination(req.query);
   const params = [];
   const where = ['1=1'];
-  if (shopId) {
+  if (!isSuper) {
+    where.push('c.shop_id = ?');
+    params.push(shopId);
+    where.push("c.shop_id NOT IN (SELECT id FROM shops WHERE location_type = 'warehouse')");
+  } else if (shopId) {
     where.push('c.shop_id = ?');
     params.push(shopId);
   }
@@ -6762,13 +6775,14 @@ app.get(['/api/export-data', '/export-data'], authenticateToken, requireShopStaf
 
 
 app.get('/api/reports', authenticateToken, requireShopStaff, async (req, res) => {
-  const shopId = isShopStaffRole(req.user.role) ? req.user.shop_id : scopeShopId(req);
+  const isSuper = req.user.role === 'superadmin';
+  const shopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : scopeShopId(req);
   const pendingByShop = await allRecords(`
     SELECT sh.name AS shop_name, 
       (COALESCE(SUM(sa.pending_amount), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) AS pending
     FROM shops sh
     LEFT JOIN sales sa ON sa.shop_id = sh.id
-    ${shopId ? 'WHERE sh.id = ?' : ''}
+    ${isSuper ? (shopId ? 'WHERE sh.id = ?' : '') : "WHERE sh.id = ? AND sh.location_type != 'warehouse'"}
     GROUP BY sh.id, sh.name
     ORDER BY pending DESC
   `, shopId ? [shopId] : []);
