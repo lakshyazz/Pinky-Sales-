@@ -20,9 +20,7 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.2.0",
-    "node-cron": "^4.6.0",
     "pg": "^8.21.0",
-    "resend": "^6.26.0",
     "sharp": "^0.35.3"
   }
 }
