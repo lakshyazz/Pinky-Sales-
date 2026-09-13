@@ -900,6 +900,8 @@ input::-webkit-strong-password-auto-fill-button {
 .space {
   display: grid;
   gap: 22px;
+  align-content: start;
+  justify-content: start;
 }
 
 .stats-grid {

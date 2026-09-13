@@ -2366,6 +2366,7 @@ function PageWrapper({ children, activeKey }) {
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -12 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
+      className="w-full flex flex-col justify-start items-stretch"
     >
       {children}
     </motion.div>
@@ -7582,9 +7583,9 @@ function App() {
 
           {active === 'sales' && (
             <PageWrapper activeKey="sales" key="sales">
-              <section className="space">
+              <section className="space flex flex-col justify-start items-stretch gap-4 w-full">
                 {role === 'superadmin' && !shopId && <div className="loading">Select Warehouse or a branch from the location filter to create a sale. All-location sales remain visible below.</div>}
-                <div className="panel p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs mb-4">
+                <div className="panel p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs">
                   <div className="flex items-center justify-between mb-3">
                     <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
                       {data.shops.find((location) => String(location.id) === String(shopId))?.location_type === 'warehouse' ? 'Create Warehouse sale' : 'Create sale'}
@@ -7627,36 +7628,31 @@ function App() {
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox"><Search size={18} /><input placeholder="Filter by customer, model, category, shop, or payment mode" value={salesFilters.search} onChange={(event) => setSalesFilters({ ...salesFilters, search: event.target.value })} /></div>
                   <input type="date" value={salesFilters.date} onChange={(event) => setSalesFilters({ ...salesFilters, date: event.target.value })} />
-                  <button
-                    type="button"
-                    onClick={() => openSalesReturnModal()}
-                    className="px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 shrink-0"
-                    title="Initiate a Sales Return and issue a Credit Note"
-                  >
-                    <RotateCcw size={14} className="text-amber-700" />
-                    <span>Sales Return / Credit Note</span>
-                  </button>
-                  {role === 'superadmin' && <span className="status-badge">All-location history</span>}
-                  {pageLoading.sales && <span className="status-badge due">Loading</span>}
-                  <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    <button
+                      type="button"
+                      onClick={() => openSalesReturnModal()}
+                      className="px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300 shrink-0"
+                      title="Initiate a Sales Return and issue a Credit Note"
+                    >
+                      <RotateCcw size={14} className="text-amber-700" />
+                      <span>Sales Return / Credit Note</span>
+                    </button>
+                    {role === 'superadmin' && <span className="status-badge">All-location history</span>}
+                    {pageLoading.sales && <span className="status-badge due">Loading</span>}
+                    <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
+                  </div>
                 </div>
                 {customerSalesGroups.length ? (
-                  <motion.div 
-                    variants={listVariants}
-                    initial="hidden"
-                    whileInView="visible"
-                    viewport={{ once: true, margin: "-10px" }}
-                    className="space-y-3.5"
-                  >
+                  <div className="flex flex-col gap-4 justify-start items-stretch w-full">
                     {customerSalesGroups.map((group) => {
                       const groupKey = String(group.customer_id || group.customer_name);
                       const isExpanded = expandedSaleId === groupKey;
 
                       return (
-                        <motion.div 
-                          variants={itemVariants} 
+                        <div 
                           key={groupKey}
-                          className={`bg-white border transition-all rounded-2xl p-4 shadow-2xs ${
+                          className={`bg-white border transition-all rounded-2xl p-4 shadow-2xs w-full ${
                             isExpanded ? 'border-teal-500/80 ring-2 ring-teal-500/10' : 'border-slate-200/80 hover:border-slate-300'
                           }`}
                         >
@@ -7780,7 +7776,7 @@ function App() {
                                 </div>
                               )}
 
-                              <div className="space-y-3">
+                              <div className="flex flex-col gap-3 justify-start items-stretch w-full">
                                 {group.invoices.map((sale) => {
                                   const saleItems = (Array.isArray(sale.items) && sale.items.length > 0)
                                     ? sale.items
@@ -7916,10 +7912,10 @@ function App() {
                               </div>
                             </div>
                           )}
-                        </motion.div>
+                        </div>
                       );
                     })}
-                  </motion.div>
+                  </div>
                 ) : (
                   <Empty title="No sales records found" />
                 )}
