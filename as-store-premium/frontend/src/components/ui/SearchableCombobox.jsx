@@ -24,14 +24,15 @@ function SearchableCombobox({
   const listRef = useRef(null);
   const deferredSearch = useDeferredValue(search);
 
-  // Normalize options array into [{ id, name, keywords, brand, category, quality, model, image_url, stock, coloursCount, price }]
+  // Normalize options array and pre-compute search tokens once per options change
   const normalizedOptions = useMemo(() => {
     return options
       .map((opt) => {
+        let item = null;
         if (Array.isArray(opt)) {
           const [id, name, extra] = opt;
           if (id === '' || id === null || id === undefined) return null;
-          return { 
+          item = { 
             id, 
             name: String(name || id),
             keywords: typeof extra === 'string' ? extra : (extra?.keywords || ''),
@@ -41,9 +42,8 @@ function SearchableCombobox({
             stock: extra?.stock,
             coloursCount: extra?.coloursCount,
           };
-        }
-        if (opt && typeof opt === 'object') {
-          return {
+        } else if (opt && typeof opt === 'object') {
+          item = {
             id: opt.id ?? opt.name ?? opt.value,
             name: String(opt.name ?? opt.label ?? opt.id ?? ''),
             keywords: opt.keywords ?? opt.searchableText ?? '',
@@ -57,12 +57,24 @@ function SearchableCombobox({
             retailPrice: opt.retailPrice,
             wholesalePrice: opt.wholesalePrice,
           };
-        }
-        if (typeof opt === 'string' || typeof opt === 'number') {
+        } else if (typeof opt === 'string' || typeof opt === 'number') {
           if (opt === '') return null;
-          return { id: opt, name: String(opt) };
+          item = { id: opt, name: String(opt) };
         }
-        return null;
+        if (!item) return null;
+
+        // Pre-build search strings once — NOT on every keystroke!
+        const searchStr = [
+          item.name,
+          item.keywords,
+          item.brand,
+          item.category,
+          item.quality,
+          item.model,
+        ].filter(Boolean).join(' ').toLowerCase();
+        item._searchStr = searchStr;
+        item._cleanStr = searchStr.replace(/[^a-z0-9]/g, '');
+        return item;
       })
       .filter(Boolean);
   }, [options]);
@@ -73,44 +85,46 @@ function SearchableCombobox({
     return normalizedOptions.find((opt) => String(opt.id) === String(value)) || null;
   }, [normalizedOptions, value]);
 
-  // Multi-field normalized case-insensitive search filter - only computed when isOpen is true
+  // Multi-field normalized case-insensitive search filter - high performance zero-allocation loop
   const filteredOptions = useMemo(() => {
     if (!isOpen) return [];
     const rawSearch = deferredSearch.trim().toLowerCase();
     if (!rawSearch) return normalizedOptions;
 
-    const normalize = (str = '') => String(str).toLowerCase().replace(/[^a-z0-9]/g, '');
-    const cleanQuery = normalize(rawSearch);
+    const cleanQuery = rawSearch.replace(/[^a-z0-9]/g, '');
     const terms = rawSearch.split(/\s+/).filter(Boolean);
+    const cleanTerms = terms.map((t) => t.replace(/[^a-z0-9]/g, '')).filter(Boolean);
 
-    return normalizedOptions.filter((opt) => {
-      const fieldsToSearch = [
-        opt.name,
-        opt.keywords,
-        opt.brand,
-        opt.category,
-        opt.quality,
-        opt.model,
-      ].filter(Boolean).join(' ').toLowerCase();
+    const matches = [];
+    const len = normalizedOptions.length;
+    for (let i = 0; i < len; i++) {
+      const opt = normalizedOptions[i];
+      const s = opt._searchStr || '';
+      const c = opt._cleanStr || '';
 
-      // 1. Direct multi-term match (e.g., "viv v27", "v27 oled")
-      const termMatch = terms.every((term) => fieldsToSearch.includes(term));
-      if (termMatch) return true;
-
-      // 2. Full query substring match
-      if (fieldsToSearch.includes(rawSearch)) return true;
-
-      // 3. Normalized alphanumeric match (e.g. "v 27" -> "v27", "ip 7g" -> "ip7g", "v27" in "vivv27full")
-      if (cleanQuery) {
-        const normalizedFields = normalize(fieldsToSearch);
-        if (normalizedFields.includes(cleanQuery)) return true;
-
-        const cleanTerms = terms.map(normalize).filter(Boolean);
-        if (cleanTerms.length > 1 && cleanTerms.every((ct) => normalizedFields.includes(ct))) return true;
+      // 1. Direct multi-term match (fastest)
+      if (terms.every((term) => s.includes(term))) {
+        matches.push(opt);
+        continue;
       }
 
-      return false;
-    });
+      // 2. Full query substring match
+      if (s.includes(rawSearch)) {
+        matches.push(opt);
+        continue;
+      }
+
+      // 3. Clean alphanumeric match (e.g. "v 27" matches "v27")
+      if (cleanQuery && c.includes(cleanQuery)) {
+        matches.push(opt);
+        continue;
+      }
+
+      if (cleanTerms.length > 1 && cleanTerms.every((ct) => c.includes(ct))) {
+        matches.push(opt);
+      }
+    }
+    return matches;
   }, [normalizedOptions, deferredSearch, isOpen]);
 
   // Render top 50 items to keep DOM small and fast

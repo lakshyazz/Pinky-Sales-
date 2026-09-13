@@ -229,10 +229,12 @@ const appendSearchFilter = (where, params, search, columns) => {
     const termClean = term.replace(/[\s\-_/\\+]/g, '').toLowerCase();
     const clauses = [];
     columns.forEach((column) => {
-      clauses.push(`${column} ILIKE ?`);
+      // Strip outer COALESCE around table columns so PostgreSQL GIN trigram indexes can be used
+      const directCol = column.replace(/^COALESCE\((p\.[a-z0-9_]+),\s*''\)$/i, '$1');
+      clauses.push(`${directCol} ILIKE ?`);
       params.push(`%${term}%`);
       if (termClean && termClean !== term.toLowerCase() && termClean.length >= 2) {
-        clauses.push(`REGEXP_REPLACE(LOWER(${column}), '[\\s\\-_/\\\\+]', '', 'g') LIKE ?`);
+        clauses.push(`REGEXP_REPLACE(LOWER(${directCol}), '[\\s\\-_/\\\\+]', '', 'g') LIKE ?`);
         params.push(`%${termClean}%`);
       }
     });
@@ -539,24 +541,15 @@ const getProductsForRole = async (role, query = {}, user = null) => {
 
   appendSearchFilter(where, params, query.search, [
     'p.name',
-    "COALESCE(p.short_name, '')",
-    "COALESCE(p.full_model_list, '')",
-    "COALESCE(p.brand, '')",
-    "COALESCE(p.part_category, '')",
-    "COALESCE(p.quality_variant, '')",
-    "COALESCE(pc.name, '')",
-    "COALESCE(pv.name, '')",
-    "COALESCE(p.model, '')",
-    "COALESCE(p.description, '')",
-    "COALESCE(array_to_string(p.colours, ','), '')",
-    "COALESCE(mb.name, '')",
-    "COALESCE(b.name, '')",
-    "COALESCE(s.name, '')",
-    "CAST(COALESCE(p.retail_price, p.sale_price, 0) AS TEXT)",
-    "CAST(COALESCE(p.sale_price, 0) AS TEXT)",
-    "CAST(COALESCE(p.wholesale_price, 0) AS TEXT)",
-    "CAST(COALESCE(p.purchase_price, 0) AS TEXT)",
-    "CAST(COALESCE(p.official_price, 0) AS TEXT)",
+    'p.short_name',
+    'p.full_model_list',
+    'p.brand',
+    'p.category',
+    'p.part_category',
+    'p.quality_variant',
+    'p.model',
+    'mb.name',
+    'b.name',
   ]);
   
   if (hasQueryValue(query.brand)) {
@@ -1665,14 +1658,13 @@ app.get(['/api/products', '/products'], authenticateToken, async (req, res) => {
     if (search) {
       appendSearchFilter(where, params, search, [
         'p.name',
-        "COALESCE(p.short_name, '')",
-        "COALESCE(p.full_model_list, '')",
-        "COALESCE(p.brand, '')",
-        "COALESCE(p.category, '')",
-        "COALESCE(p.part_category, '')",
-        "COALESCE(p.quality_variant, '')",
-        "COALESCE(p.model, '')",
-        "COALESCE(p.description, '')",
+        'p.short_name',
+        'p.full_model_list',
+        'p.brand',
+        'p.category',
+        'p.part_category',
+        'p.quality_variant',
+        'p.model',
       ]);
     }
 
@@ -4184,7 +4176,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
     const { customer_id, paid_amount, notes, payment_mode = 'credit', applied_credit_amount = 0 } = req.body;
     const items = Array.isArray(req.body.items) && req.body.items.length
       ? req.body.items
-      : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, selling_price: req.body.selling_price || req.body.unit_price, price_type: req.body.price_type || 'retail' }];
+      : [{ product_id: req.body.product_id, quantity: req.body.quantity ?? 1, batch_id: req.body.batch_id, selling_price: req.body.selling_price || req.body.unit_price, price_type: req.body.price_type || 'wholesale' }];
     if (!customer_id) {
       return res.status(400).json({ error: 'Please select a customer.' });
     }
@@ -4554,7 +4546,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           thisSalePending > 0 ? 'open' : 'paid', 
           req.user.id, 
           payment_mode, 
-          primaryProduct.price_type || 'retail', 
+          primaryProduct.price_type || 'wholesale', 
           primaryProduct.product?.manufacturing_brand_id || null,
           originalTotal,
           discountAmount,
@@ -4613,7 +4605,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
             item.saleQuantity,
             item.unitPrice,
             item.saleTotal,
-            item.price_type || 'retail',
+            item.price_type || 'wholesale',
             itemColourStr,
             customProductName,
             customBrandName
@@ -5146,7 +5138,7 @@ const handleUpdateSale = async (req, res) => {
               item.saleQuantity,
               item.unitPrice,
               item.saleTotal,
-              item.price_type || 'retail',
+              item.price_type || 'wholesale',
               itemColourStr,
               customProductName,
               customBrandName

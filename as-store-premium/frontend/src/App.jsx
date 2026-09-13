@@ -62,6 +62,7 @@ const SalesReturnModal = React.lazy(() => import('./components/modals/SalesRetur
 const EditSaleModal = React.lazy(() => import('./components/modals/EditSaleModal'));
 const ShareInvoiceModal = React.lazy(() => import('./components/modals/ShareInvoiceModal'));
 const ProductDetailModal = React.lazy(() => import('./components/models/ProductDetailModal'));
+const AddToolSpareModal = React.lazy(() => import('./components/modals/AddToolSpareModal'));
 const ProductDetailPage = React.lazy(() => import('./components/models/ProductDetailPage'));
 // Route-level lazy imports — each page loads its own JS chunk on first visit
 const ModelsPage = React.lazy(() => import('./components/models/ModelsPage'));
@@ -796,7 +797,7 @@ const initialForms = {
     notes: '',
     previous_balance: 0,
     applied_credit_amount: 0,
-    items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '' }],
+    items: [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }],
     expenses: [],
   },
   payment: { sale_id: '', amount: '', note: '' },
@@ -1129,13 +1130,13 @@ const SaleItemRow = React.memo(function SaleItemRow({
         <div className="w-[115px]">
           <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price Tier</label>
           <select
-            value={item.price_type || 'retail'}
+            value={item.price_type || 'wholesale'}
             onChange={(e) => updateSaleItemPriceType(idx, e.target.value)}
             disabled={!item.product_id}
             className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer disabled:opacity-50"
           >
-            <option value="retail">Retail</option>
             <option value="wholesale">Wholesale</option>
+            <option value="retail">Retail</option>
           </select>
         </div>
 
@@ -2475,6 +2476,65 @@ function App() {
     setSalesReturnModalOpen(true);
   };
 
+  const [addToolSpareModalOpen, setAddToolSpareModalOpen] = useState(false);
+  const [addToolSpareCategory, setAddToolSpareCategory] = useState('tools');
+
+  const openAddToolSpareModal = (cat = 'tools') => {
+    setAddToolSpareCategory(cat === 'spares' ? 'spares' : 'tools');
+    setAddToolSpareModalOpen(true);
+  };
+
+  const handleToolSpareSuccess = async (createdProduct, openingStockQty = 0) => {
+    if (!createdProduct) return;
+    setData((prev) => {
+      const nextProducts = [
+        createdProduct,
+        ...(prev.products || []).filter((p) => String(p.id) !== String(createdProduct.id)),
+      ];
+      let nextStock = prev.stock || [];
+      if (openingStockQty > 0) {
+        const existingStockIdx = nextStock.findIndex((s) => String(s.product_id || s.id) === String(createdProduct.id));
+        if (existingStockIdx >= 0) {
+          nextStock = nextStock.map((s, idx) =>
+            idx === existingStockIdx ? { ...s, quantity: (Number(s.quantity) || 0) + openingStockQty } : s
+          );
+        } else {
+          nextStock = [
+            {
+              product_id: createdProduct.id,
+              quantity: openingStockQty,
+              purchase_price: createdProduct.purchase_price,
+              wholesale_price: createdProduct.wholesale_price,
+              sale_price: createdProduct.sale_price,
+              retail_price: createdProduct.retail_price,
+              name: createdProduct.name,
+              short_name: createdProduct.short_name,
+              brand: createdProduct.brand,
+              category: createdProduct.category,
+              part_category: createdProduct.part_category,
+            },
+            ...nextStock,
+          ];
+        }
+      }
+      return {
+        ...prev,
+        products: nextProducts,
+        stock: nextStock,
+      };
+    });
+
+    try {
+      await Promise.all([
+        loadCore(),
+        loadProductPage({ tab: active === 'tools' || active === 'spares' ? active : 'prices', page: 1 }),
+        active === 'stock' ? loadTab('stock', shopId) : Promise.resolve(),
+      ]);
+    } catch (err) {
+      console.warn('[handleToolSpareSuccess reload error]', err);
+    }
+  };
+
   const handleQuickAddCustomerSubmit = async (e) => {
     if (e) e.preventDefault();
     if (!quickCustomerForm.name.trim()) return showToast('Please enter customer name');
@@ -3266,7 +3326,8 @@ function App() {
   const loadProductPage = async ({ tab = active, page = productPager.page, search = productSearchForTab(tab), currentShop = shopId } = {}) => {
     if (!token || role === 'customer') return;
     const requestId = ++productLoadSequenceRef.current;
-    setProductPageLoading(true);
+    // Don't flash full-page loading spinner when typing in search to keep UI responsive
+    if (!search) setProductPageLoading(true);
     try {
       const params = new URLSearchParams({
         page: String(page),
@@ -3578,7 +3639,11 @@ function App() {
 
   useEffect(() => {
     if (!session || !authReady || role === 'customer' || !['models', 'prices'].includes(active)) return;
-    loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch, currentShop: shopId });
+    // Debounce search query by 350ms to eliminate redundant network roundtrips while typing
+    const timer = setTimeout(() => {
+      loadProductPage({ tab: active, page: productPager.page, search: activeProductSearch, currentShop: shopId });
+    }, activeProductSearch ? 350 : 0);
+    return () => clearTimeout(timer);
   }, [active, activeProductSearch, selectedShop, productPager.page, productPager.limit, session?.token, authReady]);
 
   // Synchronize stock status filter from URL query params (e.g. /stock?filter=low_stock or ?status=out_of_stock)
@@ -4076,17 +4141,21 @@ function App() {
     const stockItem = data.stock?.find((item) => String(item.product_id || item.id) === String(productId));
     const product = data.products?.find((item) => String(item.id || item.product_id) === String(productId));
     const catalogItem = data.catalog?.find((item) => String(item.id || item.product_id) === String(productId));
-    if (priceType === 'wholesale') return Number(stockItem?.wholesale_price || product?.wholesale_price || catalogItem?.wholesale_price || 0);
+    if (priceType === 'wholesale') {
+      const w = Number(stockItem?.wholesale_price || product?.wholesale_price || catalogItem?.wholesale_price || 0);
+      if (w > 0) return w;
+      return Number(stockItem?.sale_price || product?.sale_price || catalogItem?.sale_price || product?.retail_price || 0);
+    }
     if (priceType === 'retail') return Number(stockItem?.sale_price || product?.sale_price || catalogItem?.sale_price || product?.retail_price || 0);
     return 0;
   };
 
   const sellingPriceOptions = (productId) => {
-    const retail = sellingPriceFor(productId, 'retail');
     const wholesale = sellingPriceFor(productId, 'wholesale');
+    const retail = sellingPriceFor(productId, 'retail');
     return [
-      ['retail', `Retail - ${retail > 0 ? priceLabel(retail) : 'Price not set'}`],
       ['wholesale', `Wholesale - ${wholesale > 0 ? priceLabel(wholesale) : 'Price not set'}`],
+      ['retail', `Retail - ${retail > 0 ? priceLabel(retail) : 'Price not set'}`],
     ];
   };
 
@@ -4185,11 +4254,17 @@ function App() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [data.products, data.catalog, data.stock, data.reference]);
 
-  const getProductDefaultPrice = useCallback((productId) => {
+  const getProductDefaultPrice = useCallback((productId, priceType = 'wholesale') => {
     if (!productId) return '';
+    const unitPrice = sellingPriceFor(productId, priceType);
+    if (unitPrice > 0) return String(unitPrice);
     const allProducts = [...(data.products || []), ...(data.catalog || []), ...(data.stock || [])];
     const match = allProducts.find((p) => String(p.product_id || p.id) === String(productId));
     if (!match) return '';
+    if (priceType === 'wholesale') {
+      const price = Number(match.wholesale_price || match.sale_price || match.retail_price || 0);
+      return price > 0 ? String(price) : '';
+    }
     const price = Number(match.sale_price || match.retail_price || match.wholesale_price || 0);
     return price > 0 ? String(price) : '';
   }, [data.products, data.catalog, data.stock]);
@@ -4211,8 +4286,9 @@ function App() {
   };
 
   const updateSaleItemProduct = (index, productId) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '', color_breakdown: [] }])];
-    const defaultPrice = getProductDefaultPrice(productId);
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [] }])];
+    const priceType = currentItems[index]?.price_type || 'wholesale';
+    const defaultPrice = getProductDefaultPrice(productId, priceType);
     const existingQty = currentItems[index]?.quantity;
     const qty = (existingQty !== undefined && existingQty !== null && existingQty !== 0) ? existingQty : '';
     const numericQty = Number(qty || 0);
@@ -4239,7 +4315,7 @@ function App() {
     currentItems[index] = {
       product_id: productId,
       selling_price: defaultPrice,
-      price_type: 'retail',
+      price_type: priceType,
       quantity: qty,
       total_amount: total,
       color_breakdown: initialBreakdown,
@@ -4262,7 +4338,7 @@ function App() {
   };
 
   const updateSaleItemPriceType = (index, priceType) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }])];
     const item = currentItems[index] || {};
     const unitPrice = sellingPriceFor(item.product_id, priceType);
     const quantity = Number(item.quantity || 0);
@@ -4281,7 +4357,7 @@ function App() {
   };
 
   const updateSaleItemSellingPrice = (index, priceVal) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }])];
     const item = currentItems[index] || {};
     const qty = Number(item.quantity || 0);
     const numericPrice = priceVal === '' ? '' : Number(priceVal);
@@ -4306,7 +4382,7 @@ function App() {
   };
 
   const updateSaleItemQuantity = (index, quantityVal) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '' }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }])];
     const item = currentItems[index] || {};
     const numericPrice = Number(item.selling_price || 0);
     const numericQty = quantityVal === '' ? '' : Number(quantityVal);
@@ -4444,8 +4520,8 @@ function App() {
   };
 
   const addSaleItem = () => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' }])];
-    currentItems.push({ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' });
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' }])];
+    currentItems.push({ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' });
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -4476,9 +4552,9 @@ function App() {
   };
 
   const removeSaleItem = (index) => {
-    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '', color_breakdown: [] }])];
+    const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [] }])];
     if (currentItems.length <= 1) {
-      currentItems[0] = { product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' };
+      currentItems[0] = { product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' };
     } else {
       currentItems.splice(index, 1);
     }
@@ -4574,7 +4650,7 @@ function App() {
         due_date: calculateDueDate(getTodayIso(), 7),
         previous_balance: '',
         applied_credit_amount: 0,
-        items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '' }],
+        items: [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }],
         expenses: [],
         editing_sale_id: null,
         editing_invoice_number: null,
@@ -4775,7 +4851,7 @@ function App() {
           due_date: calculateDueDate(getTodayIso(), 7),
           previous_balance: 0,
           applied_credit_amount: 0,
-          items: [{ product_id: '', selling_price: '', price_type: 'retail', quantity: '', total_amount: '' }],
+          items: [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }],
           expenses: [],
           editing_sale_id: null,
           editing_invoice_number: null,
@@ -6223,60 +6299,81 @@ function App() {
   const matchesProductSearch = (product, searchQuery) => {
     if (!searchQuery || !searchQuery.trim()) return true;
 
-    // Split query into lowercase individual search terms
-    const tokens = searchQuery.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    // Cache the haystack on the product object so we do NOT rebuild arrays/strings on every keystroke
+    if (!product._searchHaystack) {
+      const raw = [
+        product.name,
+        product.short_name,
+        product.product_name,
+        product.model,
+        product.title,
+        product.brand,
+        product.brand_name,
+        product.company_brand_name,
+        product.mfg_brand,
+        product.mfg_brand_name,
+        product.manufacturing_brand,
+        product.manufacturing_brand_name,
+        product.manufacturer,
+        product.category,
+        product.part_category,
+        product.sub_category,
+        product.quality,
+        product.quality_variant,
+        product.display_type,
+        product.compatible_models,
+        product.full_model_list,
+        product.description,
+        Array.isArray(product.colours) ? product.colours.join(' ') : (product.colours || ''),
+        String(product.cost_price || product.cost || product.purchase_price || product.avg_cost_price || ''),
+        String(product.wholesale_price || product.wholesale || ''),
+        String(product.sale_price || product.price || product.retail_price || product.official_price || '')
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      product._searchHaystack = raw;
+      product._cleanHaystack = raw.replace(/[^a-z0-9]/g, '');
+    }
 
-    // Build a searchable string combining all attributes
-    const searchableHaystack = [
-      product.name,
-      product.short_name,
-      product.product_name,
-      product.model,
-      product.title,
-      product.brand,
-      product.brand_name,
-      product.company_brand_name,
-      product.mfg_brand,
-      product.mfg_brand_name,
-      product.manufacturing_brand,
-      product.manufacturing_brand_name,
-      product.manufacturer,
-      product.category,
-      product.part_category,
-      product.sub_category,
-      product.quality,
-      product.quality_variant,
-      product.display_type,
-      product.compatible_models,
-      product.full_model_list,
-      product.description,
-      Array.isArray(product.colours) ? product.colours.join(' ') : (product.colours || ''),
-      String(product.cost_price || product.cost || product.purchase_price || product.avg_cost_price || ''),
-      String(product.wholesale_price || product.wholesale || ''),
-      String(product.sale_price || product.price || product.retail_price || product.official_price || '')
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
+    const rawSearch = searchQuery.toLowerCase().trim();
+    const tokens = rawSearch.split(/\s+/).filter(Boolean);
+    const cleanSearch = rawSearch.replace(/[^a-z0-9]/g, '');
 
-    // Match if EVERY typed token is present in the haystack
-    return tokens.every((token) => searchableHaystack.includes(token));
+    // 1. Match if EVERY typed token is present in the haystack
+    if (tokens.every((token) => product._searchHaystack.includes(token))) return true;
+
+    // 2. Normalized alphanumeric match (e.g. "v 27" matches "v27")
+    if (cleanSearch && product._cleanHaystack.includes(cleanSearch)) return true;
+
+    return false;
   };
 
   const modelItems = useMemo(() => {
-    return role === 'customer' 
-      ? data.catalog.filter((item) => matchesProductSearch(item, deferredModelSearch)) 
-      : (deferredModelSearch 
-          ? productPageItems.filter((item) => matchesProductSearch(item, deferredModelSearch))
-          : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+    const fullPool = role === 'customer'
+      ? (data.catalog || [])
+      : ((data.products && data.products.length >= (productPageItems?.length || 0)) ? data.products : (productPageItems || []));
+
+    if (!deferredModelSearch || !deferredModelSearch.trim()) {
+      return role === 'customer'
+        ? (data.catalog || [])
+        : (productPageItems?.length ? productPageItems : (data.products || []));
+    }
+    // Filter against the full pool in memory instantly (0ms latency)
+    return fullPool.filter((item) => matchesProductSearch(item, deferredModelSearch));
   }, [role, data.catalog, data.products, productPageItems, deferredModelSearch]);
 
   const priceItems = useMemo(() => {
-    return role === 'customer' 
-      ? data.catalog.filter((item) => matchesProductSearch(item, deferredPriceSearch)) 
-      : (deferredPriceSearch 
-          ? productPageItems.filter((item) => matchesProductSearch(item, deferredPriceSearch))
-          : (data.products?.length > (productPageItems?.length || 0) ? data.products : productPageItems));
+    const fullPool = role === 'customer'
+      ? (data.catalog || [])
+      : ((data.products && data.products.length >= (productPageItems?.length || 0)) ? data.products : (productPageItems || []));
+
+    if (!deferredPriceSearch || !deferredPriceSearch.trim()) {
+      return role === 'customer'
+        ? (data.catalog || [])
+        : (productPageItems?.length ? productPageItems : (data.products || []));
+    }
+    return fullPool.filter((item) => matchesProductSearch(item, deferredPriceSearch));
   }, [role, data.catalog, data.products, productPageItems, deferredPriceSearch]);
 
   const allCategoryPool = role === 'customer' ? data.catalog : (data.products || []);
@@ -7117,6 +7214,8 @@ function App() {
                 productName={productName}
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
+                categoryType="tools"
+                onOpenAddToolSpare={openAddToolSpareModal}
               />
             </PageWrapper>
           )}
@@ -7145,6 +7244,8 @@ function App() {
                 productName={productName}
                 fullModelList={fullModelList}
                 priceLabel={priceLabel}
+                categoryType="spares"
+                onOpenAddToolSpare={openAddToolSpareModal}
               />
             </PageWrapper>
           )}
@@ -7254,6 +7355,7 @@ function App() {
                 api={authedFetch}
                 setGlobalToast={showToast}
                 loadCore={loadCore}
+                onOpenAddToolSpare={openAddToolSpareModal}
               />
             </PageWrapper>
           )}
@@ -8932,6 +9034,19 @@ function App() {
             showToast={showToast}
             currency={currency}
             formatDateDMY={formatDateDMY}
+          />
+        </React.Suspense>
+        <React.Suspense fallback={null}>
+          <AddToolSpareModal
+            isOpen={addToolSpareModalOpen}
+            onClose={() => setAddToolSpareModalOpen(false)}
+            initialCategory={addToolSpareCategory}
+            suppliers={data.reference?.suppliers || []}
+            brands={data.reference?.brands || []}
+            shopId={shopId}
+            onSuccess={handleToolSpareSuccess}
+            showToast={showToast}
+            authedFetch={authedFetch}
           />
         </React.Suspense>
         <ConfirmationDialog

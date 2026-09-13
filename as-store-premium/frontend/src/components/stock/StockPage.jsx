@@ -38,7 +38,8 @@ import {
   Camera,
   Volume2,
   Store,
-  PackageCheck
+  PackageCheck,
+  Wrench,
 } from 'lucide-react';
 import Pagination from '../ui/Pagination';
 import SearchFilter from '../shared/SearchFilter';
@@ -557,6 +558,7 @@ export default function StockPage({
   api,
   setGlobalToast,
   loadCore,
+  onOpenAddToolSpare,
 }) {
   // Dual-view mode: 'table' (dense grid) or 'cards' (compact cards)
   const [viewMode, setViewMode] = useState(() => {
@@ -1003,6 +1005,18 @@ export default function StockPage({
               <Plus size={14} />
               <span>{isAddProductOpen ? 'Hide Product Form' : 'Add Product'}</span>
             </button>
+
+            {typeof onOpenAddToolSpare === 'function' && role !== 'customer' && (
+              <button
+                type="button"
+                onClick={() => onOpenAddToolSpare('tools')}
+                className="px-3.5 py-2.5 rounded-xl text-xs font-extrabold bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-95"
+                title="Add Tools or Spares with simplified fields (no mobile display forms)"
+              >
+                <Wrench size={14} className="text-emerald-700" />
+                <span>Add Tool / Spare</span>
+              </button>
+            )}
 
             <button
               type="button"
