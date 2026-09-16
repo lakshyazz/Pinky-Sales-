@@ -80,6 +80,7 @@ async function runTests() {
 
   let testCustomer = null;
   let customer3Id = null;
+  let customer4Id = null;
   let testProduct = null;
   let shopId = 1;
 
@@ -506,8 +507,42 @@ async function runTests() {
     await assertCustomerLedgerAndBalanceReconcile(customer3Id);
     console.log('✔ Test 10 Passed: Standing invariant check verified dynamic customer balance and ledger running balance match 100%.');
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST 11: Credit Notes Party Ledger Verification & Accurate Running Balance
+    // ──────────────────────────────────────────────────────────────────────────
+    console.log('\n── TEST GROUP 11: Credit Notes Verification in Customer Party Ledger ──');
+    const cust4 = await runQuery(
+      `INSERT INTO customers (name, mobile, address, opening_balance, advance_balance, shop_id)
+       VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+      [`Test CN Customer ${Date.now()}`, `98765${Math.floor(10000 + Math.random() * 90000)}`, 'Ledger Test Street', 50000.00, 0.00, shopId]
+    );
+    customer4Id = cust4.id;
+
+    // Issue a credit note of ₹15,000 for this customer
+    const seqRow = await getRecord("SELECT nextval('credit_note_seq') AS seq");
+    const testCnNum = `CN-${String(Number(seqRow.seq)).padStart(6, '0')}`;
+    await runQuery(
+      `INSERT INTO credit_notes (
+        credit_note_number, shop_id, customer_id, amount, used_amount, balance_amount, reason, status, return_date, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_DATE, 1)`,
+      [testCnNum, shopId, customer4Id, 15000.00, 0.00, 15000.00, 'Display defect return', 'active']
+    );
+
+    const ledgerCust4 = await getCustomerLedger(customer4Id, shopId);
+    const cnEntry = ledgerCust4.rows.find(r => r.ref_no === testCnNum);
+
+    assert.ok(cnEntry, `Credit note ${testCnNum} must be present in customer ledger rows`);
+    assert.strictEqual(cnEntry.entry_type, 'credit_note', 'Entry type must strictly be credit_note');
+    assert.strictEqual(Number(cnEntry.credit), 15000.00, 'Credit amount must match ₹15,000.00');
+    assert.strictEqual(Number(cnEntry.debit), 0.00, 'Debit amount must strictly be ₹0.00');
+    assert.ok(cnEntry.description.includes('Display defect return'), 'Description must include return reason');
+    assert.strictEqual(Number(ledgerCust4.closing_balance), 35000.00, 'Closing balance must be ₹35,000.00 (50,000 OB - 15,000 CN)');
+
+    console.log(`   [Credit Note Verification]: Found ${cnEntry.ref_no} in ledger with Cr ₹${cnEntry.credit}, Closing Bal: ₹${ledgerCust4.closing_balance}`);
+    console.log('✔ Test 11 Passed: Credit Notes appear in customer party ledger with correct badge type, credit amount, and running balance.');
+
     console.log('\n================================================================');
-    console.log('   ALL 10 FIFO LEDGER & RECONCILIATION TEST GROUPS PASSED!       ');
+    console.log('   ALL 11 FIFO LEDGER & RECONCILIATION TEST GROUPS PASSED!       ');
     console.log('================================================================\n');
 
   } catch (err) {
@@ -527,6 +562,10 @@ async function runTests() {
         await runQuery('DELETE FROM payments WHERE customer_id = ?', [customer3Id]);
         await runQuery('DELETE FROM sales WHERE customer_id = ?', [customer3Id]);
         await runQuery('DELETE FROM customers WHERE id = ?', [customer3Id]);
+      }
+      if (customer4Id) {
+        await runQuery('DELETE FROM credit_notes WHERE customer_id = ?', [customer4Id]);
+        await runQuery('DELETE FROM customers WHERE id = ?', [customer4Id]);
       }
     } catch {}
     await pool.end();
