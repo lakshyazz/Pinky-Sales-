@@ -4036,8 +4036,8 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
             [newPaid, newPending, newPending <= 0 ? 'paid' : 'open', originalSale.id]
           );
           await tx.runQuery(
-            'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-            [originalSale.id, alloc, returnDateStr, 'credit_note', `Deducted via Sales Return (${creditNoteNumber})`]
+            'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note, customer_id, shop_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [originalSale.id, alloc, returnDateStr, 'credit_note', `Deducted via Sales Return (${creditNoteNumber})`, customer_id, shopId]
           );
           remainingReturnToApply = money(remainingReturnToApply - alloc);
           usedAmount = money(usedAmount + alloc);
@@ -4061,8 +4061,8 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
               [newPaid, newPending, newPending <= 0 ? 'paid' : 'open', os.id]
             );
             await tx.runQuery(
-              'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note) VALUES (?, ?, ?, ?, ?)',
-              [os.id, alloc, returnDateStr, 'credit_note', `Deducted via Sales Return (${creditNoteNumber})`]
+              'INSERT INTO payments (sale_id, amount, payment_date, payment_mode, note, customer_id, shop_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+              [os.id, alloc, returnDateStr, 'credit_note', `Deducted via Sales Return (${creditNoteNumber})`, customer_id, shopId]
             );
             remainingReturnToApply = money(remainingReturnToApply - alloc);
             usedAmount = money(usedAmount + alloc);

@@ -22,6 +22,14 @@ function isoDate(d) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
+function toDateKey(d) {
+  if (!d) return '';
+  if (typeof d === 'string') return d.slice(0, 10);
+  if (d instanceof Date) return d.toISOString().slice(0, 10);
+  return String(d).slice(0, 10);
+}
+
+
 // ─── Customer Party Ledger ────────────────────────────────────────────────────
 
 /**
@@ -92,7 +100,7 @@ export async function getCustomerLedger(customerId, shopId, { from, to } = {}) {
 
     processedRows.push({
       id:              r.id,
-      entry_date:      r.entry_date,
+      entry_date:      toDateKey(r.entry_date),
       created_at:      r.created_at,
       ref_no:          r.ref_no,
       entry_type:      r.entry_type,
@@ -113,7 +121,7 @@ export async function getCustomerLedger(customerId, shopId, { from, to } = {}) {
     const filtered = [];
 
     for (const row of processedRows) {
-      const d = row.entry_date;
+      const d = toDateKey(row.entry_date);
       if (fromDate && d < fromDate) {
         preBalance = row.running_balance;
       } else if (toDate && d > toDate) {
@@ -164,7 +172,7 @@ export async function getCustomerLedger(customerId, shopId, { from, to } = {}) {
 async function fetchCustomerLedgerTransactions(customerId, shopId) {
   const shopCondSales = shopId ? 'AND s.shop_id = ?' : '';
   const shopCondPayments = shopId ? 'AND pm.shop_id = ?' : '';
-  const shopCondCn = shopId ? 'AND s.shop_id = ?' : '';
+  const shopCondCn = shopId ? 'AND cn.shop_id = ?' : '';
 
   // 1. Immutable Opening Balance seed row (from ledger_entries or customers)
   const cust = await getRecord(
@@ -260,7 +268,7 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
             COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0')) AS ref_no,
             'sale' AS entry_type,
             COALESCE('Invoice #' || COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0')) || ' (' || p.short_name || ')', 'Invoice #' || COALESCE(s.invoice_number, 'INV-' || LPAD(s.id::text, 6, '0'))) AS description,
-            s.total_amount AS debit_amount,
+            COALESCE(NULLIF(s.current_invoice_total, 0), s.total_amount) AS debit_amount,
             0.00::numeric AS credit_amount
      FROM sales s
      LEFT JOIN products p ON p.id = s.product_id
@@ -297,7 +305,7 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
             pm.unallocated_amount,
             pm.reversed_at
      FROM payments pm
-     WHERE pm.customer_id = ? ${shopCondPayments}`,
+     WHERE pm.customer_id = ? AND COALESCE(pm.payment_mode, '') != 'credit_note' ${shopCondPayments}`,
     paymentParams
   );
 
@@ -390,29 +398,31 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
     }
   }
 
-  // 4. Credit Note Redemptions
+  // 4. Credit Notes
   const cnParams = [customerId];
   if (shopId) cnParams.push(shopId);
 
   const cnRecords = await allRecords(
-    `SELECT cnr.id,
-            cnr.created_at::date AS entry_date,
-            cnr.created_at,
+    `SELECT cn.id,
+            COALESCE(cn.return_date::text, cn.created_at::date::text) AS entry_date,
+            cn.created_at,
             cn.credit_note_number AS ref_no,
             'credit_note' AS entry_type,
-            'Credit Note: ' || cn.credit_note_number AS description,
+            CASE 
+              WHEN cn.reason IS NOT NULL AND TRIM(cn.reason) != ''
+              THEN 'Credit Note #' || cn.credit_note_number || ' (' || TRIM(cn.reason) || ')'
+              ELSE 'Credit Note #' || cn.credit_note_number
+            END AS description,
             0.00::numeric AS debit_amount,
-            cnr.amount AS credit_amount
-     FROM credit_note_redemptions cnr
-     JOIN credit_notes cn ON cn.id = cnr.credit_note_id
-     JOIN sales s ON s.id = cnr.sale_id
-     WHERE cn.customer_id = ? ${shopCondCn}`,
+            cn.amount AS credit_amount
+     FROM credit_notes cn
+     WHERE cn.customer_id = ? AND cn.status != 'cancelled' ${shopCondCn}`,
     cnParams
   );
 
   const cnRows = cnRecords.map(c => ({
     id: c.id,
-    entry_date: c.entry_date,
+    entry_date: toDateKey(c.entry_date),
     created_at: c.created_at,
     ref_no: c.ref_no,
     entry_type: 'credit_note',
@@ -435,9 +445,11 @@ async function fetchCustomerLedgerTransactions(customerId, shopId) {
   ];
 
   allRows.sort((a, b) => {
+    const da = toDateKey(a.entry_date);
+    const db = toDateKey(b.entry_date);
     // 1. Entry date ASC
-    if (a.entry_date < b.entry_date) return -1;
-    if (a.entry_date > b.entry_date) return 1;
+    if (da < db) return -1;
+    if (da > db) return 1;
 
     // 2. Opening balance always precedes any same-day transactions
     if (a.entry_type === 'opening_balance' && b.entry_type !== 'opening_balance') return -1;
