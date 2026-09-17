@@ -791,9 +791,9 @@ const initialForms = {
     is_custom_total: false,
     paid_amount: '0',
     payment_mode: 'credit',
-    invoice_date: getTodayIso(),
+    invoice_date: '',
     payment_terms_days: 7,
-    due_date: calculateDueDate(getTodayIso(), 7),
+    due_date: '',
     notes: '',
     previous_balance: 0,
     applied_credit_amount: 0,
@@ -1630,64 +1630,19 @@ function SalesCreationWorkspace({
             )}
           </div>
 
-          {/* Card 2: Items Purchased Table */}
-          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                <Package size={14} className="text-teal-600" />
-                Items Purchased
-              </span>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                {items.length} {items.length === 1 ? 'item' : 'items'}
-              </span>
-            </div>
-
-            <div className="space-y-2.5">
-              {items.map((item, idx) => (
-                <SaleItemRow
-                  key={item.id || item._key || idx}
-                  item={item}
-                  idx={idx}
-                  itemsLength={items.length}
-                  salesProductOptions={salesProductOptions}
-                  data={data}
-                  getProductAvailableColors={getProductAvailableColors}
-                  updateSaleItemProduct={updateSaleItemProduct}
-                  updateSaleItemCustomName={updateSaleItemCustomName}
-                  updateSaleItemCustomBrand={updateSaleItemCustomBrand}
-                  updateSaleItemPriceType={updateSaleItemPriceType}
-                  updateSaleItemSellingPrice={updateSaleItemSellingPrice}
-                  updateSaleItemQuantity={updateSaleItemQuantity}
-                  toggleSaleItemColor={toggleSaleItemColor}
-                  updateSaleItemSingleColor={updateSaleItemSingleColor}
-                  updateSaleItemColorQuantity={updateSaleItemColorQuantity}
-                  removeSaleItem={removeSaleItem}
-                />
-              ))}
-            </div>
-
-            <div>
-              <button
-                type="button"
-                onClick={addSaleItem}
-                className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
-              >
-                <Plus size={14} /> Add Another Item
-              </button>
-            </div>
-          </div>
-
-          {/* Card 3: Single-Row Invoice & Terms */}
+          {/* Card 2: Single-Row Invoice & Terms */}
           <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-2">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-600 block">
               Invoice Date &amp; Payment Terms
             </span>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Invoice Date</label>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  Invoice Date <span className="text-rose-500">*</span>
+                </label>
                 <input
                   type="date"
-                  value={forms.sale.invoice_date || getTodayIso()}
+                  value={forms.sale.invoice_date || ''}
                   onChange={(e) => updateSaleInvoiceDate(e.target.value)}
                   className="w-full h-10 px-3 text-xs font-semibold bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
                 />
@@ -1742,13 +1697,62 @@ function SalesCreationWorkspace({
                 <div className={`w-full h-10 px-3 flex items-center border rounded-xl text-xs font-bold ${
                   netBalance <= 0 || (netPayable > 0 && paidAmount >= netPayable)
                     ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    : 'bg-slate-50 border-slate-200 text-slate-700'
+                    : forms.sale.due_date
+                      ? 'bg-slate-50 border-slate-200 text-slate-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-400 italic'
                 }`}>
                   {netBalance <= 0 || (netPayable > 0 && paidAmount >= netPayable)
                     ? 'N/A (Fully Paid / Settled)'
-                    : (forms.sale.due_date ? formatDateDMY(forms.sale.due_date) : 'Auto calculated')}
+                    : (forms.sale.due_date ? formatDateDMY(forms.sale.due_date) : '—')}
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Card 3: Items Purchased Table */}
+          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                <Package size={14} className="text-teal-600" />
+                Items Purchased
+              </span>
+              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                {items.length} {items.length === 1 ? 'item' : 'items'}
+              </span>
+            </div>
+
+            <div className="space-y-2.5">
+              {items.map((item, idx) => (
+                <SaleItemRow
+                  key={item.id || item._key || idx}
+                  item={item}
+                  idx={idx}
+                  itemsLength={items.length}
+                  salesProductOptions={salesProductOptions}
+                  data={data}
+                  getProductAvailableColors={getProductAvailableColors}
+                  updateSaleItemProduct={updateSaleItemProduct}
+                  updateSaleItemCustomName={updateSaleItemCustomName}
+                  updateSaleItemCustomBrand={updateSaleItemCustomBrand}
+                  updateSaleItemPriceType={updateSaleItemPriceType}
+                  updateSaleItemSellingPrice={updateSaleItemSellingPrice}
+                  updateSaleItemQuantity={updateSaleItemQuantity}
+                  toggleSaleItemColor={toggleSaleItemColor}
+                  updateSaleItemSingleColor={updateSaleItemSingleColor}
+                  updateSaleItemColorQuantity={updateSaleItemColorQuantity}
+                  removeSaleItem={removeSaleItem}
+                />
+              ))}
+            </div>
+
+            <div>
+              <button
+                type="button"
+                onClick={addSaleItem}
+                className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus size={14} /> Add Another Item
+              </button>
             </div>
           </div>
 
@@ -4645,9 +4649,9 @@ function App() {
       ...prev,
       sale: {
         ...initialForms.sale,
-        invoice_date: getTodayIso(),
+        invoice_date: '',
         payment_terms_days: 7,
-        due_date: calculateDueDate(getTodayIso(), 7),
+        due_date: '',
         previous_balance: '',
         applied_credit_amount: 0,
         items: [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }],
@@ -4707,8 +4711,8 @@ function App() {
   };
 
   const updateSaleInvoiceDate = (invoiceDate) => {
-    const terms = forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7;
-    const newDueDate = calculateDueDate(invoiceDate, terms);
+    const terms = forms.sale.payment_terms_days !== undefined && forms.sale.payment_terms_days !== '' ? forms.sale.payment_terms_days : 7;
+    const newDueDate = invoiceDate ? calculateDueDate(invoiceDate, terms) : '';
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -4722,8 +4726,8 @@ function App() {
   const updateSalePaymentTerms = (termsDays) => {
     const parsedDays = parseInt(termsDays, 10);
     const validDays = isNaN(parsedDays) ? 0 : Math.max(0, parsedDays);
-    const invDate = forms.sale.invoice_date || getTodayIso();
-    const newDueDate = calculateDueDate(invDate, validDays);
+    const invDate = forms.sale.invoice_date || '';
+    const newDueDate = invDate ? calculateDueDate(invDate, validDays) : '';
     setForms((prev) => ({
       ...prev,
       sale: {
@@ -4763,6 +4767,10 @@ function App() {
     
     if (!customerId) {
       return showToast('Please select a customer first', 'error');
+    }
+
+    if (!forms.sale.invoice_date || !String(forms.sale.invoice_date).trim()) {
+      return showToast('Please select or enter an Invoice Date before creating the sale', 'error');
     }
 
     if (!items.length || items.some(i => !i.product_id)) {
@@ -4808,7 +4816,7 @@ function App() {
           applied_credit_amount: Number(forms.sale.applied_credit_amount || 0),
           apply_advance: forms.sale.apply_advance !== false,
           previous_balance: Number(forms.sale.previous_balance || 0),
-          invoice_date: forms.sale.invoice_date || getTodayIso(),
+          invoice_date: forms.sale.invoice_date,
           payment_terms_days: Number(forms.sale.payment_terms_days !== undefined ? forms.sale.payment_terms_days : 7),
           due_date: dueDate,
           notes,
@@ -4846,9 +4854,9 @@ function App() {
         ...prev,
         sale: {
           ...initialForms.sale,
-          invoice_date: getTodayIso(),
+          invoice_date: '',
           payment_terms_days: 7,
-          due_date: calculateDueDate(getTodayIso(), 7),
+          due_date: '',
           previous_balance: 0,
           applied_credit_amount: 0,
           items: [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '' }],
