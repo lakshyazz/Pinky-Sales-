@@ -699,7 +699,25 @@ const requireShopStaff = (req, res, next) => {
 
 const scopeShopId = (req) => {
   if (isShopStaffRole(req.user.role)) return Number(req.user.shop_id);
-  return req.query.shopId || req.body.shop_id || req.params.shopId || null;
+  const raw = req.query.shopId ?? req.query.branchId ?? req.query.branch_id ?? req.query.shop_id ?? req.body?.shop_id ?? req.body?.branchId ?? req.params?.shopId ?? null;
+  if (!raw || raw === 'all') return null;
+  if (!isNaN(Number(raw))) return Number(raw);
+  return raw;
+};
+
+const resolveShopId = async (candidate) => {
+  if (!candidate || candidate === 'all') return null;
+  if (!isNaN(Number(candidate))) return Number(candidate);
+  if (typeof candidate === 'string') {
+    const trimmed = candidate.trim().toLowerCase();
+    if (trimmed === 'warehouse') {
+      const wh = await getWarehouse();
+      return wh ? Number(wh.id) : null;
+    }
+    const sh = await getRecord('SELECT id FROM shops WHERE LOWER(name) = LOWER(?) LIMIT 1', [candidate.trim()]);
+    return sh ? Number(sh.id) : null;
+  }
+  return null;
 };
 const scopeReadableShopId = (req) => req.query.shopId || scopeShopId(req);
 
@@ -846,7 +864,7 @@ app.get('/api/bootstrap', authenticateToken, async (req, res) => {
 
 app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) => {
   const isSuper = req.user.role === 'superadmin';
-  const shopId = isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : scopeShopId(req);
+  const shopId = await resolveShopId(isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : scopeShopId(req));
   const trendDays = lastDays();
   const trendPlaceholders = trendDays.map(() => '?').join(', ');
   const visibleBatchAccess = batchAccessSql(req.user);
@@ -860,10 +878,25 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib WHERE 1 = 1 ${visibleBatchShopScope} ${visibleBatchAccess}) AS total_stock,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib JOIN shops wh ON wh.id = ib.shop_id WHERE wh.location_type = 'warehouse') AS warehouse_stock,
         (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} sale_date = ?) AS today_sales,
-        (
-          (SELECT COALESCE(SUM(pending_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} pending_amount > 0)
-          + (SELECT COALESCE(SUM(opening_balance), 0) FROM customers ${shopId ? 'WHERE shop_id = ?' : ''})
-        ) AS pending_payments
+        COALESCE((
+          SELECT SUM(customer_pending)
+          FROM (
+            SELECT
+              GREATEST(0, (
+                GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+                  (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+                   WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+                )))
+                + COALESCE(SUM(CASE WHEN sa.status NOT IN ('cancelled', 'void', 'draft') THEN sa.pending_amount ELSE 0 END), 0)
+                - COALESCE(c.advance_balance, 0)
+              )) AS customer_pending
+            FROM customers c
+            LEFT JOIN sales sa ON sa.customer_id = c.id ${shopId ? 'AND sa.shop_id = ?' : ''}
+            ${shopId ? 'WHERE c.shop_id = ?' : ''}
+            GROUP BY c.id, c.opening_balance, c.advance_balance
+          ) cust_dues
+          WHERE customer_pending > 0
+        ), 0) AS pending_payments
     `, shopId ? [shopId, shopId, today(), shopId, shopId] : [today()]),
         allRecords(`
       SELECT st.id, sh.name AS shop_name, p.id AS product_id, p.name AS product_name, p.short_name AS product_short_name, p.brand,
@@ -879,8 +912,44 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       SELECT sh.id, sh.name, sh.area, sh.location_type,
         COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = sh.id ${visibleBatchAccess}), 0) AS stock,
         ${isSuper
-          ? '(COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0))'
-          : 'CASE WHEN sh.id = ? THEN (COALESCE((SELECT SUM(sa.pending_amount) FROM sales sa WHERE sa.shop_id = sh.id), 0) + COALESCE((SELECT SUM(c.opening_balance) FROM customers c WHERE c.shop_id = sh.id), 0)) ELSE 0 END'
+          ? `COALESCE((
+              SELECT SUM(customer_pending)
+              FROM (
+                SELECT
+                  GREATEST(0, (
+                    GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+                      (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+                       WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+                    )))
+                    + COALESCE(SUM(CASE WHEN sa.status NOT IN ('cancelled', 'void', 'draft') THEN sa.pending_amount ELSE 0 END), 0)
+                    - COALESCE(c.advance_balance, 0)
+                  )) AS customer_pending
+                FROM customers c
+                LEFT JOIN sales sa ON sa.customer_id = c.id AND sa.shop_id = sh.id
+                WHERE c.shop_id = sh.id
+                GROUP BY c.id, c.opening_balance, c.advance_balance
+              ) c_dues
+              WHERE customer_pending > 0
+            ), 0)`
+          : `CASE WHEN sh.id = ? THEN COALESCE((
+              SELECT SUM(customer_pending)
+              FROM (
+                SELECT
+                  GREATEST(0, (
+                    GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+                      (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+                       WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+                    )))
+                    + COALESCE(SUM(CASE WHEN sa.status NOT IN ('cancelled', 'void', 'draft') THEN sa.pending_amount ELSE 0 END), 0)
+                    - COALESCE(c.advance_balance, 0)
+                  )) AS customer_pending
+                FROM customers c
+                LEFT JOIN sales sa ON sa.customer_id = c.id AND sa.shop_id = sh.id
+                WHERE c.shop_id = sh.id
+                GROUP BY c.id, c.opening_balance, c.advance_balance
+              ) c_dues
+              WHERE customer_pending > 0
+            ), 0) ELSE 0 END`
         } AS pending,
         COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND sa.sale_date = ?), 0) AS sales_today
       FROM shops sh
@@ -904,7 +973,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     allRecords(`
       SELECT due_date AS day, COALESCE(SUM(pending_amount), 0) AS value
       FROM sales
-      WHERE pending_amount > 0 AND due_date IN (${trendPlaceholders}) ${shopId ? 'AND shop_id = ?' : ''}
+      WHERE pending_amount > 0 AND status NOT IN ('cancelled', 'void', 'draft') AND due_date IN (${trendPlaceholders}) ${shopId ? 'AND shop_id = ?' : ''}
       GROUP BY due_date
     `, shopId ? [...trendDays, shopId] : trendDays),
     allRecords(`

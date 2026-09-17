@@ -3424,7 +3424,7 @@ function App() {
     setTabLoading(true);
     try {
       setLoadError('');
-      const dashboardShopId = role === 'superadmin' ? '' : (currentShop || session?.shop_id || '');
+      const dashboardShopId = currentShop || (role === 'superadmin' ? '' : (session?.shop_id || ''));
       const scoped = currentShop ? `?shopId=${currentShop}` : '';
       const dashboardScoped = dashboardShopId ? `?shopId=${dashboardShopId}` : '';
       const set = (key, value) => setData((prev) => ({ ...prev, [key]: value }));
