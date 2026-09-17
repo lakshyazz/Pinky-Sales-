@@ -877,7 +877,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
         (SELECT COUNT(*) FROM shops WHERE status = 'active' ${shopId ? 'AND id = ?' : ''}) AS total_shops,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib WHERE 1 = 1 ${visibleBatchShopScope} ${visibleBatchAccess}) AS total_stock,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib JOIN shops wh ON wh.id = ib.shop_id WHERE wh.location_type = 'warehouse') AS warehouse_stock,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} sale_date = ?) AS today_sales,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} COALESCE(invoice_date::TEXT, sale_date) = ? AND status NOT IN ('cancelled', 'void')) AS today_sales,
         COALESCE((
           SELECT SUM(customer_pending)
           FROM (
@@ -951,7 +951,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
               WHERE customer_pending > 0
             ), 0) ELSE 0 END`
         } AS pending,
-        COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND sa.sale_date = ?), 0) AS sales_today
+        COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND COALESCE(sa.invoice_date::TEXT, sa.sale_date) = ? AND sa.status NOT IN ('cancelled', 'void')), 0) AS sales_today
       FROM shops sh
       ${shopId ? 'WHERE sh.id = ?' : ''}
       ORDER BY sales_today DESC, pending DESC
@@ -965,10 +965,10 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       LIMIT 6
     `, shopId ? [shopId] : []),
     allRecords(`
-      SELECT sale_date AS day, COALESCE(SUM(total_amount), 0) AS value
+      SELECT COALESCE(invoice_date::TEXT, sale_date) AS day, COALESCE(SUM(total_amount), 0) AS value
       FROM sales
-      WHERE sale_date IN (${trendPlaceholders}) ${shopId ? 'AND shop_id = ?' : ''}
-      GROUP BY sale_date
+      WHERE COALESCE(invoice_date::TEXT, sale_date) IN (${trendPlaceholders}) AND status NOT IN ('cancelled', 'void') ${shopId ? 'AND shop_id = ?' : ''}
+      GROUP BY COALESCE(invoice_date::TEXT, sale_date)
     `, shopId ? [...trendDays, shopId] : trendDays),
     allRecords(`
       SELECT due_date AS day, COALESCE(SUM(pending_amount), 0) AS value
@@ -3457,10 +3457,10 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
     params.push(Number(req.query.productId), Number(req.query.productId));
   }
   if (hasQueryValue(req.query.date)) {
-    where.push('sa.sale_date = ?');
+    where.push('COALESCE(sa.invoice_date::TEXT, sa.sale_date) = ?');
     params.push(String(req.query.date).slice(0, 10));
   } else {
-    appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'sa.sale_date');
+    appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'COALESCE(sa.invoice_date::TEXT, sa.sale_date)');
   }
   if (isShopStaffRole(req.user.role)) {
     where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
@@ -3566,10 +3566,10 @@ app.get(['/api/sales/customers', '/sales/customers'], authenticateToken, require
       params.push(Number(req.query.customerId));
     }
     if (hasQueryValue(req.query.date)) {
-      where.push('sa.sale_date = ?');
+      where.push('COALESCE(sa.invoice_date::TEXT, sa.sale_date) = ?');
       params.push(String(req.query.date).slice(0, 10));
     } else {
-      appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'sa.sale_date');
+      appendDateRangeFilter(where, params, req.query.dateFrom || req.query.from, req.query.dateTo || req.query.to, 'COALESCE(sa.invoice_date::TEXT, sa.sale_date)');
     }
     if (isShopStaffRole(req.user.role)) {
       where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
@@ -4597,7 +4597,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           thisSalePaid, 
           thisSalePending, 
           finalDueDate, 
-          today(),
+          invoiceDateStr || today(),
           invoiceDateStr,
           finalPaymentTerms,
           productsTotal,
@@ -4656,9 +4656,16 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           ? (String(item.custom_brand_name).trim() || null)
           : (item.manufacturing_brand_name !== undefined ? (String(item.manufacturing_brand_name).trim() || null) : null);
 
+        const totalBatchCost = Array.isArray(item.batches)
+          ? item.batches.reduce((sum, b) => sum + (Number(b.purchase_price || 0) * Number(b.quantity_remaining || 0)), 0)
+          : 0;
+        const frozenPurchasePrice = item.saleQuantity > 0 && totalBatchCost > 0
+          ? money(totalBatchCost / item.saleQuantity)
+          : money(item.product?.purchase_price || 0);
+
         await tx.runQuery(
-          `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name, purchase_price)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             saleId,
             item.product_id,
@@ -4668,7 +4675,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
             item.price_type || 'wholesale',
             itemColourStr,
             customProductName,
-            customBrandName
+            customBrandName,
+            frozenPurchasePrice
           ]
         );
 
@@ -5145,9 +5153,16 @@ const handleUpdateSale = async (req, res) => {
             ? (String(item.custom_brand_name).trim() || null)
             : null;
 
+          const totalBatchCost = Array.isArray(item.batches)
+            ? item.batches.reduce((sum, b) => sum + (Number(b.purchase_price || 0) * Number(b.quantity_remaining || 0)), 0)
+            : 0;
+          const frozenPurchasePrice = item.saleQuantity > 0 && totalBatchCost > 0
+            ? money(totalBatchCost / item.saleQuantity)
+            : money(item.product?.purchase_price || 0);
+
           await tx.runQuery(
-            `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name, purchase_price)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               saleId,
               item.product_id,
@@ -5157,7 +5172,8 @@ const handleUpdateSale = async (req, res) => {
               item.price_type || 'wholesale',
               itemColourStr,
               customProductName,
-              customBrandName
+              customBrandName,
+              frozenPurchasePrice
             ]
           );
 
@@ -7123,6 +7139,223 @@ app.get('/api/reports/ap-aging', authenticateToken, requireShopStaff, async (req
     res.json(report);
   } catch (error) {
     res.status(500).json({ error: error.message || 'Failed to generate AP aging report.' });
+  }
+});
+
+// ─── Sales & Profit Ledger Report ──────────────────────────────────────────
+
+app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const rawShopId = scopeShopId(req);
+    const filterShopId = req.query.shop_id || req.query.shopId;
+    const isSuper = req.user.role === 'superadmin';
+    const shopId = (!isShopStaffRole(req.user.role) && isSuper && filterShopId && filterShopId !== 'all')
+      ? Number(filterShopId)
+      : rawShopId;
+
+    // Date range resolution
+    const todayStr = today();
+    const fromDate = String(req.query.from || req.query.dateFrom || todayStr.slice(0, 7) + '-01').slice(0, 10);
+    const toDate = String(req.query.to || req.query.dateTo || todayStr).slice(0, 10);
+
+    // Calculate duration in days for previous period comparison
+    const fromTime = new Date(fromDate + 'T00:00:00').getTime();
+    const toTime = new Date(toDate + 'T00:00:00').getTime();
+    const durationDays = Math.max(1, Math.round((toTime - fromTime) / (1000 * 60 * 60 * 24)) + 1);
+
+    const prevToDateObj = new Date(fromTime - (1000 * 60 * 60 * 24));
+    const prevFromDateObj = new Date(fromTime - (durationDays * 1000 * 60 * 60 * 24));
+    const prevFromDate = prevFromDateObj.toISOString().slice(0, 10);
+    const prevToDate = prevToDateObj.toISOString().slice(0, 10);
+
+    const where = [
+      "COALESCE(sa.invoice_date::TEXT, sa.sale_date) BETWEEN ? AND ?",
+      "sa.status NOT IN ('cancelled', 'void')"
+    ];
+    const params = [fromDate, toDate];
+
+    if (shopId) {
+      where.push("sa.shop_id = ?");
+      params.push(shopId);
+    }
+
+    if (req.query.search && String(req.query.search).trim()) {
+      const s = `%${String(req.query.search).trim().toLowerCase()}%`;
+      where.push(`(
+        LOWER(c.name) LIKE ? OR
+        LOWER(COALESCE(c.mobile, '')) LIKE ? OR
+        LOWER(COALESCE(sa.invoice_number, '')) LIKE ? OR
+        LOWER(COALESCE(c.address, '')) LIKE ?
+      )`);
+      params.push(s, s, s, s);
+    }
+
+    if (req.query.status && req.query.status !== 'all') {
+      if (req.query.status === 'paid') {
+        where.push("sa.pending_amount <= 0");
+      } else if (req.query.status === 'partial') {
+        where.push("sa.paid_amount > 0 AND sa.pending_amount > 0");
+      } else if (req.query.status === 'open' || req.query.status === 'pending') {
+        where.push("sa.paid_amount = 0 AND sa.pending_amount > 0");
+      }
+    }
+
+    const whereSql = where.join(' AND ');
+
+    // 1. Fetch Invoices matching filter
+    const sales = await allRecords(`
+      SELECT
+        sa.id,
+        COALESCE(sa.invoice_number, CONCAT('INV-', LPAD(sa.id::TEXT, 6, '0'))) AS invoice_number,
+        COALESCE(sa.invoice_date::TEXT, sa.sale_date) AS invoice_date,
+        sa.shop_id,
+        sh.name AS shop_name,
+        sa.customer_id,
+        c.name AS customer_name,
+        c.mobile AS customer_mobile,
+        c.address AS customer_address,
+        sa.total_amount,
+        sa.products_total,
+        sa.extra_expenses_total,
+        sa.paid_amount,
+        sa.pending_amount,
+        sa.payment_mode,
+        sa.status,
+        sa.notes,
+        COALESCE(SUM(si.quantity), 0) AS total_quantity,
+        COUNT(si.id) AS items_count
+      FROM sales sa
+      JOIN shops sh ON sh.id = sa.shop_id
+      LEFT JOIN customers c ON c.id = sa.customer_id
+      LEFT JOIN sale_items si ON si.sale_id = sa.id
+      WHERE ${whereSql}
+      GROUP BY sa.id, sh.name, c.name, c.mobile, c.address
+      ORDER BY COALESCE(sa.invoice_date::TEXT, sa.sale_date) DESC, sa.id DESC
+    `, params);
+
+    // 2. Fetch all line items for the matched sales
+    const saleIds = sales.map((s) => s.id);
+    let saleItems = [];
+    if (saleIds.length > 0) {
+      const placeholders = saleIds.map(() => '?').join(', ');
+      saleItems = await allRecords(`
+        SELECT
+          si.id,
+          si.sale_id,
+          si.product_id,
+          COALESCE(si.custom_product_name, p.short_name, p.name, 'Product') AS product_name,
+          p.brand AS product_brand,
+          COALESCE(si.custom_brand_name, mb.name, '') AS mfg_brand,
+          p.category,
+          COALESCE(p.quality_variant, '') AS quality,
+          COALESCE(p.full_model_list, p.model, '') AS model,
+          si.colour,
+          si.quantity,
+          si.unit_price,
+          si.total_price,
+          si.price_type,
+          COALESCE(NULLIF(si.purchase_price, 0), p.purchase_price, 0) AS purchase_price
+        FROM sale_items si
+        LEFT JOIN products p ON p.id = si.product_id
+        LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+        WHERE si.sale_id IN (${placeholders})
+        ORDER BY si.id ASC
+      `, saleIds);
+    }
+
+    // Map items to their sales
+    const itemsBySaleId = new Map();
+    for (const item of saleItems) {
+      if (!itemsBySaleId.has(item.sale_id)) {
+        itemsBySaleId.set(item.sale_id, []);
+      }
+      const unitCost = Number(item.purchase_price || 0);
+      const unitPrice = Number(item.unit_price || 0);
+      const qty = Number(item.quantity || 0);
+      const lineCost = unitCost * qty;
+      const lineTotal = Number(item.total_price || (unitPrice * qty));
+      const lineProfit = lineTotal - lineCost;
+      const marginPct = lineTotal > 0 ? (lineProfit / lineTotal) * 100 : 0;
+
+      itemsBySaleId.get(item.sale_id).push({
+        ...item,
+        unit_cost: unitCost,
+        unit_price: unitPrice,
+        quantity: qty,
+        line_total: lineTotal,
+        line_cost: lineCost,
+        unit_profit: unitPrice - unitCost,
+        line_profit: lineProfit,
+        margin_pct: Number(marginPct.toFixed(2)),
+      });
+    }
+
+    // Build enriched invoice objects
+    const invoices = sales.map((sale) => {
+      const items = itemsBySaleId.get(sale.id) || [];
+      const totalCost = items.reduce((sum, it) => sum + it.line_cost, 0);
+      const billedAmount = Number(sale.total_amount || 0);
+      const extraExpenses = Number(sale.extra_expenses_total || 0);
+      const profitEarned = billedAmount - totalCost - extraExpenses;
+      const marginPct = billedAmount > 0 ? (profitEarned / billedAmount) * 100 : 0;
+
+      return {
+        ...sale,
+        total_cost: totalCost,
+        billed_amount: billedAmount,
+        profit_earned: profitEarned,
+        margin_pct: Number(marginPct.toFixed(2)),
+        items,
+      };
+    });
+
+    // 3. Aggregate Current Period Summary Totals
+    const totalSalesAmount = invoices.reduce((sum, inv) => sum + inv.billed_amount, 0);
+    const totalCostAmount = invoices.reduce((sum, inv) => sum + inv.total_cost, 0);
+    const totalExpensesAmount = invoices.reduce((sum, inv) => sum + Number(inv.extra_expenses_total || 0), 0);
+    const grossProfitEarned = totalSalesAmount - totalCostAmount - totalExpensesAmount;
+    const overallMarginPct = totalSalesAmount > 0 ? (grossProfitEarned / totalSalesAmount) * 100 : 0;
+    const totalPcsSold = invoices.reduce((sum, inv) => sum + Number(inv.total_quantity || 0), 0);
+
+    // 4. Fetch Previous Period Sales for % Trend
+    const prevParams = [prevFromDate, prevToDate];
+    let prevShopSql = '';
+    if (shopId) {
+      prevShopSql = 'AND sa.shop_id = ?';
+      prevParams.push(shopId);
+    }
+    const prevPeriodRow = await getRecord(`
+      SELECT COALESCE(SUM(sa.total_amount), 0) AS prev_sales
+      FROM sales sa
+      WHERE COALESCE(sa.invoice_date::TEXT, sa.sale_date) BETWEEN ? AND ?
+        AND sa.status NOT IN ('cancelled', 'void')
+        ${prevShopSql}
+    `, prevParams);
+
+    const prevSalesAmount = Number(prevPeriodRow?.prev_sales || 0);
+    const salesChangePct = prevSalesAmount > 0
+      ? Number((((totalSalesAmount - prevSalesAmount) / prevSalesAmount) * 100).toFixed(1))
+      : null;
+
+    res.json({
+      summary: {
+        total_sales: totalSalesAmount,
+        total_cost: totalCostAmount,
+        total_expenses: totalExpensesAmount,
+        gross_profit: grossProfitEarned,
+        margin_pct: Number(overallMarginPct.toFixed(2)),
+        invoices_count: invoices.length,
+        total_pcs_sold: totalPcsSold,
+        previous_period_sales: prevSalesAmount,
+        sales_change_pct: salesChangePct,
+        from_date: fromDate,
+        to_date: toDate,
+      },
+      invoices,
+    });
+  } catch (error) {
+    console.error('[SalesProfitReport] Error generating report:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate Sales & Profit Ledger.' });
   }
 });
 

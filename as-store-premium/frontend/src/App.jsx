@@ -57,6 +57,7 @@ import {
   Copy,
   Share2,
   BookOpen,
+  TrendingUp,
 } from 'lucide-react';
 const SalesReturnModal = React.lazy(() => import('./components/modals/SalesReturnModal'));
 const EditSaleModal = React.lazy(() => import('./components/modals/EditSaleModal'));
@@ -76,6 +77,7 @@ const ManufacturingBrandsPage = React.lazy(() => import('./components/manufactur
 const SuppliersPage = React.lazy(() => import('./components/suppliers/SuppliersPage'));
 const PartyLedger = React.lazy(() => import('./components/ledger/PartyLedger'));
 const AgingReport = React.lazy(() => import('./components/reports/AgingReport'));
+const SalesProfitLedgerPage = React.lazy(() => import('./components/reports/SalesProfitLedgerPage'));
 const PurchaseBillsPage = React.lazy(() => import('./components/billing/PurchaseBillsPage'));
 const DebitNotesPage = React.lazy(() => import('./components/billing/DebitNotesPage'));
 // Named export wrapper for CategoriesPage
@@ -88,6 +90,7 @@ import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './componen
 import SearchInput from './components/ui/SearchInput';
 import SearchableCombobox from './components/ui/SearchableCombobox';
 import RedesignedDashboard from './components/dashboard/RedesignedDashboard';
+import BulkAddProductsModal from './components/modals/BulkAddProductsModal';
 import { consolidateProductList } from './utils/productConsolidation';
 import { 
   shareToWhatsAppService, 
@@ -437,6 +440,7 @@ const navByRole = {
     ['purchase-bills', 'Purchase Bills', ShoppingCart],
     ['debit-notes', 'Debit Notes (Returns)', RotateCcw],
     ['ledger', 'Party Ledger', BookOpen],
+    ['sales-profit-ledger', 'Sales & Profit', TrendingUp],
     ['aging', 'AR/AP Aging', Clock],
     ['shops', 'Shops', Building2],
     ['shopkeepers', 'Shopkeepers', UserCog],
@@ -465,6 +469,7 @@ const navByRole = {
     ['purchase-bills', 'Purchase Bills', ShoppingCart],
     ['debit-notes', 'Debit Notes (Returns)', RotateCcw],
     ['ledger', 'Party Ledger', BookOpen],
+    ['sales-profit-ledger', 'Sales & Profit', TrendingUp],
     ['aging', 'AR/AP Aging', Clock],
     ['reports', 'Reports', FileText],
   ],
@@ -495,7 +500,7 @@ const sidebarSectionsByRole = {
     { title: 'Operations', ids: ['prices', 'stock', 'customers', 'sales', 'payments', 'tools', 'spares', 'oca-glass', 'other-category'] },
     { title: 'Inventory & Catalog', ids: ['low-stock', 'requests', 'models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Accounts Payable', ids: ['purchase-bills', 'debit-notes'] },
-    { title: 'Ledger & Reports', ids: ['ledger', 'aging'] },
+    { title: 'Ledger & Reports', ids: ['ledger', 'sales-profit-ledger', 'aging'] },
     { title: 'Management', ids: ['shops', 'shopkeepers', 'import'] },
     { title: 'Reports', ids: ['reports'] },
   ],
@@ -505,7 +510,7 @@ const sidebarSectionsByRole = {
     { title: 'Stock Replenishment', ids: ['low-stock', 'order-stock', 'requests'] },
     { title: 'Catalog & Brands', ids: ['models', 'brands', 'manufacturing-brands', 'suppliers', 'categories'] },
     { title: 'Accounts Payable', ids: ['purchase-bills', 'debit-notes'] },
-    { title: 'Ledger & Reports', ids: ['ledger', 'aging'] },
+    { title: 'Ledger & Reports', ids: ['ledger', 'sales-profit-ledger', 'aging'] },
     { title: 'Reports', ids: ['reports'] },
   ],
   supplier: [
@@ -692,6 +697,11 @@ const pageMetaById = {
     title: 'Catalog',
     description: 'Browse available products, models, prices, and shop availability.',
   },
+  'sales-profit-ledger': {
+    group: 'Ledger & Reports',
+    title: 'Sales & Profit Ledger',
+    description: 'Track invoice margins, historical performance, cost of goods sold, and net profit.',
+  },
 };
 
 const validPageIds = new Set([...Object.values(navByRole).flatMap((items) => items.map(([id]) => id)), 'low-stock', 'order-stock', 'stock-requests', 'tools', 'spares', 'oca-glass', 'other-category']);
@@ -699,6 +709,7 @@ const defaultPageForRole = (role) => (role === 'customer' || role === 'user' ? '
 const pageFromPath = () => {
   if (typeof window === 'undefined') return '';
   const page = decodeURIComponent(window.location.pathname).replace(/^\/+|\/+$/g, '');
+  if (page === 'sales/history' || page === 'reports/sales' || page === 'sales-history') return 'sales-profit-ledger';
   return validPageIds.has(page) ? page : '';
 };
 const initialPageForSession = (session) => pageFromPath() || defaultPageForRole(session?.role);
@@ -1344,6 +1355,7 @@ function SalesCreationWorkspace({
   updateSaleItemSingleColor,
   updateSaleItemColorQuantity,
   addSaleItem,
+  bulkAddSaleItems,
   removeSaleItem,
   updateSaleInvoiceDate,
   updateSalePaymentTerms,
@@ -1359,6 +1371,7 @@ function SalesCreationWorkspace({
   authedFetch,
   onOpenReturnModal,
 }) {
+  const [showBulkAddModal, setShowBulkAddModal] = useState(false);
   const [expensesExpanded, setExpensesExpanded] = useState((forms.sale?.expenses || []).length > 0);
   const [customerBalanceInfo, setCustomerBalanceInfo] = useState({
     outstanding_balance: 0,
@@ -1716,9 +1729,19 @@ function SalesCreationWorkspace({
                 <Package size={14} className="text-teal-600" />
                 Items Purchased
               </span>
-              <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
-                {items.length} {items.length === 1 ? 'item' : 'items'}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBulkAddModal(true)}
+                  className="px-2.5 py-1 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs active:scale-98"
+                  title="Search and multi-select products with live stock indicators"
+                >
+                  <Boxes size={13} className="text-teal-600" /> Multi-Select / Bulk Add
+                </button>
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                  {items.length} {items.length === 1 ? 'item' : 'items'}
+                </span>
+              </div>
             </div>
 
             <div className="space-y-2.5">
@@ -1745,13 +1768,20 @@ function SalesCreationWorkspace({
               ))}
             </div>
 
-            <div>
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
               <button
                 type="button"
                 onClick={addSaleItem}
                 className="px-3 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus size={14} /> Add Another Item
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowBulkAddModal(true)}
+                className="px-3 py-1.5 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer"
+              >
+                <Boxes size={14} className="text-slate-600" /> Multi-Select Products
               </button>
             </div>
           </div>
@@ -2194,6 +2224,19 @@ function SalesCreationWorkspace({
           </div>
         </div>
       </div>
+      {showBulkAddModal && (
+        <BulkAddProductsModal
+          isOpen={showBulkAddModal}
+          onClose={() => setShowBulkAddModal(false)}
+          salesProductOptions={salesProductOptions}
+          onConfirm={(selectedList) => {
+            if (bulkAddSaleItems) {
+              bulkAddSaleItems(selectedList);
+            }
+          }}
+          defaultPriceType="wholesale"
+        />
+      )}
     </div>
   );
 }
@@ -4239,6 +4282,8 @@ function App() {
         map.set(strId, {
           id: strId,
           name: visibleName,
+          clean_name: title,
+          title,
           keywords,
           brand,
           category: cat,
@@ -4533,6 +4578,70 @@ function App() {
         items: currentItems,
       },
     }));
+  };
+
+  const bulkAddSaleItems = (newItemsList) => {
+    if (!Array.isArray(newItemsList) || !newItemsList.length) return;
+    const existingItems = forms.sale.items || [];
+    const isOnlyBlankRow = existingItems.length === 1 && !existingItems[0].product_id;
+    const baseItems = isOnlyBlankRow ? [] : [...existingItems];
+
+    const constructedRows = newItemsList.map((item) => {
+      const productId = String(item.product_id);
+      const priceType = item.price_type || 'wholesale';
+      const defaultPrice = (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '')
+        ? String(item.selling_price)
+        : getProductDefaultPrice(productId, priceType);
+      const qty = (item.quantity !== undefined && item.quantity !== null && item.quantity !== '') ? item.quantity : 1;
+      const numericQty = Number(qty || 0);
+      const total = (defaultPrice !== '' && numericQty > 0) ? String(Number(defaultPrice) * numericQty) : '0';
+
+      const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === productId)
+        || (data.productResults || []).find((p) => String(p.id || p.product_id) === productId)
+        || (data.catalog || []).find((p) => String(p.id || p.product_id) === productId);
+      const availableColors = getProductAvailableColors(selectedProd);
+
+      const initialBreakdown = availableColors.length === 1 && numericQty > 0
+        ? [{ color: availableColors[0], qty: numericQty }]
+        : [];
+
+      const cleanShortName = selectedProd
+        ? (selectedProd.short_name || selectedProd.product_short_name || selectedProd.name || '')
+        : '';
+      const rawMfg = selectedProd
+        ? (selectedProd.manufacturing_brand_name || selectedProd.mfg_brand_name || selectedProd.manufacturing_brand || selectedProd.brand || '')
+        : '';
+      const cleanBrandName = String(rawMfg).replace(/^mfg:\s*/i, '').trim();
+
+      return {
+        product_id: productId,
+        selling_price: defaultPrice,
+        price_type: priceType,
+        quantity: qty,
+        total_amount: total,
+        color_breakdown: initialBreakdown,
+        custom_product_name: cleanShortName,
+        custom_brand_name: cleanBrandName,
+      };
+    });
+
+    const merged = [...baseItems, ...constructedRows];
+    const totals = calculateSaleTotals(merged, forms.sale.expenses);
+
+    setForms((prev) => ({
+      ...prev,
+      sale: {
+        ...prev.sale,
+        product_id: merged[0]?.product_id || '',
+        quantity: merged[0]?.quantity !== '' && merged[0]?.quantity !== undefined ? merged[0].quantity : '',
+        ...totals,
+        items: merged,
+      },
+    }));
+
+    if (typeof showToast === 'function') {
+      showToast(`Added ${constructedRows.length} product${constructedRows.length > 1 ? 's' : ''} to invoice.`, 'success');
+    }
   };
 
   const updateSaleItemCustomName = (index, nameVal) => {
@@ -7119,6 +7228,20 @@ function App() {
             </PageWrapper>
           )}
 
+          {active === 'sales-profit-ledger' && role !== 'customer' && (
+            <PageWrapper activeKey="sales-profit-ledger" key="sales-profit-ledger">
+              <SalesProfitLedgerPage
+                session={session}
+                api={authedFetch}
+                shops={data.shops || []}
+                setGlobalToast={showToast}
+                onViewInvoice={(invoice) => {
+                  printTaxInvoicePDF(invoice);
+                }}
+              />
+            </PageWrapper>
+          )}
+
           {active === 'categories' && (
             <PageWrapper activeKey="categories" key="categories">
               <CategoriesPage
@@ -7454,6 +7577,7 @@ function App() {
                     updateSaleItemSingleColor={updateSaleItemSingleColor}
                     updateSaleItemColorQuantity={updateSaleItemColorQuantity}
                     addSaleItem={addSaleItem}
+                    bulkAddSaleItems={bulkAddSaleItems}
                     removeSaleItem={removeSaleItem}
                     updateSaleInvoiceDate={updateSaleInvoiceDate}
                     updateSalePaymentTerms={updateSalePaymentTerms}
@@ -7719,6 +7843,7 @@ function App() {
                     updateSaleItemSingleColor={updateSaleItemSingleColor}
                     updateSaleItemColorQuantity={updateSaleItemColorQuantity}
                     addSaleItem={addSaleItem}
+                    bulkAddSaleItems={bulkAddSaleItems}
                     removeSaleItem={removeSaleItem}
                     updateSaleInvoiceDate={updateSaleInvoiceDate}
                     updateSalePaymentTerms={updateSalePaymentTerms}
