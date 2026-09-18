@@ -100,11 +100,17 @@ const StockCardItem = React.memo(function StockCardItem({
   setIsSetStockOpen,
   setIsAddProductOpen,
   setEditingProductId,
+  showCost = false,
 }) {
   const shopThreshold = data.shops?.find((s) => s.id === item.shop_id)?.low_stock_threshold || 4;
   const isLowStock = item.quantity > 0 && item.quantity <= shopThreshold;
   const isOutOfStock = Number(item.quantity) === 0;
-  const marginInfo = calculateMargin(item.sale_price, item.purchase_price);
+  const retailPrice = item.retail_price ?? item.sale_price ?? item.official_price;
+  const wholesalePrice = item.wholesale_price;
+  const hasRetailPrice = retailPrice !== null && retailPrice !== undefined && retailPrice !== '';
+  const hasWholesalePrice = wholesalePrice !== null && wholesalePrice !== undefined && wholesalePrice !== '';
+  const hasSalePrice = item.sale_price !== null && item.sale_price !== undefined && item.sale_price !== '';
+  const marginInfo = calculateMargin(retailPrice || item.sale_price, item.purchase_price);
   const cleanBrand = cleanBrandName(item.brand);
   const compatText = getCleanCompatibility(item);
   const displayName = productName(item);
@@ -260,16 +266,25 @@ const StockCardItem = React.memo(function StockCardItem({
         {/* Streamlined Split Row: Price & Stock Status */}
         <div className="flex items-center justify-between gap-3 pt-2.5 border-t border-zinc-100 dark:border-zinc-800/80">
           <div>
-            <span className="text-[10px] uppercase font-semibold text-zinc-400 dark:text-zinc-500 tracking-wider block leading-none mb-1">
-              Price
+            <span className="text-[10px] uppercase font-semibold text-zinc-400 dark:text-zinc-500 tracking-wider block leading-none mb-1.5">
+              {showCost ? 'Price & Margin' : 'Selling Prices'}
             </span>
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-base font-bold text-zinc-900 dark:text-zinc-100 tracking-tight">
-                {priceLabel(item.sale_price)}
-              </span>
-              {role === 'superadmin' && marginInfo && (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1.5">
+                <span className="px-1.5 py-0.5 text-[9px] font-black rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 uppercase">W/S</span>
+                <span className="font-mono text-sm font-black text-indigo-700 dark:text-indigo-300 tracking-tight">
+                  {hasWholesalePrice ? priceLabel(wholesalePrice) : '—'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="px-1.5 py-0.5 text-[8.5px] font-bold rounded bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 uppercase">Ret</span>
+                <span className="font-mono text-xs font-semibold text-zinc-600 dark:text-zinc-400 tracking-tight">
+                  {hasRetailPrice ? priceLabel(retailPrice) : hasSalePrice ? priceLabel(item.sale_price) : '—'}
+                </span>
+              </div>
+              {showCost && (role === 'superadmin' || role === 'owner') && marginInfo && (
                 <span
-                  className={`text-[10px] font-semibold px-1 py-0.5 rounded ${
+                  className={`text-[10px] font-semibold px-1 py-0.5 rounded self-start mt-0.5 ${
                     marginInfo.isProfit
                       ? 'text-emerald-600 dark:text-emerald-400'
                       : marginInfo.isLoss
@@ -288,17 +303,17 @@ const StockCardItem = React.memo(function StockCardItem({
               Stock Status
             </span>
             {isOutOfStock ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-50 text-rose-700 border border-rose-200/50 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/50">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-rose-50 text-rose-700 border border-rose-200/50 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800/50">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                 Out of Stock
               </span>
             ) : isLowStock ? (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200/50 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-700 border border-amber-200/50 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800/50">
                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
                 Low Stock ({item.quantity})
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200/50 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/50 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800/50">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                 {item.quantity} in stock
               </span>

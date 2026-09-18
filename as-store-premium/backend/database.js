@@ -338,6 +338,15 @@ export const initDatabase = async () => {
         ADD COLUMN IF NOT EXISTS custom_product_name VARCHAR(255) DEFAULT NULL,
         ADD COLUMN IF NOT EXISTS custom_brand_name VARCHAR(255) DEFAULT NULL;
 
+      ALTER TABLE suppliers
+        ADD COLUMN IF NOT EXISTS mobile TEXT,
+        ADD COLUMN IF NOT EXISTS gstin TEXT,
+        ADD COLUMN IF NOT EXISTS address TEXT,
+        ADD COLUMN IF NOT EXISTS opening_balance NUMERIC(12, 2) DEFAULT 0.00;
+
+      ALTER TABLE purchase_bill_items
+        ADD COLUMN IF NOT EXISTS colour TEXT;
+
       CREATE INDEX IF NOT EXISTS idx_credit_notes_customer_status ON credit_notes(customer_id, status);
       CREATE INDEX IF NOT EXISTS idx_sales_returns_sale ON sales_returns(sale_id);
       CREATE INDEX IF NOT EXISTS idx_redemptions_sale ON credit_note_redemptions(sale_id);

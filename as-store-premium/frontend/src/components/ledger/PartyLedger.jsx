@@ -5,6 +5,7 @@ import {
   TrendingUp, TrendingDown, Minus, RefreshCw, User, FileText,
   AlertCircle, ArrowUpRight, ArrowDownRight, ChevronsRight
 } from 'lucide-react';
+import InvoiceDetailDrawer from './InvoiceDetailDrawer';
 
 const money = (v) => Math.round(Number(v || 0) * 100) / 100;
 const fmt = (v) => money(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -40,6 +41,29 @@ function TypeBadge({ type }) {
   );
 }
 
+function renderBreakdownText(breakdownStr, onSelectInvoice) {
+  if (!breakdownStr) return null;
+  const parts = String(breakdownStr).split(/(Invoice #(?:INV-[\w]+|\d+))/gi);
+  return parts.map((part, idx) => {
+    const match = part.match(/^Invoice #((?:INV-[\w]+|\d+))$/i);
+    if (match) {
+      const invRef = match[1];
+      return (
+        <button
+          key={idx}
+          type="button"
+          onClick={() => onSelectInvoice(invRef)}
+          className="text-sky-600 hover:text-sky-500 hover:underline cursor-pointer font-bold font-mono inline-block bg-transparent border-none p-0 mx-0.5"
+          title={`View invoice ${invRef}`}
+        >
+          {part}
+        </button>
+      );
+    }
+    return <span key={idx}>{part}</span>;
+  });
+}
+
 export default function PartyLedger({ session, api, setGlobalToast, customers = [], suppliers = [] }) {
   const [mode, setMode] = useState('customer'); // 'customer' | 'vendor'
   const [selectedId, setSelectedId] = useState('');
@@ -48,6 +72,7 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
   const [ledger, setLedger] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [activeInvoiceRef, setActiveInvoiceRef] = useState(null);
 
   const partyList = mode === 'customer' ? customers : suppliers;
 
@@ -279,6 +304,8 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
                   const mainDesc = descParts[0];
                   const breakdown = row.allocation_breakdown || (descParts.length > 1 ? descParts[1].replace(' [REVERSED]', '') : null);
 
+                  const isInvoice = row.type === 'Invoice' || row.entry_type === 'sale' || String(row.ref_no || '').startsWith('INV-');
+
                   return (
                     <tr key={i} style={{ 
                       borderBottom: '1px solid #f1f5f9', 
@@ -288,7 +315,21 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
                       onMouseEnter={e => e.currentTarget.style.background = row.entry_type === 'reversal' ? '#fef3c7' : '#f8fafc'}
                       onMouseLeave={e => e.currentTarget.style.background = row.entry_type === 'reversal' ? '#fffbeb' : '#fff'}>
                       <td style={{ padding: '10px 14px', color: '#475569', fontWeight: 600, whiteSpace: 'nowrap' }}>{formatDMY(row.entry_date)}</td>
-                      <td style={{ padding: '10px 14px', color: '#0f172a', fontWeight: 700, fontFamily: 'monospace', fontSize: 12 }}>{row.ref_no}</td>
+                      <td style={{ padding: '10px 14px', color: '#0f172a', fontWeight: 700, fontFamily: 'monospace', fontSize: 12 }}>
+                        {isInvoice ? (
+                          <button
+                            type="button"
+                            onClick={() => setActiveInvoiceRef(row.ref_no || String(row.id))}
+                            className="text-sky-600 hover:text-sky-500 hover:underline cursor-pointer font-bold font-mono text-xs inline-flex items-center gap-1 text-left bg-transparent border-none p-0 transition-colors"
+                            title={`View invoice ${row.ref_no}`}
+                          >
+                            <span>{row.ref_no}</span>
+                            <ArrowUpRight size={12} className="opacity-70" />
+                          </button>
+                        ) : (
+                          <span>{row.ref_no}</span>
+                        )}
+                      </td>
                       <td style={{ padding: '10px 14px' }}><TypeBadge type={row.entry_type} /></td>
                       <td style={{ padding: '10px 14px', color: '#334155', maxWidth: 320 }}>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -301,7 +342,18 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
                             gap: 6,
                             flexWrap: 'wrap'
                           }}>
-                            <span>{mainDesc}</span>
+                            {isInvoice ? (
+                              <button
+                                type="button"
+                                onClick={() => setActiveInvoiceRef(row.ref_no || String(row.id))}
+                                className="text-sky-600 hover:text-sky-500 hover:underline cursor-pointer text-left bg-transparent border-none p-0 transition-colors font-semibold"
+                                title={`View invoice ${row.ref_no}`}
+                              >
+                                {mainDesc}
+                              </button>
+                            ) : (
+                              <span>{mainDesc}</span>
+                            )}
                             {row.reversed && (
                               <span style={{
                                 fontSize: 9, fontWeight: 800, color: '#dc2626', background: '#fee2e2',
@@ -317,7 +369,7 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
                               borderRadius: 6, padding: '3px 8px', border: '1px solid #c7d2fe',
                               width: 'fit-content', lineHeight: 1.3
                             }}>
-                              ↳ {breakdown}
+                              ↳ {renderBreakdownText(breakdown, setActiveInvoiceRef)}
                             </div>
                           )}
                         </div>
@@ -369,6 +421,17 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
           <div style={{ fontWeight: 700 }}>Loading ledger…</div>
         </div>
       )}
+
+      {/* Invoice Detail Slide-over Drawer */}
+      <InvoiceDetailDrawer
+        isOpen={Boolean(activeInvoiceRef)}
+        invoiceRef={activeInvoiceRef}
+        onClose={() => setActiveInvoiceRef(null)}
+        api={api}
+        customer={ledger?.customer}
+        shopId={ledger?.customer?.shop_id || session?.shop_id}
+        setGlobalToast={setGlobalToast}
+      />
     </div>
   );
 }

@@ -13,7 +13,8 @@ import {
   Phone,
   RotateCcw,
   Sparkles,
-  Download
+  Download,
+  Loader2
 } from 'lucide-react';
 import { 
   shareToWhatsAppService, 
@@ -124,9 +125,24 @@ export default function ShareInvoiceModal({
 
   const isAllSelected = selectedInvoiceId === 'all';
   const isStatement = docType === 'statement';
-  const activeInvoice = isAllSelected 
-    ? null 
-    : (invoices.find((inv) => String(inv.id) === String(selectedInvoiceId)) || invoices[0] || null);
+  
+  // Strictly scope line items to the target invoice
+  const activeInvoice = useMemo(() => {
+    if (isAllSelected) return null;
+    const inv = invoices.find((i) => String(i.id) === String(selectedInvoiceId)) || invoices[0] || null;
+    if (!inv) return null;
+    const targetId = inv.id;
+    const scopedItems = Array.isArray(inv.items)
+      ? inv.items.filter((it) => {
+          const itSaleId = it?.sale_id ?? it?.invoice_id;
+          return !itSaleId || String(itSaleId) === String(targetId);
+        })
+      : [];
+    return {
+      ...inv,
+      items: scopedItems.length > 0 ? scopedItems : (inv.items || []),
+    };
+  }, [isAllSelected, invoices, selectedInvoiceId]);
 
   const customerDisplayName = customer.customer_name || customer.name || activeInvoice?.customer_name || 'Valued Customer';
   const customerMobile = customer.mobile || activeInvoice?.mobile || '';
@@ -206,10 +222,24 @@ export default function ShareInvoiceModal({
     let totalCredit = 0;
     let totalPaid = 0;
     let totalPending = 0;
+    let totalProducts = 0;
 
     invoices.forEach((sale) => {
+      const invNo = sale.invoice_number || `INV-${String(sale.id || '').padStart(6, '0')}`;
+      const saleDate = sale.invoice_date || sale.sale_date || '';
       if (Array.isArray(sale.items)) {
-        allCustomerItems.push(...sale.items);
+        sale.items.forEach((item) => {
+          const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? 0);
+          const qty = Number(item.quantity ?? item.qty ?? 1);
+          const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
+          totalProducts += itemTotal;
+          allCustomerItems.push({
+            ...item,
+            sale_id: sale.id,
+            invoice_number: invNo,
+            sale_date: saleDate,
+          });
+        });
       }
       if (Array.isArray(sale.expenses)) {
         allCustomerExpenses.push(...sale.expenses);
@@ -219,13 +249,17 @@ export default function ShareInvoiceModal({
       totalPending += Number(sale.pending_amount || 0);
     });
 
+    const customerTotalOutstanding = Number(customer.pending_amount ?? totalPendingAll ?? totalPending);
+    const billItemsNet = Math.max(0, totalProducts - totalCredit);
+    const priorBalance = Math.max(0, customerTotalOutstanding - billItemsNet);
+
     const firstSale = invoices[0] || {};
     const lastSale = invoices[invoices.length - 1] || {};
 
     return {
       ...lastSale,
-      id: lastSale.id,
-      invoice_number: lastSale.invoice_number,
+      id: 'consolidated',
+      invoice_number: 'CONSOLIDATED',
       customer_id: customer.customer_id || customer.id || lastSale.customer_id,
       customer_name: customerDisplayName,
       mobile: customerMobile,
@@ -235,10 +269,12 @@ export default function ShareInvoiceModal({
       shop_name: shop?.name || lastSale.shop_name,
       items: allCustomerItems,
       expenses: allCustomerExpenses,
-      previous_balance: Number(firstSale.previous_balance || 0),
+      products_total: totalProducts,
+      subtotal: totalProducts,
+      previous_balance: priorBalance,
       applied_credit_amount: totalCredit,
       paid_amount: totalPaid,
-      pending_amount: totalPending,
+      pending_amount: customerTotalOutstanding,
       consolidated: true,
     };
   }, [isAllSelected, activeInvoice, invoices, customer, customerDisplayName, customerMobile, shop]);
@@ -301,10 +337,12 @@ export default function ShareInvoiceModal({
    * Adheres to:
    * 1. Native URI Scheme: whatsapp://send?phone=${cleanPhoneNumber}&text=${encodedMessage}
    * 2. Prevent Blank Tabs: Direct routing via window.location.href
-   * 3. Data Formatting: Stripped clean digits + encodeURIComponent()
-   * 4. Downloads selected Document Type (Tax Invoice by default or Account Statement)
+  /**
+   * 4. PRIMARY ACTION: Direct File Attachment via Web Share API with WhatsApp Link Fallback
+   * - Mobile / Modern Browser: Uses navigator.share with native File attachment.
+   * - Desktop / Fallback: Opens WhatsApp Web directly with view link and local PDF download.
    */
-  const handleShareWhatsAppAndPdf = async () => {
+  const handleShareInvoice = async () => {
     const rawPhone = editablePhone || customerMobile || '';
     const cleanPhone = parseCleanPhoneNumber(rawPhone);
     const messagePayload = (editableMessage || defaultFormattedMessage || '').trim();
@@ -323,46 +361,92 @@ export default function ShareInvoiceModal({
       return;
     }
 
-    const encodedMessage = encodeURIComponent(messagePayload);
-    const nativeWaUrl = `whatsapp://send?phone=${cleanPhone}&text=${encodedMessage}`;
-
     try {
       setSharing(true);
 
-      // Generate & Download PDF Document based on user's docType selection
+      // 1. Generate or retrieve the invoice/statement PDF as a jsPDF doc
       let doc = null;
       let filename = '';
+      let invoiceNumber = '';
 
       if (docType === 'statement') {
         const { customerData, salesData, shopData } = await fetchCompleteStatementData();
         doc = await generateStatementPDFDoc(customerData, salesData, shopData);
+        invoiceNumber = `Statement-${Date.now()}`;
         filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
       } else {
         // Default: Generate Tax Invoice PDF (Consolidated or Single)
         const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
-        const invNo = saleToUse?.invoice_number || (isAllSelected ? 'Consolidated' : `INV-${String(saleToUse?.id || '1').padStart(6, '0')}`);
+        const invNo = isAllSelected ? 'CONSOLIDATED' : (saleToUse?.invoice_number || `INV-${String(saleToUse?.id || '1').padStart(6, '0')}`);
+        invoiceNumber = invNo;
         doc = await generateInvoicePDFDoc(saleToUse, customer, shop);
         filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
       }
 
-      if (doc) {
-        doc.save(filename);
-        if (showToast) {
-          showToast(`📄 ${filename} downloaded! Attach in WhatsApp.`);
+      if (!doc) {
+        throw new Error('Failed to compile PDF document');
+      }
+
+      // 2. Build dynamic view link (Zero Supabase storage needed)
+      const invoiceUrl = `${window.location.origin}/view/invoice/${encodeURIComponent(invoiceNumber)}`;
+      const fullMessage = `${messagePayload}\n\n📄 *View Invoice:* ${invoiceUrl}`;
+
+      // 3. Native File Attachment via Web Share API (Windows 11 / macOS / Android / iOS)
+      // Generates blob strictly in memory (Zero local disk file clutter)
+      if (typeof navigator !== 'undefined' && navigator.share) {
+        try {
+          const pdfBlob = doc.output('blob');
+          const invoiceFile = new File([pdfBlob], filename, { type: 'application/pdf' });
+
+          if (navigator.canShare && navigator.canShare({ files: [invoiceFile] })) {
+            if (showToast) {
+              showToast('📎 Attaching invoice... Click WhatsApp in the share window');
+            }
+            await navigator.share({
+              title: docType === 'statement' ? `Account Statement - ${customerDisplayName}` : `Invoice #${invoiceNumber}`,
+              text: messagePayload,
+              files: [invoiceFile],
+            });
+            if (authedFetch) {
+              authedFetch('/audit', {
+                method: 'POST',
+                body: JSON.stringify({
+                  action: 'Shared invoice on WhatsApp',
+                  entity_type: 'invoice',
+                  entity_id: customer?.customer_id || customer?.id || activeInvoice?.customer_id || 0,
+                  details: `Sent to ${cleanPhone}`,
+                }),
+              }).catch(() => {});
+            }
+            onClose();
+            return;
+          }
+        } catch (shareErr) {
+          if (shareErr.name === 'AbortError') return; // User closed the share sheet
+          console.warn('Native file share failed or unsupported, proceeding to WhatsApp link fallback:', shareErr);
         }
       }
 
-      // Copy text to clipboard for extra convenience
+      // 5. Desktop / Unsupported Fallback:
+      // ZERO LOCAL BROWSER DOWNLOADS!
+      // Simply open WhatsApp directly with text + dynamic zero-storage view link:
+      const targetPhone = cleanPhone.startsWith('91') || cleanPhone.length > 10 ? cleanPhone : `91${cleanPhone}`;
+      const waUrl = `https://api.whatsapp.com/send?phone=${targetPhone}&text=${encodeURIComponent(fullMessage)}`;
+
+      // Copy text to clipboard for convenience
       try {
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(messagePayload);
+          await navigator.clipboard.writeText(fullMessage);
         }
       } catch {}
 
-      // Trigger native WhatsApp directly without blank tab
-      window.location.href = nativeWaUrl;
+      if (showToast) {
+        showToast(`Opening WhatsApp for ${targetPhone}...`);
+      }
 
-      // Record audit log
+      window.open(waUrl, '_blank');
+
+      // 5. Audit log
       if (authedFetch) {
         authedFetch('/audit', {
           method: 'POST',
@@ -377,12 +461,64 @@ export default function ShareInvoiceModal({
 
       onClose();
     } catch (err) {
-      console.error('Share via WhatsApp & PDF failed:', err);
+      console.error('Share via WhatsApp & Invoice failed:', err);
       if (showToast) showToast(`Share failed: ${err.message || 'Unknown error'}`);
     } finally {
       setSharing(false);
     }
   };
+
+  /**
+   * System Share Flyout (Windows OS / macOS / Native device share sheet)
+   */
+  const handleSystemShareFlyout = async () => {
+    try {
+      setSharing(true);
+      let doc = null;
+      let filename = '';
+      let invoiceNumber = '';
+
+      if (docType === 'statement') {
+        const { customerData, salesData, shopData } = await fetchCompleteStatementData();
+        doc = await generateStatementPDFDoc(customerData, salesData, shopData);
+        invoiceNumber = `Statement-${Date.now()}`;
+        filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
+      } else {
+        const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
+        const invNo = isAllSelected ? 'CONSOLIDATED' : (saleToUse?.invoice_number || `INV-${String(saleToUse?.id || '1').padStart(6, '0')}`);
+        invoiceNumber = invNo;
+        doc = await generateInvoicePDFDoc(saleToUse, customer, shop);
+        filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
+      }
+
+      if (!doc) throw new Error('Failed to compile PDF document');
+
+      const pdfBlob = doc.output('blob');
+      const invoiceFile = new File([pdfBlob], filename, { type: 'application/pdf' });
+
+      if (typeof navigator !== 'undefined' && navigator.canShare && navigator.canShare({ files: [invoiceFile] })) {
+        if (showToast) showToast('Opening system share sheet...');
+        await navigator.share({
+          title: docType === 'statement' ? `Account Statement - ${customerDisplayName}` : `Invoice #${invoiceNumber}`,
+          text: (editableMessage || defaultFormattedMessage || '').trim(),
+          files: [invoiceFile],
+        });
+      } else {
+        doc.save(filename);
+        if (showToast) showToast(`📄 ${filename} downloaded! System file share not supported on this browser.`);
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.warn('System share error:', err);
+        if (showToast) showToast(`Share failed: ${err.message || 'Error'}`);
+      }
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  // Alias for backward compatibility
+  const handleShareWhatsAppAndPdf = handleShareInvoice;
 
   /**
    * Direct Download Tax Invoice PDF
@@ -391,7 +527,7 @@ export default function ShareInvoiceModal({
     try {
       const saleToUse = isAllSelected ? consolidatedSale : (activeInvoice || invoices[0]);
       if (!saleToUse) return;
-      const invNo = saleToUse.invoice_number || (isAllSelected ? 'Consolidated' : `INV-${String(saleToUse.id || '1').padStart(6, '0')}`);
+      const invNo = isAllSelected ? 'CONSOLIDATED' : (saleToUse.invoice_number || `INV-${String(saleToUse.id || '1').padStart(6, '0')}`);
       const doc = await generateInvoicePDFDoc(saleToUse, customer, shop);
       const filename = `${isAllSelected ? 'Consolidated_' : ''}Invoice_${invNo}_${customerDisplayName.replace(/\s+/g, '_')}.pdf`;
       doc.save(filename);
@@ -801,18 +937,40 @@ export default function ShareInvoiceModal({
             >
               <Send size={14} className="text-slate-500" /> Text Only
             </button>
+
+            {/* Optional OS System Share */}
+            {typeof navigator !== 'undefined' && typeof navigator.share === 'function' && (
+              <button
+                type="button"
+                onClick={handleSystemShareFlyout}
+                disabled={sharing}
+                className="px-3 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                title="Open OS System Share Sheet (Windows, Teams, Outlook, Nearby)"
+              >
+                <Share2 size={14} className="text-slate-500" /> System Share
+              </button>
+            )}
           </div>
 
-          {/* Primary Action: Share via WhatsApp & PDF */}
+          {/* Primary Action: Share via WhatsApp & Invoice with Web Share API & Fallback */}
           <button
             type="button"
-            onClick={handleShareWhatsAppAndPdf}
+            onClick={handleShareInvoice}
             disabled={sharing}
-            className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-black shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+            className="px-4 py-3 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl text-xs font-black shadow-lg shadow-emerald-600/20 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            <Send size={15} />
-            <span>{sharing ? 'Preparing Document...' : `Share via WhatsApp & ${docType === 'invoice' ? 'Invoice' : 'Statement'}`}</span>
-            {!sharing && <ChevronRight size={14} />}
+            {sharing ? (
+              <>
+                <Loader2 size={15} className="animate-spin" />
+                <span>Preparing Invoice...</span>
+              </>
+            ) : (
+              <>
+                <Send size={15} />
+                <span>Share via WhatsApp & {docType === 'invoice' ? 'Invoice' : 'Statement'}</span>
+                <ChevronRight size={14} />
+              </>
+            )}
           </button>
         </div>
 

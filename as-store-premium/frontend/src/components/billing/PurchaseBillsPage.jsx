@@ -4,6 +4,7 @@ import {
   ShoppingBag, Plus, Search, Eye, X, AlertCircle, RefreshCw,
   ChevronDown, ChevronUp, CreditCard, Loader2, Check, Trash2, Package
 } from 'lucide-react';
+import NewPurchaseBillModal from './NewPurchaseBillModal';
 
 const money = (v) => Math.round(Number(v || 0) * 100) / 100;
 const currency = (v) => `₹${money(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -26,215 +27,8 @@ function StatusBadge({ status }) {
   );
 }
 
-function BillFormModal({ suppliers, products, onClose, onSaved, api, setGlobalToast, shopId }) {
-  const [supplierId, setSupplierId] = useState('');
-  const [billDate, setBillDate] = useState(today());
-  const [paymentTerms, setPaymentTerms] = useState(30);
-  const [paymentMode, setPaymentMode] = useState('credit');
-  const [notes, setNotes] = useState('');
-  const [extraCharges, setExtraCharges] = useState('');
-  const [items, setItems] = useState([{ product_id: '', custom_product_name: '', quantity: 1, unit_price: '', discount_amount: 0 }]);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
+// BillFormModal has been upgraded into NewPurchaseBillModal.jsx for ERP-level high efficiency entry.
 
-  const addItem = () => setItems(prev => [...prev, { product_id: '', custom_product_name: '', quantity: 1, unit_price: '', discount_amount: 0 }]);
-  const removeItem = (i) => setItems(prev => prev.filter((_, idx) => idx !== i));
-  const updateItem = (i, field, val) => setItems(prev => prev.map((item, idx) => idx === i ? { ...item, [field]: val } : item));
-
-  const productsTotal = items.reduce((s, item) => s + money(Number(item.quantity || 0) * money(item.unit_price || 0) - money(item.discount_amount || 0)), 0);
-  const totalAmount = money(productsTotal + money(extraCharges || 0));
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError(null);
-    const validItems = items.filter(item => (item.product_id || item.custom_product_name?.trim()) && Number(item.quantity) > 0 && Number(item.unit_price) > 0);
-    if (!validItems.length) { setError('Add at least one item with quantity and price.'); return; }
-    setSaving(true);
-    try {
-      await api('/purchase-bills', {
-        method: 'POST',
-        body: JSON.stringify({
-          shop_id: shopId,
-          supplier_id: supplierId || null,
-          bill_date: billDate,
-          payment_terms_days: Number(paymentTerms),
-          payment_mode: paymentMode,
-          notes,
-          extra_charges: money(extraCharges || 0),
-          items: validItems.map(item => ({
-            product_id: item.product_id || null,
-            custom_product_name: item.custom_product_name || null,
-            quantity: Number(item.quantity),
-            unit_price: money(item.unit_price),
-            discount_amount: money(item.discount_amount || 0),
-          })),
-        }),
-      });
-      setGlobalToast && setGlobalToast({ type: 'success', message: 'Purchase bill created.' });
-      onSaved();
-    } catch (err) {
-      setError(err.message || 'Failed to create purchase bill.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: '24px 12px', zIndex: 1000, overflowY: 'auto', backdropFilter: 'blur(4px)' }}>
-      <motion.div initial={{ scale: 0.94, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, y: 20 }}
-        style={{ background: '#fff', borderRadius: 20, width: '100%', maxWidth: 720, boxShadow: '0 25px 60px rgba(0,0,0,0.2)', marginTop: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px 24px', borderBottom: '1px solid #f1f5f9' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 36, height: 36, borderRadius: 10, background: 'linear-gradient(135deg,#7c3aed,#6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff' }}>
-              <ShoppingBag size={17} />
-            </div>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 16, color: '#0f172a' }}>New Purchase Bill</div>
-              <div style={{ fontSize: 11, color: '#64748b' }}>Record a vendor invoice</div>
-            </div>
-          </div>
-          <button onClick={onClose} style={{ border: 'none', background: '#f1f5f9', borderRadius: 8, padding: 8, cursor: 'pointer', color: '#64748b' }}><X size={16} /></button>
-        </div>
-
-        <form onSubmit={handleSubmit} style={{ padding: '20px 24px' }}>
-          {error && (
-            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '10px 14px', color: '#dc2626', fontSize: 13, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <AlertCircle size={14} />{error}
-            </div>
-          )}
-
-          {/* Top fields */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 20 }}>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>Vendor (optional)</label>
-              <select value={supplierId} onChange={e => setSupplierId(e.target.value)}
-                style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontWeight: 600, background: '#f8fafc', color: '#0f172a' }}>
-                <option value="">— No vendor —</option>
-                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>Bill Date</label>
-              <input type="date" value={billDate} onChange={e => setBillDate(e.target.value)}
-                style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontWeight: 600, background: '#f8fafc', color: '#0f172a', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>Payment Terms (days)</label>
-              <input type="number" value={paymentTerms} onChange={e => setPaymentTerms(e.target.value)} min={0} max={365}
-                style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontWeight: 600, background: '#f8fafc', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>Payment Mode</label>
-              <select value={paymentMode} onChange={e => setPaymentMode(e.target.value)}
-                style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontWeight: 600, background: '#f8fafc', color: '#0f172a' }}>
-                {['credit', 'cash', 'upi', 'bank', 'cheque'].map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
-              </select>
-            </div>
-          </div>
-
-          {/* Items */}
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>Items</span>
-              <button type="button" onClick={addItem}
-                style={{ padding: '5px 12px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                <Plus size={12} /> Add Item
-              </button>
-            </div>
-            <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                  <tr style={{ background: '#f8fafc' }}>
-                    {['Product / Description', 'Qty', 'Unit Price', 'Discount', 'Total', ''].map(h => (
-                      <th key={h} style={{ padding: '8px 10px', textAlign: 'left', fontWeight: 700, color: '#475569', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.3, borderBottom: '1px solid #e2e8f0' }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((item, i) => {
-                    const lineTotal = money(Number(item.quantity || 0) * money(item.unit_price || 0) - money(item.discount_amount || 0));
-                    return (
-                      <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '8px 10px' }}>
-                          <select value={item.product_id} onChange={e => { updateItem(i, 'product_id', e.target.value); if (e.target.value) updateItem(i, 'custom_product_name', ''); }}
-                            style={{ width: '100%', padding: '6px 8px', borderRadius: 7, border: '1.5px solid #e2e8f0', fontSize: 12, background: '#f8fafc', marginBottom: 4 }}>
-                            <option value="">— Custom / type below —</option>
-                            {products.map(p => <option key={p.id} value={p.id}>{p.short_name || p.name}</option>)}
-                          </select>
-                          {!item.product_id && (
-                            <input placeholder="Item description" value={item.custom_product_name} onChange={e => updateItem(i, 'custom_product_name', e.target.value)}
-                              style={{ width: '100%', padding: '5px 8px', borderRadius: 7, border: '1.5px solid #e2e8f0', fontSize: 12, boxSizing: 'border-box' }} />
-                          )}
-                        </td>
-                        <td style={{ padding: '8px 6px' }}>
-                          <input type="number" min={1} value={item.quantity} onChange={e => updateItem(i, 'quantity', e.target.value)}
-                            style={{ width: 60, padding: '6px 8px', borderRadius: 7, border: '1.5px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
-                        </td>
-                        <td style={{ padding: '8px 6px' }}>
-                          <input type="number" min={0} step="0.01" placeholder="0.00" value={item.unit_price} onChange={e => updateItem(i, 'unit_price', e.target.value)}
-                            style={{ width: 90, padding: '6px 8px', borderRadius: 7, border: '1.5px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
-                        </td>
-                        <td style={{ padding: '8px 6px' }}>
-                          <input type="number" min={0} step="0.01" placeholder="0.00" value={item.discount_amount} onChange={e => updateItem(i, 'discount_amount', e.target.value)}
-                            style={{ width: 80, padding: '6px 8px', borderRadius: 7, border: '1.5px solid #e2e8f0', fontSize: 12, textAlign: 'right' }} />
-                        </td>
-                        <td style={{ padding: '8px 10px', fontWeight: 700, color: '#0f172a', textAlign: 'right', whiteSpace: 'nowrap' }}>{currency(lineTotal)}</td>
-                        <td style={{ padding: '8px 8px', textAlign: 'center' }}>
-                          {items.length > 1 && (
-                            <button type="button" onClick={() => removeItem(i)}
-                              style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#dc2626', padding: 4, borderRadius: 6 }}>
-                              <Trash2 size={13} />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* Totals */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 20 }}>
-            <div style={{ flex: '1 1 220px' }}>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>Extra Charges</label>
-              <input type="number" min={0} step="0.01" placeholder="0.00" value={extraCharges} onChange={e => setExtraCharges(e.target.value)}
-                style={{ padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontWeight: 600, background: '#f8fafc', width: '100%', boxSizing: 'border-box' }} />
-            </div>
-            <div>
-              <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.4 }}>Notes</label>
-              <input placeholder="Optional notes…" value={notes} onChange={e => setNotes(e.target.value)}
-                style={{ padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, background: '#f8fafc', width: 220, boxSizing: 'border-box' }} />
-            </div>
-            <div style={{ textAlign: 'right', background: '#f8fafc', borderRadius: 12, padding: '12px 18px', border: '1px solid #e2e8f0' }}>
-              <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>Bill Total</div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: '#0f172a', letterSpacing: -0.5 }}>{currency(totalAmount)}</div>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
-            <button type="button" onClick={onClose}
-              style={{ padding: '10px 22px', borderRadius: 10, border: '1.5px solid #e2e8f0', background: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', color: '#475569' }}>
-              Cancel
-            </button>
-            <button type="submit" disabled={saving}
-              style={{
-                padding: '10px 24px', borderRadius: 10, border: 'none', cursor: 'pointer',
-                background: 'linear-gradient(135deg,#7c3aed,#6366f1)', color: '#fff', fontSize: 13, fontWeight: 700,
-                display: 'flex', alignItems: 'center', gap: 8, boxShadow: '0 4px 14px rgba(99,102,241,0.4)'
-              }}>
-              {saving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={14} />}
-              {saving ? 'Saving…' : 'Create Bill'}
-            </button>
-          </div>
-        </form>
-      </motion.div>
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-    </motion.div>
-  );
-}
 
 function PayModal({ bill, onClose, onSaved, api, setGlobalToast }) {
   const [amount, setAmount] = useState(String(money(bill.pending_amount)));
@@ -511,11 +305,18 @@ export default function PurchaseBillsPage({ session, api, setGlobalToast, suppli
       {/* Modals */}
       <AnimatePresence>
         {showForm && (
-          <BillFormModal
-            suppliers={suppliers} products={products}
-            shopId={shopId} api={api} setGlobalToast={setGlobalToast}
+          <NewPurchaseBillModal
+            isOpen={showForm}
+            suppliers={suppliers}
+            products={products}
+            shopId={shopId}
+            api={api}
+            setGlobalToast={setGlobalToast}
             onClose={() => setShowForm(false)}
-            onSaved={() => { setShowForm(false); fetchBills(); }}
+            onSaved={() => {
+              setShowForm(false);
+              fetchBills();
+            }}
           />
         )}
         {payingBill && (

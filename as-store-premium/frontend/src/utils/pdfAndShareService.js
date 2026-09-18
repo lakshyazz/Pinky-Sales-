@@ -102,7 +102,10 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
     custGstin ? `GSTIN: ${custGstin}` : ''
   ].filter(Boolean).join(' · ');
 
-  const invoiceNo = sale?.invoice_number || `INV-${String(sale?.id || 1).padStart(6, '0')}`;
+  const isConsolidated = Boolean(sale?.consolidated);
+  const invoiceNo = isConsolidated
+    ? (sale?.invoice_number && sale.invoice_number !== 'CONSOLIDATED' ? sale.invoice_number : 'CONSOLIDATED BILL')
+    : (sale?.invoice_number || `INV-${String(sale?.id || 1).padStart(6, '0')}`);
   const invoiceDate = formatDMY(sale?.invoice_date || sale?.sale_date || new Date().toISOString());
   
   const isCash = String(sale?.payment_mode || '').trim().toLowerCase() === 'cash';
@@ -129,10 +132,10 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
   doc.text(`Phone: ${shopPhone}`, 13, 25.5);
   doc.text('Gujarat, India', 13, 29.5);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(22);
+  doc.setFont('helvetica', isConsolidated ? 'bold' : 'normal');
+  doc.setFontSize(isConsolidated ? 12 : 22);
   doc.setTextColor(17, 17, 17);
-  doc.text(sale?.consolidated ? 'CONSOLIDATED INVOICE' : 'TAX INVOICE', 197, 19, { align: 'right' });
+  doc.text(isConsolidated ? 'ACCOUNT STATEMENT & CONSOLIDATED SUMMARY' : 'TAX INVOICE', 197, 19, { align: 'right' });
 
   // Divider after Header
   doc.setDrawColor(153, 153, 153);
@@ -191,52 +194,152 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
   doc.line(10, 75, 200, 75);
 
   // 5. Products Table (startY = 75mm)
-  const invoiceItems = Array.isArray(sale?.items) && sale.items.length ? sale.items : [sale];
+  // Strictly scope line items if Single Tax Invoice
+  const targetSaleId = sale?.id;
+  let invoiceItems = Array.isArray(sale?.items) && sale.items.length ? sale.items : [sale];
+
+  if (!isConsolidated && targetSaleId) {
+    const strictlyScoped = invoiceItems.filter((it) => {
+      const itSaleId = it?.sale_id ?? it?.invoice_id;
+      if (itSaleId !== undefined && itSaleId !== null) {
+        return String(itSaleId) === String(targetSaleId);
+      }
+      return true;
+    });
+    if (strictlyScoped.length > 0) {
+      invoiceItems = strictlyScoped;
+    }
+  }
+
   const rawItems = invoiceItems.flatMap((item) => {
     const parentBrand = item?.manufacturing_brand_name || item?.mfg_brand || item?.brand_name || item?.brand || sale?.manufacturing_brand_name || sale?.mfg_brand || sale?.brand_name || sale?.brand || '';
+    const parentInvNo = item?.invoice_number || sale?.invoice_number || '';
+    const parentDate = item?.invoice_date || item?.sale_date || sale?.invoice_date || sale?.sale_date || '';
+    const parentSaleId = item?.sale_id || item?.id || sale?.id;
+
     if (Array.isArray(item?.items) && item.items.length > 0) {
       return item.items.map((sub) => ({
         ...sub,
-        manufacturing_brand_name: sub.manufacturing_brand_name || sub.mfg_brand || sub.brand_name || sub.brand || sub.custom_brand_name || parentBrand,
+        sale_id: sub?.sale_id || parentSaleId,
+        invoice_number: sub?.invoice_number || parentInvNo,
+        sale_date: sub?.invoice_date || sub?.sale_date || parentDate,
+        manufacturing_brand_name: sub?.manufacturing_brand_name || sub?.mfg_brand || sub?.brand_name || sub?.brand || sub?.custom_brand_name || parentBrand,
       }));
     }
     return [{
       ...item,
+      sale_id: item?.sale_id || parentSaleId,
+      invoice_number: item?.invoice_number || parentInvNo,
+      sale_date: item?.invoice_date || item?.sale_date || parentDate,
       manufacturing_brand_name: item?.manufacturing_brand_name || item?.mfg_brand || item?.brand_name || item?.brand || item?.custom_brand_name || parentBrand,
     }];
   }).filter(Boolean);
 
-  const tableRows = rawItems.map((it, idx) => {
+  // 3. Mathematical Sanity Check (Assertion Guard)
+  const computedItemsSum = rawItems.reduce((acc, it) => {
     const rate = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? (it.total_amount && it.quantity ? Number(it.total_amount) / Number(it.quantity) : (it.amount && it.quantity ? Number(it.amount) / Number(it.quantity) : 0)));
     const qty = Number(it.quantity ?? it.qty ?? 1);
     const lineTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
-    const unitPrice = qty > 0 ? (rate || (lineTotal / qty)) : lineTotal;
+    return acc + lineTotal;
+  }, 0);
 
-    const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
-    const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
+  const expectedSubtotal = Number(sale?.subtotal ?? sale?.products_total ?? 0);
+  if (!isConsolidated && expectedSubtotal > 0 && Math.abs(computedItemsSum - expectedSubtotal) > 1) {
+    throw new Error(
+      `CRITICAL PDF MISMATCH: Sum of items (₹${computedItemsSum.toFixed(2)}) does not match invoice subtotal (₹${expectedSubtotal.toFixed(2)}). Aborting render.`
+    );
+  }
 
-    // Item Description Formatting:
-    // Line 1: Product Name (e.g. MOTO EDGE 50)
-    // Line 2 (if present): Color Variants / Attributes (e.g. [ Black: 2, Green: 2 ])
-    // Line 3 (if present): Brand Name Only (e.g. AS CARE — strictly without Mfg. prefix)
-    const descLines = [shortName];
-    if (it.colour && String(it.colour).trim()) {
-      const c = String(it.colour).trim();
-      descLines.push(c.startsWith('[') ? c : `[ ${c} ]`);
-    }
-    const brandName = getBrandName(it, sale);
-    if (brandName) {
-      descLines.push(brandName);
-    }
+  // The Products Subtotal dynamically equals the sum of those exact line items
+  const productsSubtotal = computedItemsSum;
 
-    return [
-      idx + 1,
-      descLines.join('\n'),
-      `${qty}\nPCS`,
-      formatMoney(unitPrice),
-      formatMoney(lineTotal),
-    ];
-  });
+  let tableRows = [];
+  if (isConsolidated) {
+    // Group line items under explicit section headers by invoice number/date so items are never mixed together ambiguously
+    const groups = new Map();
+    rawItems.forEach((it) => {
+      const key = String(it.invoice_number || (it.sale_id ? `INV-${String(it.sale_id).padStart(6, '0')}` : 'General'));
+      if (!groups.has(key)) {
+        groups.set(key, { invoiceNumber: key, date: it.sale_date || it.invoice_date || '', items: [] });
+      }
+      groups.get(key).items.push(it);
+    });
+
+    let rowNum = 1;
+    groups.forEach((group) => {
+      const headerText = `Invoice #${group.invoiceNumber}${group.date ? ` • ${formatDMY(group.date)}` : ''}`;
+      tableRows.push([
+        {
+          content: headerText,
+          colSpan: 5,
+          styles: {
+            fontStyle: 'bold',
+            fillColor: [240, 244, 248],
+            textColor: [15, 23, 42],
+            fontSize: 8,
+            cellPadding: 2,
+          },
+        },
+      ]);
+
+      group.items.forEach((it) => {
+        const rate = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? (it.total_amount && it.quantity ? Number(it.total_amount) / Number(it.quantity) : (it.amount && it.quantity ? Number(it.amount) / Number(it.quantity) : 0)));
+        const qty = Number(it.quantity ?? it.qty ?? 1);
+        const lineTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
+        const unitPrice = qty > 0 ? (rate || (lineTotal / qty)) : lineTotal;
+
+        const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
+        const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
+
+        const descLines = [shortName];
+        if (it.colour && String(it.colour).trim()) {
+          const c = String(it.colour).trim();
+          descLines.push(c.startsWith('[') ? c : `[ ${c} ]`);
+        }
+        const brandName = getBrandName(it, sale);
+        if (brandName) {
+          descLines.push(brandName);
+        }
+
+        tableRows.push([
+          rowNum++,
+          descLines.join('\n'),
+          `${qty}\nPCS`,
+          formatMoney(unitPrice),
+          formatMoney(lineTotal),
+        ]);
+      });
+    });
+  } else {
+    // Single Tax Invoice: strictly scoped items without cross-invoice grouping
+    tableRows = rawItems.map((it, idx) => {
+      const rate = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? (it.total_amount && it.quantity ? Number(it.total_amount) / Number(it.quantity) : (it.amount && it.quantity ? Number(it.amount) / Number(it.quantity) : 0)));
+      const qty = Number(it.quantity ?? it.qty ?? 1);
+      const lineTotal = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (rate * qty));
+      const unitPrice = qty > 0 ? (rate || (lineTotal / qty)) : lineTotal;
+
+      const rawShort = it.custom_product_name || it.short_name || it.product_short_name || it.product_name || it.name || 'Product';
+      const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
+
+      const descLines = [shortName];
+      if (it.colour && String(it.colour).trim()) {
+        const c = String(it.colour).trim();
+        descLines.push(c.startsWith('[') ? c : `[ ${c} ]`);
+      }
+      const brandName = getBrandName(it, sale);
+      if (brandName) {
+        descLines.push(brandName);
+      }
+
+      return [
+        idx + 1,
+        descLines.join('\n'),
+        `${qty}\nPCS`,
+        formatMoney(unitPrice),
+        formatMoney(lineTotal),
+      ];
+    });
+  }
 
   autoTable(doc, {
     startY: 75,
@@ -278,62 +381,98 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
   const courier = Number(sale?.extra_expenses_total ?? sale?.extra_expenses ?? sale?.courier_charge ?? (
     allExpenses.reduce((s, e) => s + Number(e.amount || 0), 0)
   ) ?? 0);
-  const productsSubtotal = Number(sale?.products_total || rawItems.reduce((sum, it) => {
-    const r = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? 0);
-    const q = Number(it.quantity ?? it.qty ?? 1);
-    return sum + (it.total_amount ?? it.total_price ?? it.amount ?? (r * q));
-  }, 0));
-  const prevBalance = Number(sale?.previous_balance ?? sale?.old_balance ?? 0);
   const appliedCredit = Number(sale?.applied_credit_amount ?? sale?.credit_applied ?? 0);
   const advanceApplied = Number(sale?.advance_applied ?? sale?.advance_credit ?? 0);
-  const grandTotal = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit);
   const paidAmount = Number(sale?.paid_amount ?? sale?.amount_paid ?? 0);
-  const balanceDue = Math.max(0, grandTotal - paidAmount);
   const totalQuantity = rawItems.reduce((s, it) => s + Number(it.quantity ?? it.qty ?? 1), 0);
 
-  // Determine height needed for right side
   let rightRows = [
     { label: 'Products Subtotal', amount: formatMoney(productsSubtotal), bold: false },
   ];
+
   if (courier > 0) {
     rightRows.push({ label: '+ COURIER / EXPENSES', amount: formatMoney(courier), bold: false, color: [15, 118, 110] });
   }
-  if (prevBalance > 0) {
-    rightRows.push({ label: '+ PREVIOUS BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
-  } else if (prevBalance < 0) {
-    rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
-  }
-  if (appliedCredit > 0) {
-    rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
-  }
-  if (advanceApplied > 0) {
-    rightRows.push({ label: '- STORE CREDIT / ADVANCE', amount: `-${formatMoney(advanceApplied)}`, bold: false, color: [15, 118, 110] });
-  }
-  rightRows.push({ label: 'Grand Total', amount: formatMoney(grandTotal), bold: true });
-  rightRows.push({ label: 'Amount Paid', amount: formatMoney(paidAmount), bold: false });
-  if (balanceDue <= 0) {
-    rightRows.push({ label: 'Payment Status', amount: 'PAID IN FULL', bold: true, color: [22, 101, 52] });
-    const latestPayment = Array.isArray(sale?.payments) && sale.payments.length > 0
-      ? sale.payments[sale.payments.length - 1]
-      : null;
-    if (latestPayment && latestPayment.payment_date) {
-      rightRows.push({
-        label: 'Paid On',
-        amount: `${formatDMY(latestPayment.payment_date)} (${String(latestPayment.payment_mode || 'Cash').toUpperCase()})`,
-        bold: false,
-        color: [22, 101, 52]
-      });
+
+  let finalBillAmount = 0;
+  let balanceDue = 0;
+
+  if (!isConsolidated) {
+    // Option A: Standard B2B Single Tax Invoice (Self-contained single invoice)
+    if (appliedCredit > 0) {
+      rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
+    }
+    if (advanceApplied > 0) {
+      rightRows.push({ label: '- STORE CREDIT / ADVANCE', amount: `-${formatMoney(advanceApplied)}`, bold: false, color: [15, 118, 110] });
+    }
+
+    finalBillAmount = Math.max(0, (productsSubtotal + courier) - appliedCredit - advanceApplied);
+    balanceDue = Math.max(0, finalBillAmount - paidAmount);
+
+    rightRows.push({ label: 'Invoice Total', amount: formatMoney(finalBillAmount), bold: true });
+    rightRows.push({ label: 'Amount Paid', amount: formatMoney(paidAmount), bold: false });
+
+    if (balanceDue <= 0) {
+      rightRows.push({ label: 'Payment Status', amount: 'PAID IN FULL', bold: true, color: [22, 101, 52] });
+      const latestPayment = Array.isArray(sale?.payments) && sale.payments.length > 0
+        ? sale.payments[sale.payments.length - 1]
+        : null;
+      if (latestPayment && latestPayment.payment_date) {
+        rightRows.push({
+          label: 'Paid On',
+          amount: `${formatDMY(latestPayment.payment_date)} (${String(latestPayment.payment_mode || 'Cash').toUpperCase()})`,
+          bold: false,
+          color: [22, 101, 52]
+        });
+      }
+    } else {
+      rightRows.push({ label: 'Balance Due for this Invoice', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
     }
   } else {
-    rightRows.push({ label: 'Balance Due', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
+    // Consolidated Statement / Bill with Prior Ledger Balance
+    // Ensure the Grand Total and Balance Due reconcile with the customer's true total outstanding balance
+    const customerTotalPending = customer?.pending_amount !== undefined && customer?.pending_amount !== null
+      ? Number(customer.pending_amount)
+      : (sale?.pending_amount !== undefined && sale?.pending_amount !== null ? Number(sale.pending_amount) : null);
+
+    const currentBillNet = (productsSubtotal + courier) - appliedCredit - advanceApplied;
+
+    let prevBalance = Number(sale?.previous_balance ?? sale?.old_balance ?? 0);
+    if (customerTotalPending !== null && !isNaN(customerTotalPending) && customerTotalPending > 0) {
+      prevBalance = Math.max(0, customerTotalPending - currentBillNet + paidAmount);
+      finalBillAmount = customerTotalPending;
+      balanceDue = Math.max(0, customerTotalPending - paidAmount);
+    } else {
+      finalBillAmount = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit - advanceApplied);
+      balanceDue = Math.max(0, finalBillAmount - paidAmount);
+    }
+
+    if (prevBalance > 0) {
+      rightRows.push({ label: '+ PREVIOUS BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
+    } else if (prevBalance < 0) {
+      rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
+    }
+    if (appliedCredit > 0) {
+      rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
+    }
+    if (advanceApplied > 0) {
+      rightRows.push({ label: '- STORE CREDIT / ADVANCE', amount: `-${formatMoney(advanceApplied)}`, bold: false, color: [15, 118, 110] });
+    }
+
+    rightRows.push({ label: 'Grand Total', amount: formatMoney(finalBillAmount), bold: true });
+    rightRows.push({ label: 'Amount Paid', amount: formatMoney(paidAmount), bold: false });
+
+    if (balanceDue <= 0) {
+      rightRows.push({ label: 'Payment Status', amount: 'PAID IN FULL', bold: true, color: [22, 101, 52] });
+    } else {
+      rightRows.push({ label: 'Balance Due', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
+    }
   }
 
   // Calculate customer's remaining available advance / credit balance
   const remainingCredit = (sale?.closing_balance !== undefined && Number(sale.closing_balance) < 0)
     ? Math.abs(Number(sale.closing_balance))
-    : (prevBalance < 0 && (productsSubtotal + courier + prevBalance) < 0
-      ? Math.abs(productsSubtotal + courier + prevBalance)
-      : Number(customer?.advance_balance ?? sale?.customer_advance_balance ?? sale?.advance_balance ?? 0));
+    : Number(customer?.advance_balance ?? sale?.customer_advance_balance ?? sale?.advance_balance ?? 0);
 
   if (remainingCredit > 0) {
     rightRows.push({
@@ -362,7 +501,7 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
   
   doc.text('Total In Words', 13, startY + 12);
   doc.setFont('helvetica', 'bolditalic');
-  doc.text(`Indian Rupee ${toWords(grandTotal)} Only`, 13, startY + 16);
+  doc.text(`Indian Rupee ${toWords(finalBillAmount)} Only`, 13, startY + 16);
 
   doc.setFont('helvetica', 'normal');
   doc.text('Notes', 13, startY + 23);
@@ -372,13 +511,24 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
   doc.setTextColor(17, 17, 17);
   doc.text('Terms & Conditions', 13, startY + 34);
   doc.setTextColor(71, 85, 105);
-  doc.text('Goods once sold will not be returned or exchanged.', 13, startY + 38);
+  doc.text('ORIGINAL LCD GOODS THREE MONTHS WARRANTY ONLY', 13, startY + 38);
+
+  // Optional Footer Note for Single Tax Invoice: Total Account Outstanding
+  const customerAccountOutstanding = Number(customer?.pending_amount ?? sale?.customer_pending_amount ?? 0);
+  let noteOffset = 44;
+  if (!isConsolidated && customerAccountOutstanding > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(180, 83, 9);
+    doc.text(`Total Account Outstanding: Rs. ${formatMoney(customerAccountOutstanding)}`, 13, startY + noteOffset);
+    noteOffset += 5.5;
+  }
 
   if (remainingCredit > 0) {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
     doc.setTextColor(15, 118, 110);
-    doc.text(`Available Store Credit / Advance: Rs. ${formatMoney(remainingCredit)}`, 13, startY + 44);
+    doc.text(`Available Store Credit / Advance: Rs. ${formatMoney(remainingCredit)} Cr`, 13, startY + noteOffset);
   }
 
   // Right Content: Totals Table
@@ -1214,20 +1364,20 @@ export const shareToWhatsAppService = async ({
   const encodedMessage = encodeURIComponent(message);
   const nativeWaUrl = `whatsapp://send?phone=${cleanMobile}&text=${encodedMessage}`;
 
-  // 5. Handle File Generation and Native Sharing or Native WhatsApp Trigger
+  // 5. Handle File Generation and Native Sharing or WhatsApp Web/Desktop Trigger
   try {
     if (doc) {
       const pdfBlob = doc.output('blob');
       const pdfFile = new File([pdfBlob], filename, { type: 'application/pdf' });
 
-      if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
         try {
+          if (showToast) showToast('📎 Attaching invoice... Click WhatsApp in the share window');
           await navigator.share({
             files: [pdfFile],
             title: isSingle ? `Invoice ${invNo}` : `Statement - ${custName}`,
             text: message,
           });
-          if (showToast) showToast(isSingle ? 'Invoice PDF shared successfully!' : 'Statement PDF shared successfully!');
           if (authedFetch) {
             authedFetch('/audit', {
               method: 'POST',
@@ -1244,14 +1394,13 @@ export const shareToWhatsAppService = async ({
           if (err.name === 'AbortError') {
             return;
           }
-          console.warn('Native share failed, proceeding with fallback download:', err);
+          console.warn('Native mobile share failed, proceeding with fallback download:', err);
         }
       }
 
-      // Fallback: Automatic Download + WhatsApp Trigger
-      doc.save(filename);
+      // Desktop PC / Direct WhatsApp Web Route (Zero Storage & Zero Local Downloads):
       if (showToast) {
-        showToast(`📄 ${filename} downloaded! Attach in WhatsApp.`);
+        showToast(`Opening WhatsApp for ${cleanMobile}...`);
       }
     }
 

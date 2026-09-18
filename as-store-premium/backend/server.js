@@ -479,12 +479,12 @@ const getReferenceData = (user = null) => {
     let supplierParams = [];
 
     if (role === 'superadmin') {
-      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
     } else if (shopId) {
-      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id FROM suppliers WHERE shop_id = ? ORDER BY LOWER(TRIM(name)), id';
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance FROM suppliers WHERE shop_id = ? ORDER BY LOWER(TRIM(name)), id';
       supplierParams = [shopId];
     } else {
-      supplierSql = 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE 1=0';
+      supplierSql = 'SELECT id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance FROM suppliers WHERE 1=0';
     }
 
     const [categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants] = await Promise.all([
@@ -1261,6 +1261,11 @@ app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async
   if (table === 'suppliers') {
     const isSuperAdmin = req.user.role === 'superadmin';
     const shopId = isSuperAdmin ? null : Number(req.user.shop_id);
+    const mobile = String(req.body.mobile || '').trim() || null;
+    const gstin = String(req.body.gstin || '').trim() || null;
+    const address = String(req.body.address || '').trim() || null;
+    const openingBalance = Number(req.body.opening_balance || 0) || 0;
+
     const existing = await getRecord(
       shopId 
         ? 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id = ?' 
@@ -1268,14 +1273,17 @@ app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async
       shopId ? [name, shopId] : [name]
     );
     if (existing) {
-      await runQuery('UPDATE suppliers SET is_active = TRUE WHERE id = ?', [existing.id]);
-      reference = { ...existing, is_active: true };
+      await runQuery(
+        'UPDATE suppliers SET is_active = TRUE, mobile = COALESCE(?, mobile), gstin = COALESCE(?, gstin), address = COALESCE(?, address) WHERE id = ?',
+        [mobile, gstin, address, existing.id]
+      );
+      reference = { ...existing, is_active: true, mobile: mobile || existing.mobile, gstin: gstin || existing.gstin, address: address || existing.address };
     } else {
       const result = await runQuery(
-        'INSERT INTO suppliers (name, shop_id, branch_id, created_by, is_active) VALUES (?, ?, ?, ?, TRUE)',
-        [name, shopId, shopId, req.user.id]
+        'INSERT INTO suppliers (name, shop_id, branch_id, created_by, is_active, mobile, gstin, address, opening_balance) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?)',
+        [name, shopId, shopId, req.user.id, mobile, gstin, address, openingBalance]
       );
-      reference = { id: result.id, name, shop_id: shopId, branch_id: shopId, is_active: true };
+      reference = { id: result.id, name, shop_id: shopId, branch_id: shopId, is_active: true, mobile, gstin, address, opening_balance: openingBalance };
     }
   } else {
     reference = await ensureReference(table, name);
@@ -2698,9 +2706,9 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
     const warehouse = includeWarehouse ? await getWarehouse() : null;
     const pagination = parsePagination(req.query);
     const visibility = await getPriceVisibility();
-    const extraPrices = req.user.role === 'superadmin'
-      ? ', p.purchase_price, p.wholesale_price'
-      : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}${visibility.show_wholesale_price_shopkeeper ? ', p.wholesale_price' : ''}`;
+    const extraPrices = (req.user.role === 'superadmin' || req.user.role === 'owner')
+      ? ', p.purchase_price'
+      : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}`;
     const officialPrice = req.user.role === 'superadmin' || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
     
     // Only show active products in the live stock list
@@ -2775,7 +2783,7 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
       dataSql: `
       SELECT MIN(ib.id) AS id, ib.shop_id, sh.name AS shop_name, sh.location_type, p.id AS product_id, p.name, p.short_name, p.full_model_list,
         p.brand, COALESCE(p.part_category, p.category, 'Display') AS category, COALESCE(p.part_category, p.category, 'Display') AS part_category,
-        p.quality_variant, p.part_category_id, p.product_variant_id, p.model, p.sale_price, p.retail_price, p.description, p.colours,
+        p.quality_variant, p.part_category_id, p.product_variant_id, p.model, p.sale_price, p.retail_price, p.wholesale_price, p.description, p.colours,
         p.company_brand_id, b.name AS company_brand_name, p.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
         ${officialPrice}${extraPrices},
         ${stockQuantitySql} AS quantity,
@@ -3544,6 +3552,416 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   res.json(rows);
 });
 
+// Public Dynamic Invoice View API (Zero-Storage Customer Access without Auth)
+app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoice/:ref'], async (req, res) => {
+  try {
+    const rawRef = String(req.params.ref || '').trim();
+    if (!rawRef) {
+      return res.status(400).json({ error: 'Invoice reference or ID is required.' });
+    }
+
+    let saleId = null;
+    if (/^\d+$/.test(rawRef)) {
+      saleId = Number(rawRef);
+    } else if (/^INV-(\d+)$/i.test(rawRef)) {
+      const match = rawRef.match(/^INV-(\d+)$/i);
+      saleId = Number(match[1]);
+    }
+
+    const params = [];
+    const where = ['1 = 1'];
+
+    if (saleId !== null) {
+      where.push('(sa.id = ? OR LOWER(sa.invoice_number) = LOWER(?))');
+      params.push(saleId, rawRef);
+    } else {
+      where.push('LOWER(sa.invoice_number) = LOWER(?)');
+      params.push(rawRef);
+    }
+
+    const baseSql = `
+      FROM sales sa
+      JOIN shops sh ON sh.id = sa.shop_id
+      LEFT JOIN products p ON p.id = sa.product_id
+      LEFT JOIN customers c ON c.id = sa.customer_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
+      LEFT JOIN (
+        SELECT si.sale_id, json_agg(json_build_object(
+          'id', si.id,
+          'product_id', si.product_id,
+          'quantity', si.quantity,
+          'unit_price', si.unit_price,
+          'total_price', si.total_price,
+          'price_type', si.price_type,
+          'colour', si.colour,
+          'name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'brand', p_item.brand,
+          'brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+          'mfg_brand', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+          'quality_variant', p_item.quality_variant,
+          'model', p_item.model
+        ) ORDER BY si.id ASC) AS items
+        FROM sale_items si
+        JOIN products p_item ON p_item.id = si.product_id
+        LEFT JOIN manufacturing_brands mb_item ON mb_item.id = p_item.manufacturing_brand_id
+        GROUP BY si.sale_id
+      ) si_agg ON si_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object('id', id, 'expense_type', expense_type, 'expense_name', expense_name, 'amount', amount)) AS expenses
+        FROM sale_expenses
+        GROUP BY sale_id
+      ) se ON se.sale_id = sa.id
+      WHERE ${where.join(' AND ')}
+      LIMIT 1
+    `;
+
+    const sale = await getRecord(`
+      SELECT
+        sa.*,
+        sh.name AS shop_name,
+        sh.area AS shop_area,
+        sh.address AS shop_address,
+        sh.phone AS shop_phone,
+        sh.gstin AS shop_gstin,
+        c.name AS customer_name,
+        c.mobile AS customer_mobile,
+        c.address AS customer_address,
+        p.name AS product_name,
+        p.short_name AS product_short_name,
+        p.brand AS product_brand,
+        b.name AS company_brand_name,
+        mb.name AS manufacturing_brand_name,
+        COALESCE(si_agg.items, '[]'::json) AS items,
+        COALESCE(se.expenses, '[]'::json) AS expenses
+      ${baseSql}
+    `, params);
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Invoice not found.' });
+    }
+
+    let items = Array.isArray(sale.items) ? sale.items : [];
+    if (items.length === 0 && (sale.product_name || sale.product_short_name)) {
+      items = [{
+        id: `single-${sale.id}`,
+        name: sale.product_short_name || sale.product_name,
+        brand_name: sale.manufacturing_brand_name || sale.company_brand_name || sale.product_brand,
+        quantity: Number(sale.quantity) || 1,
+        unit_price: Number(sale.unit_price || sale.selling_price || 0),
+        total_price: Number(sale.total_amount || 0)
+      }];
+    }
+
+    res.json({
+      invoice: {
+        id: sale.id,
+        invoice_number: sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`,
+        sale_date: sale.sale_date || sale.invoice_date,
+        invoice_date: sale.invoice_date || sale.sale_date,
+        payment_terms_days: sale.payment_terms_days,
+        due_date: sale.due_date,
+        products_total: Number(sale.products_total || sale.total_amount || 0),
+        extra_expenses_total: Number(sale.extra_expenses_total || 0),
+        total_amount: Number(sale.total_amount || 0),
+        paid_amount: Number(sale.paid_amount || 0),
+        pending_amount: Number(sale.pending_amount || 0),
+        payment_mode: sale.payment_mode || 'credit',
+        notes: sale.notes || '',
+        items,
+        expenses: Array.isArray(sale.expenses) ? sale.expenses : [],
+        customer: {
+          id: sale.customer_id,
+          name: sale.customer_name || 'Walk-in Customer',
+          mobile: sale.customer_mobile || '',
+          address: sale.customer_address || ''
+        },
+        shop: {
+          id: sale.shop_id,
+          name: sale.shop_name || 'Pinky Sales',
+          area: sale.shop_area || '',
+          address: sale.shop_address || '',
+          phone: sale.shop_phone || '',
+          gstin: sale.shop_gstin || ''
+        }
+      }
+    });
+  } catch (err) {
+    console.error('[Public Invoice View] Error fetching invoice:', err);
+    res.status(500).json({ error: 'Failed to load invoice details.' });
+  }
+});
+
+app.get(['/api/sales/by-ref/:ref', '/api/sales/invoice/:ref'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const rawRef = String(req.params.ref || '').trim();
+    if (!rawRef) {
+      return res.status(400).json({ error: 'Invoice reference or ID is required.' });
+    }
+
+    const requestedShopId = req.query.shopId || scopeShopId(req);
+    const shopId = requestedShopId ? assertShopAccess(req, requestedShopId) : null;
+
+    let saleId = null;
+    if (/^\d+$/.test(rawRef)) {
+      saleId = Number(rawRef);
+    } else if (/^INV-(\d+)$/i.test(rawRef)) {
+      const match = rawRef.match(/^INV-(\d+)$/i);
+      saleId = Number(match[1]);
+    }
+
+    const params = [];
+    const where = ['1 = 1'];
+    if (shopId) {
+      where.push('sa.shop_id = ?');
+      params.push(shopId);
+    }
+    if (isShopStaffRole(req.user.role)) {
+      where.push('(sa.created_by IS NULL OR sa.created_by = ?)');
+      params.push(req.user.id);
+    }
+
+    if (saleId !== null) {
+      where.push('(sa.id = ? OR LOWER(sa.invoice_number) = LOWER(?))');
+      params.push(saleId, rawRef);
+    } else {
+      where.push('LOWER(sa.invoice_number) = LOWER(?)');
+      params.push(rawRef);
+    }
+
+    const baseSql = `
+      FROM sales sa
+      JOIN shops sh ON sh.id = sa.shop_id
+      LEFT JOIN products p ON p.id = sa.product_id
+      LEFT JOIN customers c ON c.id = sa.customer_id
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = COALESCE(sa.manufacturing_brand_id, p.manufacturing_brand_id)
+      LEFT JOIN (
+        SELECT si.sale_id, json_agg(json_build_object(
+          'id', si.id,
+          'product_id', si.product_id,
+          'quantity', si.quantity,
+          'unit_price', si.unit_price,
+          'total_price', si.total_price,
+          'purchase_price', COALESCE(NULLIF(si.purchase_price, 0), NULLIF(p_item.purchase_price, 0), 0),
+          'unit_cost', COALESCE(NULLIF(si.purchase_price, 0), NULLIF(p_item.purchase_price, 0), 0),
+          'price_type', si.price_type,
+          'colour', si.colour,
+          'custom_product_name', si.custom_product_name,
+          'custom_brand_name', si.custom_brand_name,
+          'name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'product_short_name', COALESCE(si.custom_product_name, p_item.short_name, p_item.name),
+          'brand', p_item.brand,
+          'brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+          'mfg_brand', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+          'manufacturing_brand_id', COALESCE(p_item.manufacturing_brand_id, mb_item.id),
+          'manufacturing_brand_name', COALESCE(si.custom_brand_name, mb_item.name, p_item.brand),
+          'category', COALESCE(p_item.part_category, p_item.category, 'Display'),
+          'quality_variant', p_item.quality_variant,
+          'model', p_item.model,
+          'full_model_list', p_item.full_model_list,
+          'description', p_item.description
+        ) ORDER BY si.id ASC) AS items
+        FROM sale_items si
+        JOIN products p_item ON p_item.id = si.product_id
+        LEFT JOIN manufacturing_brands mb_item ON mb_item.id = p_item.manufacturing_brand_id
+        GROUP BY si.sale_id
+      ) si_agg ON si_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object('id', id, 'expense_type', expense_type, 'expense_name', expense_name, 'amount', amount)) AS expenses
+        FROM sale_expenses
+        GROUP BY sale_id
+      ) se ON se.sale_id = sa.id
+      LEFT JOIN (
+        SELECT cnr.sale_id, json_agg(json_build_object(
+          'id', cnr.id,
+          'credit_note_id', cnr.credit_note_id,
+          'credit_note_number', cn.credit_note_number,
+          'amount', cnr.amount,
+          'created_at', cnr.created_at
+        ) ORDER BY cnr.id ASC) AS credit_redemptions
+        FROM credit_note_redemptions cnr
+        JOIN credit_notes cn ON cn.id = cnr.credit_note_id
+        GROUP BY cnr.sale_id
+      ) cnr_agg ON cnr_agg.sale_id = sa.id
+      LEFT JOIN (
+        SELECT sale_id, json_agg(json_build_object(
+          'id', id,
+          'payment_number', payment_number,
+          'amount', amount,
+          'payment_date', payment_date,
+          'payment_mode', payment_mode,
+          'reference_number', reference_number,
+          'note', note,
+          'created_at', created_at
+        ) ORDER BY payment_date ASC, id ASC) AS payments
+        FROM payments
+        WHERE reversed_at IS NULL
+        GROUP BY sale_id
+      ) pm ON pm.sale_id = sa.id
+      LEFT JOIN (
+        SELECT pa.sale_id, json_agg(json_build_object(
+          'id', pa.id,
+          'payment_id', pa.payment_id,
+          'payment_number', pmt.payment_number,
+          'payment_date', pmt.payment_date,
+          'payment_mode', pmt.payment_mode,
+          'reference_number', pmt.reference_number,
+          'amount_applied', pa.amount_applied,
+          'notes', pa.notes,
+          'created_at', pa.created_at
+        ) ORDER BY pmt.payment_date ASC, pa.id ASC) AS allocations
+        FROM payment_allocations pa
+        JOIN payments pmt ON pmt.id = pa.payment_id
+        WHERE pa.reversed_at IS NULL AND pmt.reversed_at IS NULL
+        GROUP BY pa.sale_id
+      ) pa_agg ON pa_agg.sale_id = sa.id
+      WHERE ${where.join(' AND ')}
+    `;
+
+    const sale = await getRecord(`
+      SELECT sa.*, 
+        COALESCE(si_agg.items, '[]'::json) AS items,
+        COALESCE(se.expenses, '[]'::json) AS expenses,
+        COALESCE(cnr_agg.credit_redemptions, '[]'::json) AS credit_redemptions,
+        COALESCE(pm.payments, '[]'::json) AS direct_payments,
+        COALESCE(pa_agg.allocations, '[]'::json) AS payment_allocations,
+        p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
+        p.purchase_price AS product_purchase_price,
+        c.id AS customer_id, c.name AS customer_name, c.mobile, c.address, c.gstin AS customer_gstin,
+        COALESCE(c.opening_balance, 0) AS customer_opening_balance, COALESCE(c.advance_balance, 0) AS customer_advance_balance,
+        sh.id AS shop_id, sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
+        p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
+      ${baseSql}
+      LIMIT 1
+    `, params);
+
+    if (!sale) {
+      return res.status(404).json({ error: 'Invoice not found.' });
+    }
+
+    let rawItems = Array.isArray(sale.items) ? sale.items : [];
+    if (rawItems.length === 0 && sale.product_id) {
+      rawItems = [{
+        id: `legacy-${sale.id}`,
+        product_id: sale.product_id,
+        quantity: Number(sale.quantity) || 1,
+        unit_price: Number(sale.unit_price) || (Number(sale.quantity) ? Number(sale.total_amount) / Number(sale.quantity) : Number(sale.total_amount)),
+        total_price: Number(sale.total_amount),
+        purchase_price: Number(sale.product_purchase_price || 0),
+        unit_cost: Number(sale.product_purchase_price || 0),
+        name: sale.product_short_name || sale.product_name || 'Item',
+        product_name: sale.product_name,
+        short_name: sale.product_short_name,
+        brand: sale.brand,
+        brand_name: sale.manufacturing_brand_name || sale.company_brand_name || sale.brand,
+        colour: sale.colour,
+      }];
+    }
+
+    // Enrich line items with costs, profit, and margin percentages
+    let totalCost = 0;
+    const items = rawItems.map((it) => {
+      const unitCost = Number(it.purchase_price || it.unit_cost || 0);
+      const qty = Number(it.quantity || 1);
+      const unitPrice = Number(it.unit_price || 0);
+      const lineTotal = Number(it.total_price || (unitPrice * qty));
+      const lineCost = unitCost * qty;
+      const lineProfit = lineTotal - lineCost;
+      const marginPct = lineTotal > 0 ? (lineProfit / lineTotal) * 100 : 0;
+      totalCost += lineCost;
+
+      return {
+        ...it,
+        unit_cost: unitCost,
+        line_cost: lineCost,
+        unit_profit: unitPrice - unitCost,
+        line_profit: lineProfit,
+        margin_pct: Number(marginPct.toFixed(2)),
+      };
+    });
+
+    const expensesList = Array.isArray(sale.expenses) ? sale.expenses : [];
+    const totalExpenses = expensesList.reduce((sum, exp) => sum + Number(exp.amount || 0), 0);
+    const invoiceTotal = Number(sale.current_invoice_total || sale.total_amount || 0);
+    const grossProfit = invoiceTotal - totalCost;
+    const netProfit = grossProfit - totalExpenses;
+    const overallMarginPct = invoiceTotal > 0 ? (netProfit / invoiceTotal) * 100 : 0;
+
+    // Merge payment allocations and direct payments into a unified list
+    const paymentsList = [];
+    const seenPaymentIds = new Set();
+
+    if (Array.isArray(sale.payment_allocations)) {
+      for (const pa of sale.payment_allocations) {
+        if (pa.payment_id) seenPaymentIds.add(pa.payment_id);
+        paymentsList.push({
+          id: pa.id,
+          payment_id: pa.payment_id,
+          payment_number: pa.payment_number,
+          payment_date: pa.payment_date,
+          payment_mode: pa.payment_mode,
+          reference_number: pa.reference_number,
+          amount: Number(pa.amount_applied),
+          notes: pa.notes,
+        });
+      }
+    }
+
+    if (Array.isArray(sale.direct_payments)) {
+      for (const dp of sale.direct_payments) {
+        if (!seenPaymentIds.has(dp.id)) {
+          seenPaymentIds.add(dp.id);
+          paymentsList.push({
+            id: dp.id,
+            payment_id: dp.id,
+            payment_number: dp.payment_number,
+            payment_date: dp.payment_date,
+            payment_mode: dp.payment_mode,
+            reference_number: dp.reference_number,
+            amount: Number(dp.amount),
+            notes: dp.note,
+          });
+        }
+      }
+    }
+
+    res.json({
+      sale: {
+        ...sale,
+        items,
+        payments: paymentsList,
+        invoice_total: invoiceTotal,
+        total_cost: totalCost,
+        gross_profit: grossProfit,
+        net_profit: netProfit,
+        profit_margin_pct: Number(overallMarginPct.toFixed(2)),
+        invoice_number: sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`,
+      },
+      customer: {
+        id: sale.customer_id,
+        name: sale.customer_name,
+        mobile: sale.mobile,
+        address: sale.address,
+        gstin: sale.customer_gstin,
+      },
+      shop: {
+        id: sale.shop_id,
+        name: sale.shop_name,
+        area: sale.shop_area,
+        address: sale.shop_address,
+        phone: sale.shop_phone,
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Failed to fetch invoice details.' });
+  }
+});
+
 app.get(['/api/sales/customers', '/sales/customers'], authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const requestedShopId = scopeShopId(req);
@@ -4194,6 +4612,13 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
               [vItem.quantity, existingBatch.id]
             );
           } else {
+            // Determine actual COGS cost for restocked return item
+            const prodRecord = await tx.getRecord('SELECT purchase_price FROM products WHERE id = ?', [vItem.product_id]);
+            const saleItemCost = sale_id
+              ? (await tx.getRecord('SELECT purchase_price FROM sale_items WHERE sale_id = ? AND product_id = ? LIMIT 1', [sale_id, vItem.product_id]))?.purchase_price
+              : null;
+            const batchCost = Number(saleItemCost ?? prodRecord?.purchase_price ?? 0);
+
             await tx.runQuery(
               `INSERT INTO inventory_batches (shop_id, product_id, batch_number, quantity_received, quantity_remaining, purchase_price, colour, received_date)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -4203,7 +4628,7 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
                 `RET-${creditNoteNumber}`,
                 vItem.quantity,
                 vItem.quantity,
-                vItem.unit_price,
+                batchCost,
                 vItem.colour || null,
                 returnDateStr
               ]
@@ -4229,6 +4654,41 @@ app.post(['/api/credit-notes', '/credit-notes'], authenticateToken, requireShopS
     res.status(error.status || 500).json({ error: error.message || 'Unable to create credit note.' });
   }
 });
+
+const resolveSafePurchasePrice = (batches, saleQuantity, masterProductCost, unitPrice) => {
+  const masterCost = Number(masterProductCost || 0);
+  const sellingPrice = Number(unitPrice || 0);
+  let batchUnitCost = 0;
+
+  if (Array.isArray(batches) && batches.length > 0 && saleQuantity > 0) {
+    const totalBatchCost = batches.reduce(
+      (sum, b) => sum + (Number(b.purchase_price || 0) * Number(b.quantity_remaining || 0)),
+      0
+    );
+    if (totalBatchCost > 0) {
+      batchUnitCost = money(totalBatchCost / saleQuantity);
+    }
+  }
+
+  // If no batch cost available, fall back to master product cost
+  if (batchUnitCost <= 0) {
+    return money(masterCost);
+  }
+
+  // Guardrail 1: If master cost exists (> 0) and batch unit cost is > 2.5x master cost, it's corrupted/typo/lot total
+  if (masterCost > 0 && batchUnitCost >= masterCost * 2.5) {
+    console.warn(`[COGS Guardrail] Batch cost ₹${batchUnitCost} exceeds 2.5x master cost ₹${masterCost}. Using master cost instead.`);
+    return money(masterCost);
+  }
+
+  // Guardrail 2: If batch unit cost > selling price, but master product cost is <= selling price
+  if (sellingPrice > 0 && batchUnitCost > sellingPrice && masterCost > 0 && masterCost <= sellingPrice) {
+    console.warn(`[COGS Guardrail] Batch cost ₹${batchUnitCost} exceeds selling price ₹${sellingPrice} while master cost is ₹${masterCost}. Using master cost instead.`);
+    return money(masterCost);
+  }
+
+  return money(batchUnitCost);
+};
 
 app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
   try {
@@ -4351,7 +4811,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           error.status = 400;
           throw error;
         }
-        const product = await tx.getRecord('SELECT id, short_name, name, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
+        const product = await tx.getRecord('SELECT id, short_name, name, purchase_price, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
         let unitPrice = 0;
         if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
           unitPrice = money(item.selling_price);
@@ -4656,12 +5116,12 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           ? (String(item.custom_brand_name).trim() || null)
           : (item.manufacturing_brand_name !== undefined ? (String(item.manufacturing_brand_name).trim() || null) : null);
 
-        const totalBatchCost = Array.isArray(item.batches)
-          ? item.batches.reduce((sum, b) => sum + (Number(b.purchase_price || 0) * Number(b.quantity_remaining || 0)), 0)
-          : 0;
-        const frozenPurchasePrice = item.saleQuantity > 0 && totalBatchCost > 0
-          ? money(totalBatchCost / item.saleQuantity)
-          : money(item.product?.purchase_price || 0);
+        const frozenPurchasePrice = resolveSafePurchasePrice(
+          item.batches,
+          item.saleQuantity,
+          item.product?.purchase_price,
+          item.unitPrice
+        );
 
         await tx.runQuery(
           `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name, purchase_price)
@@ -5049,7 +5509,7 @@ const handleUpdateSale = async (req, res) => {
             error.status = 400;
             throw error;
           }
-          const product = await tx.getRecord('SELECT id, short_name, name, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
+          const product = await tx.getRecord('SELECT id, short_name, name, purchase_price, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
           let unitPrice = 0;
           if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
             unitPrice = money(item.selling_price);
@@ -5153,12 +5613,12 @@ const handleUpdateSale = async (req, res) => {
             ? (String(item.custom_brand_name).trim() || null)
             : null;
 
-          const totalBatchCost = Array.isArray(item.batches)
-            ? item.batches.reduce((sum, b) => sum + (Number(b.purchase_price || 0) * Number(b.quantity_remaining || 0)), 0)
-            : 0;
-          const frozenPurchasePrice = item.saleQuantity > 0 && totalBatchCost > 0
-            ? money(totalBatchCost / item.saleQuantity)
-            : money(item.product?.purchase_price || 0);
+          const frozenPurchasePrice = resolveSafePurchasePrice(
+            item.batches,
+            item.saleQuantity,
+            item.product?.purchase_price,
+            item.unitPrice
+          );
 
           await tx.runQuery(
             `INSERT INTO sale_items (sale_id, product_id, quantity, unit_price, total_price, price_type, colour, custom_product_name, custom_brand_name, purchase_price)
@@ -7254,7 +7714,8 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
           si.unit_price,
           si.total_price,
           si.price_type,
-          COALESCE(NULLIF(si.purchase_price, 0), p.purchase_price, 0) AS purchase_price
+          COALESCE(NULLIF(si.purchase_price, 0), p.purchase_price, 0) AS purchase_price,
+          COALESCE(p.purchase_price, 0) AS master_purchase_price
         FROM sale_items si
         LEFT JOIN products p ON p.id = si.product_id
         LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
@@ -7270,16 +7731,20 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
         itemsBySaleId.set(item.sale_id, []);
       }
       const unitCost = Number(item.purchase_price || 0);
+      const masterCost = Number(item.master_purchase_price || 0);
       const unitPrice = Number(item.unit_price || 0);
       const qty = Number(item.quantity || 0);
       const lineCost = unitCost * qty;
       const lineTotal = Number(item.total_price || (unitPrice * qty));
       const lineProfit = lineTotal - lineCost;
       const marginPct = lineTotal > 0 ? (lineProfit / lineTotal) * 100 : 0;
+      const isAnomalous = (masterCost > 0 && unitCost >= masterCost * 2.0) || (unitPrice > 0 && unitCost > unitPrice && masterCost <= unitPrice);
 
       itemsBySaleId.get(item.sale_id).push({
         ...item,
         unit_cost: unitCost,
+        master_purchase_price: masterCost,
+        is_anomalous_cost: isAnomalous,
         unit_price: unitPrice,
         quantity: qty,
         line_total: lineTotal,
@@ -7483,7 +7948,15 @@ app.post('/api/purchase-bills', authenticateToken, requireShopStaff, async (req,
         }
         const lineTotal = money(qty * unitPrice - discAmt);
         productsTotal += lineTotal;
-        validItems.push({ product_id: item.product_id || null, custom_product_name: item.custom_product_name || null, quantity: qty, unit_price: unitPrice, discount_amount: discAmt, total_price: lineTotal });
+        validItems.push({
+          product_id: item.product_id || null,
+          custom_product_name: item.custom_product_name || null,
+          quantity: qty,
+          unit_price: unitPrice,
+          discount_amount: discAmt,
+          total_price: lineTotal,
+          colour: item.colour || null,
+        });
       }
       productsTotal = money(productsTotal);
       const extraCharges = money(extra_charges);
@@ -7501,9 +7974,9 @@ app.post('/api/purchase-bills', authenticateToken, requireShopStaff, async (req,
 
       for (const vi of validItems) {
         await tx.runQuery(
-          `INSERT INTO purchase_bill_items (bill_id, product_id, custom_product_name, quantity, unit_price, discount_amount, total_price)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [billId, vi.product_id, vi.custom_product_name, vi.quantity, vi.unit_price, vi.discount_amount, vi.total_price]
+          `INSERT INTO purchase_bill_items (bill_id, product_id, custom_product_name, quantity, unit_price, discount_amount, total_price, colour)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [billId, vi.product_id, vi.custom_product_name, vi.quantity, vi.unit_price, vi.discount_amount, vi.total_price, vi.colour]
         );
       }
 
@@ -7735,6 +8208,233 @@ app.post('/api/debit-notes', authenticateToken, requireShopStaff, async (req, re
 // ═══════════════════════════════════════════════════════════════════════════════
 // END ACCOUNTING ENGINE ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── ADMIN COGS REPAIR & RE-SYNC ROUTES ───────────────────────────────────────
+app.post('/api/admin/recalculate-cogs', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const {
+      dryRun = true,
+      fromDate,
+      toDate,
+      saleId,
+      forceAll = false,
+      threshold = 2.0,
+    } = req.body;
+
+    const whereClauses = ['p.purchase_price > 0'];
+    const params = [];
+
+    if (saleId) {
+      whereClauses.push('si.sale_id = ?');
+      params.push(Number(saleId));
+    }
+    if (fromDate) {
+      whereClauses.push('COALESCE(s.invoice_date::TEXT, s.sale_date) >= ?');
+      params.push(fromDate);
+    }
+    if (toDate) {
+      whereClauses.push('COALESCE(s.invoice_date::TEXT, s.sale_date) <= ?');
+      params.push(toDate);
+    }
+
+    const query = `
+      SELECT
+        si.id AS item_id,
+        si.sale_id,
+        s.invoice_number,
+        COALESCE(s.invoice_date::TEXT, s.sale_date) AS sale_date,
+        s.total_amount AS invoice_total,
+        c.name AS customer_name,
+        p.id AS product_id,
+        COALESCE(si.custom_product_name, p.short_name, p.name) AS product_name,
+        COALESCE(p.model, '') AS model,
+        si.quantity,
+        si.unit_price,
+        si.total_price,
+        si.purchase_price AS old_unit_cost,
+        p.purchase_price AS master_unit_cost
+      FROM sale_items si
+      JOIN sales s ON s.id = si.sale_id
+      JOIN products p ON p.id = si.product_id
+      LEFT JOIN customers c ON c.id = s.customer_id
+      WHERE ${whereClauses.join(' AND ')}
+      ORDER BY si.sale_id ASC, si.id ASC
+    `;
+
+    const allItems = await allRecords(query, params);
+
+    const corruptedItems = allItems.filter((item) => {
+      const oldCost = Number(item.old_unit_cost || 0);
+      const masterCost = Number(item.master_unit_cost || 0);
+      const unitPrice = Number(item.unit_price || 0);
+
+      if (forceAll) {
+        return Math.abs(oldCost - masterCost) > 0.01;
+      }
+
+      if (masterCost > 0 && oldCost >= masterCost * Number(threshold)) {
+        return true;
+      }
+
+      if (unitPrice > 0 && oldCost > unitPrice && masterCost <= unitPrice) {
+        return true;
+      }
+
+      return false;
+    });
+
+    const corruptedBatches = await allRecords(`
+      SELECT
+        ib.id AS batch_id,
+        ib.product_id,
+        p.name AS product_name,
+        ib.purchase_price AS old_batch_cost,
+        p.purchase_price AS master_cost,
+        ib.quantity_remaining
+      FROM inventory_batches ib
+      JOIN products p ON p.id = ib.product_id
+      WHERE ib.purchase_price >= p.purchase_price * 2.5 AND p.purchase_price > 0
+      ORDER BY ib.id ASC
+    `);
+
+    let totalProfitDelta = 0;
+    const invoiceSummary = new Map();
+
+    const affectedItems = corruptedItems.map((it) => {
+      const qty = Number(it.quantity || 0);
+      const unitPrice = Number(it.unit_price || 0);
+      const lineTotal = Number(it.total_price || (unitPrice * qty));
+      const oldCost = Number(it.old_unit_cost || 0);
+      const newCost = Number(it.master_unit_cost || 0);
+
+      const oldLineCost = oldCost * qty;
+      const newLineCost = newCost * qty;
+
+      const oldLineProfit = lineTotal - oldLineCost;
+      const newLineProfit = lineTotal - newLineCost;
+      const delta = newLineProfit - oldLineProfit;
+      totalProfitDelta += delta;
+
+      if (!invoiceSummary.has(it.sale_id)) {
+        invoiceSummary.set(it.sale_id, {
+          sale_id: it.sale_id,
+          invoice_number: it.invoice_number,
+          sale_date: it.sale_date,
+          customer_name: it.customer_name,
+          invoice_total: Number(it.invoice_total || 0),
+          items_count: 0,
+          total_delta: 0,
+        });
+      }
+      const inv = invoiceSummary.get(it.sale_id);
+      inv.items_count += 1;
+      inv.total_delta += delta;
+
+      return {
+        item_id: it.item_id,
+        sale_id: it.sale_id,
+        invoice_number: it.invoice_number,
+        sale_date: it.sale_date,
+        product_id: it.product_id,
+        product_name: it.product_name,
+        model: it.model,
+        quantity: qty,
+        unit_price: unitPrice,
+        line_total: lineTotal,
+        old_unit_cost: oldCost,
+        new_unit_cost: newCost,
+        old_line_profit: oldLineProfit,
+        new_line_profit: newLineProfit,
+        profit_delta: delta,
+      };
+    });
+
+    if (!dryRun && (corruptedItems.length > 0 || corruptedBatches.length > 0)) {
+      await runTransaction(async (tx) => {
+        for (const it of corruptedItems) {
+          await tx.runQuery(
+            'UPDATE sale_items SET purchase_price = ? WHERE id = ?',
+            [it.master_unit_cost, it.item_id]
+          );
+        }
+        for (const b of corruptedBatches) {
+          await tx.runQuery(
+            'UPDATE inventory_batches SET purchase_price = ? WHERE id = ?',
+            [b.master_cost, b.batch_id]
+          );
+        }
+      });
+
+      await audit(
+        req,
+        'Recalculated COGS',
+        'sale_items',
+        corruptedItems.length,
+        `Recalculated ${corruptedItems.length} items across ${invoiceSummary.size} invoices, delta ₹${totalProfitDelta}`
+      );
+    }
+
+    res.json({
+      success: true,
+      dryRun: Boolean(dryRun),
+      totalScanned: allItems.length,
+      totalCorrupted: corruptedItems.length,
+      totalBatchesCorrupted: corruptedBatches.length,
+      totalProfitDelta: money(totalProfitDelta),
+      affectedInvoices: Array.from(invoiceSummary.values()),
+      affectedItems,
+      affectedBatches: corruptedBatches,
+    });
+  } catch (error) {
+    console.error('[Admin Recalculate COGS Error]', error);
+    res.status(500).json({ error: error.message || 'Failed to recalculate COGS.' });
+  }
+});
+
+app.patch('/api/admin/sale-items/:id/cogs', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const itemId = Number(req.params.id);
+    const { purchase_price, resetToMaster } = req.body;
+
+    const item = await getRecord(`
+      SELECT si.*, p.purchase_price AS master_purchase_price, p.name AS product_name
+      FROM sale_items si
+      JOIN products p ON p.id = si.product_id
+      WHERE si.id = ?
+    `, [itemId]);
+
+    if (!item) {
+      return res.status(404).json({ error: 'Invoice line item not found.' });
+    }
+
+    let newCost = 0;
+    if (resetToMaster) {
+      newCost = Number(item.master_purchase_price || 0);
+    } else if (purchase_price !== undefined && !isNaN(Number(purchase_price))) {
+      newCost = Number(purchase_price);
+    } else {
+      return res.status(400).json({ error: 'Valid purchase_price or resetToMaster required.' });
+    }
+
+    if (newCost < 0) {
+      return res.status(400).json({ error: 'Unit cost cannot be negative.' });
+    }
+
+    await runQuery('UPDATE sale_items SET purchase_price = ? WHERE id = ?', [newCost, itemId]);
+    await audit(req, 'Updated Item COGS', 'sale_items', itemId, `Updated item ${itemId} cost from ${item.purchase_price} to ${newCost}`);
+
+    res.json({
+      success: true,
+      item_id: itemId,
+      old_unit_cost: Number(item.purchase_price || 0),
+      new_unit_cost: newCost,
+      product_name: item.product_name,
+    });
+  } catch (error) {
+    console.error('[Admin Update Item COGS Error]', error);
+    res.status(500).json({ error: error.message || 'Failed to update item COGS.' });
+  }
+});
 
 
 const isTransientDatabaseError = (error) => {

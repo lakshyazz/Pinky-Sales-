@@ -84,6 +84,7 @@ const DebitNotesPage = React.lazy(() => import('./components/billing/DebitNotesP
 const CategoriesPage = React.lazy(() => import('./components/other-products/CategoriesPage').then(m => ({ default: m.CategoriesPage })));
 const ShopkeeperLoginsPage = React.lazy(() => import('./components/operations/ShopkeeperLoginsPage'));
 const SupplierImportWorkspace = React.lazy(() => import('./components/operations/SupplierImportWorkspace'));
+const PublicInvoiceViewPage = React.lazy(() => import('./components/invoices/PublicInvoiceViewPage'));
 // Shared UI primitives — tiny, used on every page, keep static
 import Pagination from './components/ui/Pagination';
 import SmartSkeletonWrapper, { CardSkeleton, TableRowSkeleton } from './components/ui/SkeletonLoader';
@@ -786,7 +787,7 @@ const initialForms = {
     image_url: '', image_urls: [],
   },
   stock: { product_id: '', quantity: '', colour: '', supplier_id: '', purchase_price: '', sale_price: '', retail_price: '' },
-  customer: { name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' },
+  customer: { name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer', opening_balance: '' },
   sale: {
     product_id: '',
     customer_id: '',
@@ -2493,7 +2494,7 @@ function App() {
   const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
   const [showQuickAddCustomerModal, setShowQuickAddCustomerModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
-  const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
+  const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer', opening_balance: '' });
   const [savingQuickCustomer, setSavingQuickCustomer] = useState(false);
   const [salesReturnModalOpen, setSalesReturnModalOpen] = useState(false);
   const [salesReturnTargetCustomer, setSalesReturnTargetCustomer] = useState(null);
@@ -2599,7 +2600,7 @@ function App() {
             Number(c.id) === Number(editingCustomer.id) ? { ...c, ...updated, ...quickCustomerForm } : c
           ),
         }));
-        setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
+        setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer', opening_balance: '' });
         setEditingCustomer(null);
         setShowQuickAddCustomerModal(false);
         showToast('Customer updated successfully');
@@ -2616,7 +2617,7 @@ function App() {
           setForms((prev) => ({ ...prev, sale: { ...prev.sale, customer_id: String(newId) } }));
         }
         setCustomerPager((prev) => ({ ...prev, total: (prev.total || 0) + 1 }));
-        setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer' });
+        setQuickCustomerForm({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer', opening_balance: '' });
         setEditingCustomer(null);
         setShowQuickAddCustomerModal(false);
         showToast('Customer created successfully');
@@ -6010,21 +6011,42 @@ function App() {
       return wholeAmount ? words(wholeAmount) : 'Zero';
     };
 
-    const invoiceItems = Array.isArray(sale.items) && sale.items.length ? sale.items : [sale];
     const isConsolidated = Boolean(sale.consolidated);
+    const targetSaleId = sale?.id;
+    let invoiceItems = Array.isArray(sale.items) && sale.items.length ? sale.items : [sale];
+
+    // Strictly scope items if single invoice
+    if (!isConsolidated && targetSaleId) {
+      const strictlyScoped = invoiceItems.filter((item) => {
+        const itSaleId = item?.sale_id ?? item?.invoice_id;
+        if (itSaleId !== undefined && itSaleId !== null) {
+          return String(itSaleId) === String(targetSaleId);
+        }
+        return true;
+      });
+      if (strictlyScoped.length > 0) invoiceItems = strictlyScoped;
+    }
+
     const invoiceDateVal = sale.invoice_date || sale.sale_date || (isConsolidated ? new Date().toISOString().slice(0, 10) : sale.sale_date);
 
     const expandedItems = invoiceItems.flatMap((item) => {
       const parentDate = item.invoice_date || item.sale_date || sale.invoice_date || sale.sale_date || invoiceDateVal;
+      const parentInvNo = item.invoice_number || sale.invoice_number || '';
+      const parentSaleId = item.sale_id || item.id || sale.id;
+
       if (Array.isArray(item.items) && item.items.length > 0) {
         return item.items.map((sub) => ({
           ...sub,
+          sale_id: sub.sale_id || parentSaleId,
+          invoice_number: sub.invoice_number || parentInvNo,
           sale_date: sub.invoice_date || sub.sale_date || parentDate,
           invoice_date: sub.invoice_date || sub.sale_date || parentDate,
         }));
       }
       return [{
         ...item,
+        sale_id: item.sale_id || parentSaleId,
+        invoice_number: item.invoice_number || parentInvNo,
         sale_date: item.invoice_date || item.sale_date || parentDate,
         invoice_date: item.invoice_date || item.sale_date || parentDate,
       }];
@@ -6036,8 +6058,10 @@ function App() {
     const hasOutstandingBalance = invoiceItems.some((item) => Number(item.pending_amount || 0) > 0);
     const outstandingDueDates = invoiceItems.filter((item) => Number(item.pending_amount || 0) > 0).map((item) => item.due_date).filter(Boolean).sort();
     
-    // Single source of truth: INV-XXXXXX format across entire application
-    const invoiceNo = sale.invoice_number || `INV-${String(sale.id || 1).padStart(6, '0')}`;
+    // Single source of truth: INV-XXXXXX format for single, CONSOLIDATED BILL for consolidated
+    const invoiceNo = isConsolidated
+      ? (sale.invoice_number && sale.invoice_number !== 'CONSOLIDATED' ? sale.invoice_number : 'CONSOLIDATED BILL')
+      : (sale.invoice_number || `INV-${String(sale.id || 1).padStart(6, '0')}`);
     
     const shopName = 'PINKYSALES';
     const shopAddress = 'C-314, Pratik Arcade, Surat';
@@ -6068,60 +6092,112 @@ function App() {
       ? formatDate(firstPurchaseDate)
       : `${formatDate(firstPurchaseDate)} to ${formatDate(latestPurchaseDate)}`;
 
-    const itemRows = expandedItems.map((item, index) => {
-      // 1. Correct key lookups for item rates and row totals
-      const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? (item.total_amount && item.quantity ? Number(item.total_amount) / Number(item.quantity) : (item.amount && item.quantity ? Number(item.amount) / Number(item.quantity) : 0)));
-      const qty = Number(item.quantity ?? item.qty ?? 1);
-      const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
-      const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : lineTotal;
-
-      // Only show Short Name - never show concatenated compatible models
-      const rawShort = item.short_name || item.product_short_name || item.product_name || item.name || '';
-      const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
-
-      // Item Description Formatting:
-      // Line 1: Product Name (e.g. MOTO EDGE 50)
-      // Line 2 (if present): Color Variants / Attributes (e.g. [ Black: 2, Green: 2 ])
-      // Line 3 (if present): Brand Name Only (e.g. AS CARE — strictly without Mfg. prefix)
-      const brandName = getBrandName(item, sale);
-      const colourStr = item.colour && String(item.colour).trim()
-        ? (String(item.colour).trim().startsWith('[') ? String(item.colour).trim() : `[ ${String(item.colour).trim()} ]`)
-        : '';
-      const productDetails = brandName ? `<small style="display:block; margin-top:2px; color:#475569; font-size:11px; font-weight:700;">${safe(brandName)}</small>` : '';
-
-      return `
-        <tr>
-          <td class="number">${index + 1}</td>
-          <td class="item">
-            <strong style="font-size: 12.5px; color: #0f172a; display: block;">${safe(shortName)}</strong>
-            ${colourStr ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(colourStr)}</span>` : ''}
-            ${productDetails}
-          </td>
-          <td class="qty">${qty}<br/>PCS</td>
-          <td class="money">${formatAmount(unitPrice)}</td>
-          <td class="money">${formatAmount(itemTotal)}</td>
-        </tr>
-      `;
-    }).join('');
-
-    // Summary calculation breakdown
-    const productsSubtotal = Number(sale.products_total || expandedItems.reduce((sum, it) => {
+    // 3. Mathematical Sanity Check (Assertion Guard)
+    const computedItemsSum = expandedItems.reduce((sum, it) => {
       const r = Number(it.rate ?? it.unit_price ?? it.selling_price ?? it.price ?? 0);
       const q = Number(it.quantity ?? it.qty ?? 1);
       const lineTot = Number(it.total_amount ?? it.total_price ?? it.total ?? it.amount ?? (r * q));
       return sum + lineTot;
-    }, 0));
+    }, 0);
 
-    const prevBalance = Number(sale.previous_balance ?? sale.old_balance ?? 0);
+    const expectedSubtotal = Number(sale.subtotal ?? sale.products_total ?? 0);
+    if (!isConsolidated && expectedSubtotal > 0 && Math.abs(computedItemsSum - expectedSubtotal) > 1) {
+      throw new Error(
+        `CRITICAL PDF MISMATCH: Sum of items (₹${computedItemsSum.toFixed(2)}) does not match invoice subtotal (₹${expectedSubtotal.toFixed(2)}). Aborting render.`
+      );
+    }
+
+    // Dynamic Products Subtotal based on exact line items rendered
+    const productsSubtotal = computedItemsSum;
+
+    let itemRows = '';
+    if (isConsolidated) {
+      // Group items under explicit section headers by invoice number/date so items are never mixed together ambiguously
+      const groups = new Map();
+      expandedItems.forEach((it) => {
+        const key = String(it.invoice_number || (it.sale_id ? `INV-${String(it.sale_id).padStart(6, '0')}` : 'General'));
+        if (!groups.has(key)) {
+          groups.set(key, { invoiceNumber: key, date: it.sale_date || it.invoice_date || '', items: [] });
+        }
+        groups.get(key).items.push(it);
+      });
+
+      let rowNum = 1;
+      groups.forEach((group) => {
+        itemRows += `
+          <tr style="background: #f1f5f9; font-weight: bold;">
+            <td colspan="5" style="padding: 6px 8px; font-size: 11px; color: #0f172a; border-bottom: 1px solid #cbd5e1;">
+              Invoice #${safe(group.invoiceNumber)}${group.date ? ` &middot; ${formatDate(group.date)}` : ''}
+            </td>
+          </tr>
+        `;
+        group.items.forEach((item) => {
+          const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? (item.total_amount && item.quantity ? Number(item.total_amount) / Number(item.quantity) : (item.amount && item.quantity ? Number(item.amount) / Number(item.quantity) : 0)));
+          const qty = Number(item.quantity ?? item.qty ?? 1);
+          const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
+          const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
+
+          const rawShort = item.short_name || item.product_short_name || item.product_name || item.name || '';
+          const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
+          const brandName = getBrandName(item, sale);
+          const colourStr = item.colour && String(item.colour).trim()
+            ? (String(item.colour).trim().startsWith('[') ? String(item.colour).trim() : `[ ${String(item.colour).trim()} ]`)
+            : '';
+          const productDetails = brandName ? `<small style="display:block; margin-top:2px; color:#475569; font-size:11px; font-weight:700;">${safe(brandName)}</small>` : '';
+
+          itemRows += `
+            <tr>
+              <td class="number">${rowNum++}</td>
+              <td class="item">
+                <strong style="font-size: 12.5px; color: #0f172a; display: block;">${safe(shortName)}</strong>
+                ${colourStr ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(colourStr)}</span>` : ''}
+                ${productDetails}
+              </td>
+              <td class="qty">${qty}<br/>PCS</td>
+              <td class="money">${formatAmount(unitPrice)}</td>
+              <td class="money">${formatAmount(itemTotal)}</td>
+            </tr>
+          `;
+        });
+      });
+    } else {
+      itemRows = expandedItems.map((item, index) => {
+        const rate = Number(item.rate ?? item.unit_price ?? item.selling_price ?? item.price ?? (item.total_amount && item.quantity ? Number(item.total_amount) / Number(item.quantity) : (item.amount && item.quantity ? Number(item.amount) / Number(item.quantity) : 0)));
+        const qty = Number(item.quantity ?? item.qty ?? 1);
+        const itemTotal = Number(item.total_amount ?? item.total_price ?? item.total ?? item.amount ?? (rate * qty));
+        const unitPrice = qty > 0 ? (rate || (itemTotal / qty)) : itemTotal;
+
+        const rawShort = item.short_name || item.product_short_name || item.product_name || item.name || '';
+        const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Item';
+        const brandName = getBrandName(item, sale);
+        const colourStr = item.colour && String(item.colour).trim()
+          ? (String(item.colour).trim().startsWith('[') ? String(item.colour).trim() : `[ ${String(item.colour).trim()} ]`)
+          : '';
+        const productDetails = brandName ? `<small style="display:block; margin-top:2px; color:#475569; font-size:11px; font-weight:700;">${safe(brandName)}</small>` : '';
+
+        return `
+          <tr>
+            <td class="number">${index + 1}</td>
+            <td class="item">
+              <strong style="font-size: 12.5px; color: #0f172a; display: block;">${safe(shortName)}</strong>
+              ${colourStr ? `<span style="display:inline-block; margin-top:2px; margin-right:4px; padding:1px 5px; background:#f0fdf4; color:#166534; border:1px solid #bbf7d0; border-radius:3px; font-size:10px; font-weight:700;">${safe(colourStr)}</span>` : ''}
+              ${productDetails}
+            </td>
+            <td class="qty">${qty}<br/>PCS</td>
+            <td class="money">${formatAmount(unitPrice)}</td>
+            <td class="money">${formatAmount(itemTotal)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    let prevBalance = Number(sale.previous_balance ?? sale.old_balance ?? 0);
     const appliedCredit = Number(sale.applied_credit_amount ?? sale.credit_applied ?? 0);
-
-    // Current invoice value + carry forward balance - credits
-    const grandTotal = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit);
-    const paidAmount = Number(sale.paid_amount ?? sale.amount_paid ?? (
-      invoiceItems.reduce((sum, item) => sum + Number(item.paid_amount || 0), 0)
-    ) ?? 0);
-    const balanceDue = Math.max(0, grandTotal - paidAmount);
+    const paidAmount = Number(sale.paid_amount ?? sale.amount_paid ?? 0);
     const quantity = expandedItems.reduce((sum, item) => sum + Number(item.quantity ?? item.qty ?? 1), 0);
+
+    let finalBillAmount = 0;
+    let balanceDue = 0;
 
     // Look up customer advance balance / store credit
     const customerObj = (data.customers || []).find(c => String(c.id) === String(sale.customer_id))
@@ -6129,13 +6205,28 @@ function App() {
       || sale.customer
       || {};
     const customerAdvanceBal = Number(customerObj.advance_balance ?? sale.customer_advance_balance ?? sale.advance_balance ?? 0);
+    const customerAccountOutstanding = Number(customerObj?.pending_amount ?? sale.customer_pending_amount ?? 0);
 
-    // Calculate customer's remaining available advance / store credit balance
+    if (!isConsolidated) {
+      // Option A: Standard B2B Single Tax Invoice
+      finalBillAmount = Math.max(0, (productsSubtotal + courier) - appliedCredit - Number(sale.advance_applied || 0));
+      balanceDue = Math.max(0, finalBillAmount - paidAmount);
+    } else {
+      // Consolidated Statement / Bill with Prior Balance
+      const customerTotalPending = customerAccountOutstanding > 0 ? customerAccountOutstanding : Number(sale.pending_amount || 0);
+      if (customerTotalPending > 0) {
+        prevBalance = Math.max(0, customerTotalPending - ((productsSubtotal + courier) - appliedCredit - Number(sale.advance_applied || 0)));
+        finalBillAmount = customerTotalPending;
+        balanceDue = Math.max(0, finalBillAmount - paidAmount);
+      } else {
+        finalBillAmount = Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit - Number(sale.advance_applied || 0));
+        balanceDue = Math.max(0, finalBillAmount - paidAmount);
+      }
+    }
+
     const remainingCredit = (sale.closing_balance !== undefined && Number(sale.closing_balance) < 0)
       ? Math.abs(Number(sale.closing_balance))
-      : (prevBalance < 0 && (productsSubtotal + courier + prevBalance) < 0
-        ? Math.abs(productsSubtotal + courier + prevBalance)
-        : customerAdvanceBal);
+      : customerAdvanceBal;
 
     printWindow.document.open();
     printWindow.document.write(`
@@ -6151,7 +6242,7 @@ function App() {
             .header { display: grid; grid-template-columns: 1fr 1fr; align-items: start; padding: 7px 9px 5px; border-bottom: 1px solid #999; }
             h1 { margin: 0; font-size: 19px; line-height: 1.1; font-weight: 800; text-transform: uppercase; }
             .shop-details { margin-top: 4px; line-height: 1.35; }
-            h2 { margin: 0; text-align: right; font-size: ${isConsolidated ? '24px' : '33px'}; line-height: 1.05; font-weight: 400; }
+            h2 { margin: 0; text-align: right; font-size: ${isConsolidated ? '17px' : '33px'}; line-height: 1.05; font-weight: ${isConsolidated ? '700' : '400'}; }
             .meta { display: grid; grid-template-columns: 1fr 1fr; min-height: 78px; border-bottom: 1px solid #999; }
             .meta > div { padding: 4px 8px; }
             .meta > div:first-child { border-right: 1px solid #999; }
@@ -6188,7 +6279,7 @@ function App() {
           <div class="invoice">
             <div class="header">
               <div><h1>${shopName}</h1><div class="shop-details">${shopLines}</div></div>
-              <h2>${isConsolidated ? 'CONSOLIDATED INVOICE' : 'TAX INVOICE'}</h2>
+              <h2>${isConsolidated ? 'ACCOUNT STATEMENT & CONSOLIDATED SUMMARY' : 'TAX INVOICE'}</h2>
             </div>
             <div class="meta">
               <div>
@@ -6211,9 +6302,14 @@ function App() {
             <div class="summary">
               <div class="notes">
                 <div>Items in Total ${quantity}</div>
-                <div class="words">Total In Words<strong>Indian Rupee ${toWords(grandTotal)} Only</strong></div>
-                <div class="notes-block">Notes<br/>${safe(isConsolidated ? 'This invoice includes all purchases made by this customer at this branch.' : sale.notes || 'Thanks for your business.')}</div>
-                <div class="notes-block">Terms &amp; Conditions<br/>Goods once sold will not be returned or exchanged.</div>
+                <div class="words">Total In Words<strong>Indian Rupee ${toWords(finalBillAmount)} Only</strong></div>
+                <div class="notes-block">Notes<br/>${safe(isConsolidated ? 'This statement includes all selected purchases made by this customer at this branch.' : sale.notes || 'Thanks for your business.')}</div>
+                <div class="notes-block">Terms &amp; Conditions<br/>ORIGINAL LCD GOODS THREE MONTHS WARRANTY ONLY</div>
+                ${!isConsolidated && customerAccountOutstanding > 0 ? `
+                  <div class="notes-block" style="color: #b45309; font-weight: 700; background: #fffbeb; padding: 6px 8px; border-radius: 4px; border: 1px solid #fde68a;">
+                    Total Account Outstanding: Rs. ${formatAmount(customerAccountOutstanding)}
+                  </div>
+                ` : ''}
                 ${remainingCredit > 0 ? `
                   <div class="notes-block" style="color: #0f766e; font-weight: 700; background: #f0fdfa; padding: 6px 8px; border-radius: 4px; border: 1px solid #99f6e4;">
                     Available Store Credit / Advance: Rs. ${formatAmount(remainingCredit)} Cr
@@ -6233,12 +6329,12 @@ function App() {
                     <span>${formatAmount(courier)}</span>
                   </div>
                 ` : '')}
-                ${prevBalance > 0 ? `
+                ${isConsolidated && prevBalance > 0 ? `
                   <div class="total-line" style="color: #b45309; font-weight: 600;">
                     <span>+ PREVIOUS BALANCE</span>
                     <span>Rs.${formatAmount(prevBalance)}</span>
                   </div>
-                ` : (prevBalance < 0 ? `
+                ` : (isConsolidated && prevBalance < 0 ? `
                   <div class="total-line" style="color: #0f766e; font-weight: 600;">
                     <span>- PREVIOUS ADVANCE</span>
                     <span>-Rs.${formatAmount(Math.abs(prevBalance))}</span>
@@ -6256,7 +6352,7 @@ function App() {
                     <span>-Rs.${formatAmount(sale.advance_applied)}</span>
                   </div>
                 ` : ''}
-                <div class="total-line grand"><span>Grand Total</span><span>Rs.${formatAmount(grandTotal)}</span></div>
+                <div class="total-line grand"><span>${isConsolidated ? 'Grand Total' : 'Invoice Total'}</span><span>Rs.${formatAmount(finalBillAmount)}</span></div>
                 <div class="total-line grand"><span>Amount Paid</span><span>Rs.${formatAmount(paidAmount)}</span></div>
                 ${balanceDue <= 0 ? `
                   <div class="total-line grand" style="color: #047857;"><span>Payment Status</span><span>✓ PAID IN FULL</span></div>
@@ -6267,7 +6363,7 @@ function App() {
                     </div>
                   ` : ''}
                 ` : `
-                  <div class="total-line grand" style="color: #b91c1c;"><span>Balance Due</span><span>Rs.${formatAmount(balanceDue)}</span></div>
+                  <div class="total-line grand" style="color: #b91c1c;"><span>${isConsolidated ? 'Balance Due' : 'Balance Due for this Invoice'}</span><span>Rs.${formatAmount(balanceDue)}</span></div>
                 `}
                 ${remainingCredit > 0 ? `
                   <div class="total-line grand" style="color: #0f766e; border-top: 1px dashed #0f766e; margin-top: 3px; padding-top: 3px;">
@@ -6312,14 +6408,40 @@ function App() {
       }
       const firstSale = invoice.sales[0];
       const lastSale = invoice.sales[invoice.sales.length - 1];
-      const allCustomerItems = invoice.sales.flatMap(s => (Array.isArray(s.items) && s.items.length ? s.items.map(sub => ({ ...sub, sale_date: s.sale_date })) : [s]));
-      const allCustomerExpenses = invoice.sales.flatMap(s => (Array.isArray(s.expenses) ? s.expenses : []));
+      let totalProducts = 0;
+      const allCustomerItems = invoice.sales.flatMap((s) => {
+        const sInvNo = s.invoice_number || `INV-${String(s.id).padStart(6, '0')}`;
+        if (Array.isArray(s.items) && s.items.length) {
+          return s.items.map((sub) => {
+            const rate = Number(sub.rate ?? sub.unit_price ?? sub.selling_price ?? sub.price ?? 0);
+            const qty = Number(sub.quantity ?? sub.qty ?? 1);
+            const itemTotal = Number(sub.total_amount ?? sub.total_price ?? sub.total ?? sub.amount ?? (rate * qty));
+            totalProducts += itemTotal;
+            return {
+              ...sub,
+              sale_id: s.id,
+              invoice_number: sInvNo,
+              sale_date: s.sale_date,
+            };
+          });
+        }
+        totalProducts += Number(s.products_total || s.total_amount || 0);
+        return [{
+          ...s,
+          sale_id: s.id,
+          invoice_number: sInvNo,
+          sale_date: s.sale_date,
+        }];
+      });
+      const allCustomerExpenses = invoice.sales.flatMap((s) => (Array.isArray(s.expenses) ? s.expenses : []));
       const totalPaid = invoice.sales.reduce((sum, s) => sum + Number(s.paid_amount || 0), 0);
       const totalPending = invoice.sales.reduce((sum, s) => sum + Number(s.pending_amount || 0), 0);
       const totalCredit = invoice.sales.reduce((sum, s) => sum + Number(s.applied_credit_amount || 0), 0);
 
       printTaxInvoicePDF({
         ...lastSale,
+        id: 'consolidated',
+        invoice_number: 'CONSOLIDATED',
         customer_id: invoice.customer.id,
         customer_name: invoice.customer.name,
         mobile: invoice.customer.mobile,
@@ -6331,6 +6453,8 @@ function App() {
         shop_phone: invoice.shop.phone,
         items: allCustomerItems,
         expenses: allCustomerExpenses,
+        products_total: totalProducts,
+        subtotal: totalProducts,
         previous_balance: Number(firstSale.previous_balance || 0),
         applied_credit_amount: totalCredit,
         paid_amount: totalPaid,
@@ -6876,6 +7000,22 @@ function App() {
 
     return results;
   }, [globalQueryTokens, dashboardAvailability, role, data.catalog, data.products, data.reference?.brands, data.reference?.manufacturing_brands, data.customers, data.sales, data.shops]);
+
+  // Zero-Storage Dynamic View Link Route (Publicly Accessible without Auth)
+  const isInvoiceViewRoute = typeof window !== 'undefined' && (
+    window.location.pathname.startsWith('/view/invoice') ||
+    window.location.pathname.startsWith('/i/') ||
+    new URLSearchParams(window.location.search).has('ref') ||
+    new URLSearchParams(window.location.search).has('invoiceId')
+  );
+
+  if (isInvoiceViewRoute) {
+    return (
+      <React.Suspense fallback={<SkeletonPage type="dashboard" />}>
+        <PublicInvoiceViewPage />
+      </React.Suspense>
+    );
+  }
 
   if (!authReady) return <SkeletonPage type="dashboard" />;
   if (!session) return <Login onLogin={login} />;
@@ -7521,6 +7661,7 @@ function App() {
                   <Input label="Mobile" className="md:col-span-1" value={forms.customer.mobile} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, mobile: v } })} />
                   <Input label="Address" className="md:col-span-1" value={forms.customer.address} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, address: v } })} />
                   <Input label="GSTIN (Optional)" className="md:col-span-1" placeholder="e.g. 24AAAAA0000A1Z5" value={forms.customer.gstin || ''} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, gstin: v.toUpperCase() } })} />
+                  <Input label="Opening Balance (₹ - Optional)" type="number" step="0.01" className="md:col-span-1" placeholder="0.00" value={forms.customer.opening_balance || ''} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, opening_balance: v } })} />
                   <div className="md:col-span-4 flex flex-col gap-1.5">
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Customer Type</label>
                     <div className="flex items-center gap-3">
@@ -7776,6 +7917,7 @@ function App() {
                                           address: customer.address || '',
                                           gstin: customer.gstin || '',
                                           customer_type: customer.customer_type || 'retailer',
+                                          opening_balance: customer.opening_balance || '',
                                         });
                                         setShowQuickAddCustomerModal(true);
                                       }}
@@ -9843,6 +9985,21 @@ function App() {
                       onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, gstin: e.target.value.toUpperCase() })}
                       className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all uppercase tracking-wider font-mono text-xs"
                     />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Opening Balance (₹ - Optional)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="0.00"
+                      disabled={Boolean(editingCustomer)}
+                      value={quickCustomerForm.opening_balance || ''}
+                      onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, opening_balance: e.target.value })}
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-teal-500 focus:bg-white transition-all font-mono text-xs disabled:opacity-60 disabled:cursor-not-allowed"
+                    />
+                    {editingCustomer && (
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">Opening balance can only be set during initial customer creation.</span>
+                    )}
                   </div>
                   <div>
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1.5">Customer Type</label>

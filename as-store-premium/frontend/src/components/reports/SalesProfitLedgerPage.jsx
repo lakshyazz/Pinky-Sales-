@@ -23,6 +23,13 @@ import {
   Clock,
   AlertCircle,
   FileText,
+  Wrench,
+  Edit3,
+  Check,
+  X,
+  ShieldAlert,
+  Sparkles,
+  RotateCcw,
 } from 'lucide-react';
 
 const money = (v) => Math.round(Number(v || 0) * 100) / 100;
@@ -96,6 +103,19 @@ export default function SalesProfitLedgerPage({
   const [loading, setLoading] = useState(false);
   const [expandedInvoices, setExpandedInvoices] = useState(new Set());
 
+  // COGS Recalculation Modal State
+  const [cogsModalOpen, setCogsModalOpen] = useState(false);
+  const [cogsScope, setCogsScope] = useState('all'); // 'filtered' | 'all'
+  const [cogsForceAll, setCogsForceAll] = useState(false);
+  const [isScanningCogs, setIsScanningCogs] = useState(false);
+  const [isApplyingCogs, setIsApplyingCogs] = useState(false);
+  const [cogsPreview, setCogsPreview] = useState(null);
+
+  // Inline Item Cost Edit State
+  const [editingItemId, setEditingItemId] = useState(null);
+  const [editCostValue, setEditCostValue] = useState('');
+  const [updatingItemId, setUpdatingItemId] = useState(null);
+
   // Handle Preset Changes
   const handlePresetSelect = (preset) => {
     setActivePreset(preset);
@@ -138,6 +158,111 @@ export default function SalesProfitLedgerPage({
       setLoading(false);
     }
   }, [api, dateFrom, dateTo, selectedShopId, searchQuery, statusFilter, setGlobalToast]);
+
+  // COGS Bulk Scan & Recalculate Handlers
+  const handleScanCogs = async () => {
+    if (!api) return;
+    setIsScanningCogs(true);
+    try {
+      const body = {
+        dryRun: true,
+        forceAll: cogsForceAll,
+        fromDate: cogsScope === 'filtered' ? dateFrom : undefined,
+        toDate: cogsScope === 'filtered' ? dateTo : undefined,
+      };
+      const res = await api('/admin/recalculate-cogs', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setCogsPreview(res);
+      if (res.totalCorrupted === 0 && res.totalBatchesCorrupted === 0) {
+        setGlobalToast?.({ type: 'success', message: 'No cost discrepancies detected! All COGS are clean.' });
+      }
+    } catch (err) {
+      console.error('Error scanning COGS:', err);
+      setGlobalToast?.({ type: 'error', message: err.message || 'Failed to scan COGS discrepancies' });
+    } finally {
+      setIsScanningCogs(false);
+    }
+  };
+
+  const handleCommitCogs = async () => {
+    if (!api) return;
+    if (!window.confirm('Are you sure you want to commit these COGS corrections to the database? This will update invoice line costs and restore true margins.')) {
+      return;
+    }
+    setIsApplyingCogs(true);
+    try {
+      const body = {
+        dryRun: false,
+        forceAll: cogsForceAll,
+        fromDate: cogsScope === 'filtered' ? dateFrom : undefined,
+        toDate: cogsScope === 'filtered' ? dateTo : undefined,
+      };
+      const res = await api('/admin/recalculate-cogs', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      setGlobalToast?.({
+        type: 'success',
+        message: `Successfully recalculated ${res.totalCorrupted} items across ${res.affectedInvoices?.length || 0} invoices. Recovered ₹${Number(res.totalProfitDelta || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}!`,
+      });
+      setCogsModalOpen(false);
+      setCogsPreview(null);
+      fetchReport();
+    } catch (err) {
+      console.error('Error committing COGS:', err);
+      setGlobalToast?.({ type: 'error', message: err.message || 'Failed to commit COGS recalculation' });
+    } finally {
+      setIsApplyingCogs(false);
+    }
+  };
+
+  // Inline Item Correction Handlers
+  const handleResetItemToMaster = async (itemId, e) => {
+    e?.stopPropagation();
+    if (!api) return;
+    setUpdatingItemId(itemId);
+    try {
+      await api(`/admin/sale-items/${itemId}/cogs`, {
+        method: 'PATCH',
+        body: JSON.stringify({ resetToMaster: true }),
+      });
+      setGlobalToast?.({ type: 'success', message: 'Item COGS reset to master product purchase cost!' });
+      fetchReport();
+    } catch (err) {
+      console.error('Error resetting item COGS:', err);
+      setGlobalToast?.({ type: 'error', message: err.message || 'Failed to reset item COGS' });
+    } finally {
+      setUpdatingItemId(null);
+    }
+  };
+
+  const handleSaveCustomCost = async (itemId, e) => {
+    e?.stopPropagation();
+    if (!api) return;
+    const cost = parseFloat(editCostValue);
+    if (isNaN(cost) || cost < 0) {
+      setGlobalToast?.({ type: 'error', message: 'Please enter a valid cost price' });
+      return;
+    }
+    setUpdatingItemId(itemId);
+    try {
+      await api(`/admin/sale-items/${itemId}/cogs`, {
+        method: 'PATCH',
+        body: JSON.stringify({ purchase_price: cost }),
+      });
+      setGlobalToast?.({ type: 'success', message: 'Item unit cost updated successfully!' });
+      setEditingItemId(null);
+      setEditCostValue('');
+      fetchReport();
+    } catch (err) {
+      console.error('Error updating item COGS:', err);
+      setGlobalToast?.({ type: 'error', message: err.message || 'Failed to update item cost' });
+    } finally {
+      setUpdatingItemId(null);
+    }
+  };
 
   useEffect(() => {
     fetchReport();
@@ -278,6 +403,19 @@ export default function SalesProfitLedgerPage({
           >
             <Download size={13} className="text-teal-600" />
             <span>Export CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setCogsModalOpen(true);
+              if (!cogsPreview) handleScanCogs();
+            }}
+            className="px-3.5 py-2 text-xs font-bold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-300/80 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+            title="Recalculate Profit & Repair Frozen COGS"
+          >
+            <Wrench size={13} className="text-amber-700" />
+            <span>Re-sync COGS</span>
           </button>
         </div>
       </div>
@@ -720,6 +858,7 @@ export default function SalesProfitLedgerPage({
                                       <th className="py-1.5 px-2 text-right">Unit Profit</th>
                                       <th className="py-1.5 px-2 text-right">Line Profit</th>
                                       <th className="py-1.5 px-2 text-center">Margin %</th>
+                                      <th className="py-1.5 px-2 text-right">COGS Actions</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-100">
@@ -784,6 +923,74 @@ export default function SalesProfitLedgerPage({
                                               {it.margin_pct}%
                                             </span>
                                           </td>
+                                          <td className="py-2 px-2 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                                            {editingItemId === it.id ? (
+                                              <div className="flex items-center justify-end gap-1">
+                                                <input
+                                                  type="number"
+                                                  value={editCostValue}
+                                                  onChange={(e) => setEditCostValue(e.target.value)}
+                                                  className="w-16 px-1.5 py-0.5 text-[11px] border border-slate-300 rounded font-bold text-right"
+                                                  placeholder="Cost"
+                                                  autoFocus
+                                                />
+                                                <button
+                                                  type="button"
+                                                  disabled={updatingItemId === it.id}
+                                                  onClick={(e) => handleSaveCustomCost(it.id, e)}
+                                                  className="p-1 rounded bg-emerald-100 text-emerald-800 hover:bg-emerald-200 cursor-pointer"
+                                                  title="Save Custom Cost"
+                                                >
+                                                  <Check size={12} />
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => { e.stopPropagation(); setEditingItemId(null); }}
+                                                  className="p-1 rounded bg-slate-100 text-slate-600 hover:bg-slate-200 cursor-pointer"
+                                                  title="Cancel"
+                                                >
+                                                  <X size={12} />
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <div className="flex items-center justify-end gap-1.5">
+                                                {it.is_anomalous_cost ? (
+                                                  <span
+                                                    className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 flex items-center gap-1"
+                                                    title={`Master purchase price is ${currency(it.master_purchase_price)}`}
+                                                  >
+                                                    <ShieldAlert size={10} /> Discrepant
+                                                  </span>
+                                                ) : null}
+
+                                                {it.master_purchase_price > 0 && Math.abs(it.unit_cost - it.master_purchase_price) > 0.01 && (
+                                                  <button
+                                                    type="button"
+                                                    disabled={updatingItemId === it.id}
+                                                    onClick={(e) => handleResetItemToMaster(it.id, e)}
+                                                    className="px-2 py-0.5 text-[10.5px] font-bold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded transition-colors cursor-pointer flex items-center gap-1"
+                                                    title={`Reset frozen cost to Master Cost (${currency(it.master_purchase_price)})`}
+                                                  >
+                                                    <RotateCcw size={10} className={updatingItemId === it.id ? 'animate-spin' : ''} />
+                                                    Reset ({currency(it.master_purchase_price)})
+                                                  </button>
+                                                )}
+
+                                                <button
+                                                  type="button"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setEditingItemId(it.id);
+                                                    setEditCostValue(String(it.unit_cost || ''));
+                                                  }}
+                                                  className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+                                                  title="Edit item unit cost"
+                                                >
+                                                  <Edit3 size={12} />
+                                                </button>
+                                              </div>
+                                            )}
+                                          </td>
                                         </tr>
                                       );
                                     })}
@@ -814,6 +1021,206 @@ export default function SalesProfitLedgerPage({
           </div>
         )}
       </div>
+
+      {/* ─── Recalculate & Re-sync COGS Modal ─── */}
+      <AnimatePresence>
+        {cogsModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white border border-slate-200 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden"
+            >
+              {/* Modal Header */}
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 rounded-xl bg-amber-100 text-amber-800">
+                    <Wrench size={18} />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-extrabold text-slate-900">
+                      Recalculate &amp; Synchronize COGS
+                    </h2>
+                    <p className="text-xs text-slate-500 font-medium">
+                      Detect corrupted frozen unit costs and restore true business margins from master purchase prices.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setCogsModalOpen(false); setCogsPreview(null); }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-6 overflow-y-auto space-y-5">
+                {/* Controls */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200/80">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Recalculation Scope
+                    </label>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setCogsScope('all')}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
+                          cogsScope === 'all'
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        All Invoices (Historical)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCogsScope('filtered')}
+                        className={`flex-1 py-1.5 px-3 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
+                          cogsScope === 'filtered'
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        Current Filtered Period
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 block mb-1.5">
+                      Scan Sensitivity
+                    </label>
+                    <label className="flex items-center gap-2 mt-2 text-xs font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={cogsForceAll}
+                        onChange={(e) => setCogsForceAll(e.target.checked)}
+                        className="rounded border-slate-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                      />
+                      <span>Force sync all items where cost differs from master price</span>
+                    </label>
+                    <span className="text-[11px] text-slate-400 block mt-0.5">
+                      Default detects severe anomalies (costs &gt; 2x master price or &gt; selling price).
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={handleScanCogs}
+                    disabled={isScanningCogs}
+                    className="px-5 py-2.5 rounded-xl font-extrabold text-xs text-white bg-slate-800 hover:bg-slate-900 transition-all flex items-center gap-2 shadow-md cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw size={14} className={isScanningCogs ? 'animate-spin' : ''} />
+                    <span>{isScanningCogs ? 'Scanning Database...' : 'Scan & Preview Discrepancies (Dry Run)'}</span>
+                  </button>
+                </div>
+
+                {/* Preview Results */}
+                {cogsPreview && (
+                  <div className="space-y-4 pt-2 border-t border-slate-100">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-center">
+                        <div className="text-[11px] font-bold text-slate-500 uppercase">Scanned Items</div>
+                        <div className="text-base font-black text-slate-800 mt-0.5">{cogsPreview.totalScanned}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-center">
+                        <div className="text-[11px] font-bold text-rose-600 uppercase">Corrupted Items</div>
+                        <div className="text-base font-black text-rose-700 mt-0.5">{cogsPreview.totalCorrupted}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-center">
+                        <div className="text-[11px] font-bold text-amber-700 uppercase">Affected Invoices</div>
+                        <div className="text-base font-black text-amber-800 mt-0.5">{cogsPreview.affectedInvoices?.length || 0}</div>
+                      </div>
+                      <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-center">
+                        <div className="text-[11px] font-bold text-emerald-700 uppercase">Profit Recovery</div>
+                        <div className="text-base font-black text-emerald-700 mt-0.5">+{currency(cogsPreview.totalProfitDelta)}</div>
+                      </div>
+                    </div>
+
+                    {cogsPreview.affectedItems?.length > 0 ? (
+                      <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
+                        <div className="max-h-60 overflow-y-auto">
+                          <table className="w-full text-left text-xs border-collapse">
+                            <thead className="sticky top-0 bg-slate-100/90 backdrop-blur-xs text-[10.5px] font-bold text-slate-600 uppercase border-b border-slate-200">
+                              <tr>
+                                <th className="py-2 px-3">Invoice &amp; Date</th>
+                                <th className="py-2 px-3">Product</th>
+                                <th className="py-2 px-2 text-center">Qty</th>
+                                <th className="py-2 px-3 text-right">Old Unit Cost</th>
+                                <th className="py-2 px-3 text-right">New Unit Cost</th>
+                                <th className="py-2 px-3 text-right">Profit Delta</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {cogsPreview.affectedItems.map((it) => (
+                                <tr key={it.item_id} className="hover:bg-slate-50/80">
+                                  <td className="py-2 px-3 font-bold text-slate-800 whitespace-nowrap">
+                                    <div>{it.invoice_number}</div>
+                                    <div className="text-[10px] text-slate-400 font-normal">{it.sale_date}</div>
+                                  </td>
+                                  <td className="py-2 px-3">
+                                    <div className="font-bold text-slate-800">{it.product_name}</div>
+                                    <div className="text-[10.5px] text-slate-400">{it.model || '—'}</div>
+                                  </td>
+                                  <td className="py-2 px-2 text-center font-bold text-slate-700">
+                                    {it.quantity}
+                                  </td>
+                                  <td className="py-2 px-3 text-right text-rose-700 font-bold line-through">
+                                    {currency(it.old_unit_cost)}
+                                  </td>
+                                  <td className="py-2 px-3 text-right text-emerald-700 font-extrabold">
+                                    {currency(it.new_unit_cost)}
+                                  </td>
+                                  <td className="py-2 px-3 text-right text-emerald-700 font-black">
+                                    +{currency(it.profit_delta)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-center text-emerald-800 text-xs font-bold">
+                        ✨ No COGS discrepancies found for this criteria!
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => { setCogsModalOpen(false); setCogsPreview(null); }}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-800 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+
+                {cogsPreview && cogsPreview.totalCorrupted > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleCommitCogs}
+                    disabled={isApplyingCogs}
+                    className="px-5 py-2 text-xs font-extrabold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-all shadow-md shadow-emerald-700/20 flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    <CheckCircle2 size={15} className={isApplyingCogs ? 'animate-spin' : ''} />
+                    <span>{isApplyingCogs ? 'Committing Changes...' : `Commit & Fix ${cogsPreview.totalCorrupted} Items (+${currency(cogsPreview.totalProfitDelta)})`}</span>
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

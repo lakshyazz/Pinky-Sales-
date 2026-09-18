@@ -23,6 +23,8 @@ import {
   Search,
   PackagePlus,
   Copy,
+  Eye,
+  EyeOff,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -112,14 +114,19 @@ const StockTableRow = React.memo(function StockTableRow({
   setIsSetStockOpen,
   setIsAddProductOpen,
   setEditingProductId,
+  showCost = false,
 }) {
   const isLowStock = item.quantity > 0 && item.quantity <= (data.shops?.find(s => s.id === item.shop_id)?.low_stock_threshold || 4);
   const isOutOfStock = Number(item.quantity) === 0;
   const isWarehouseRow = item.location_type === 'warehouse' || String(item.shop_id) === String(data.warehouse?.id);
 
+  const retailPrice = item.retail_price ?? item.sale_price ?? item.official_price;
+  const wholesalePrice = item.wholesale_price;
+  const hasRetailPrice = retailPrice !== null && retailPrice !== undefined && retailPrice !== '';
+  const hasWholesalePrice = wholesalePrice !== null && wholesalePrice !== undefined && wholesalePrice !== '';
   const hasSalePrice = item.sale_price !== null && item.sale_price !== undefined && item.sale_price !== '';
   const hasPurchasePrice = item.purchase_price !== null && item.purchase_price !== undefined && item.purchase_price !== '';
-  const marginInfo = calculateMargin(item.sale_price, item.purchase_price);
+  const marginInfo = calculateMargin(retailPrice || item.sale_price, item.purchase_price);
   const cleanBrand = cleanBrandName(item.brand);
   const compatText = getCleanCompatibility(item);
 
@@ -221,24 +228,35 @@ const StockTableRow = React.memo(function StockTableRow({
         </div>
       </td>
 
-      {/* Price & Margin */}
+      {/* Selling Prices (Retail & Wholesale) */}
       <td className="py-3.5 px-4">
-        <div className="flex flex-col gap-0.5">
-          {hasSalePrice ? (
-            <strong className="text-base font-black text-slate-900 tracking-tight">
-              {priceLabel(item.sale_price)}
-            </strong>
-          ) : (
-            <span className="text-[10px] text-slate-400 bg-slate-100 border border-slate-200 px-1.5 py-0.5 rounded self-start font-bold uppercase">
-              No Price
+        <div className="flex flex-col gap-1">
+          {/* Wholesale Price (Prominent) */}
+          <div className="flex items-center gap-1.5">
+            <span className="px-1.5 py-0.5 text-[9.5px] font-black uppercase tracking-wider rounded bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/80">
+              W/S
             </span>
-          )}
+            <span className="font-mono text-[15px] font-black text-indigo-700 dark:text-indigo-300 tracking-tight">
+              {hasWholesalePrice ? priceLabel(wholesalePrice) : '—'}
+            </span>
+          </div>
 
-          {role === 'superadmin' && (
-            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+          {/* Retail Price */}
+          <div className="flex items-center gap-1.5">
+            <span className="px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wider rounded bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 border border-slate-200/70 dark:border-zinc-700/70">
+              Ret
+            </span>
+            <span className="font-mono text-xs font-semibold text-slate-600 dark:text-zinc-400 tracking-tight">
+              {hasRetailPrice ? priceLabel(retailPrice) : hasSalePrice ? priceLabel(item.sale_price) : '—'}
+            </span>
+          </div>
+
+          {/* Admin toggle: Cost & Margin */}
+          {showCost && (role === 'superadmin' || role === 'owner') && (
+            <div className="flex items-center gap-1.5 flex-wrap pt-1 mt-0.5 border-t border-dashed border-slate-200 dark:border-zinc-800">
               {hasPurchasePrice && (
-                <small className="text-[10.5px] text-slate-500 font-medium">
-                  Cost: <b className="text-slate-700">{priceLabel(item.purchase_price)}</b>
+                <small className="text-[10px] text-slate-500 dark:text-zinc-400 font-medium">
+                  Cost: <b className="text-slate-700 dark:text-zinc-200">{priceLabel(item.purchase_price)}</b>
                 </small>
               )}
               {marginInfo && (
@@ -255,15 +273,15 @@ const StockTableRow = React.memo(function StockTableRow({
       <td className="py-3.5 px-4">
         <div className="flex flex-col gap-1 items-start">
           {isOutOfStock ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black bg-rose-50 text-rose-700 border border-rose-200">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-rose-50 text-rose-700 border border-rose-200/80">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span> Out of Stock
             </span>
           ) : isLowStock ? (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black bg-amber-50 text-amber-700 border border-amber-200">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span> Low Stock ({item.quantity})
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-amber-50 text-amber-800 border border-amber-200/80">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span> Low Stock ({item.quantity})
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> {item.quantity} pcs
             </span>
           )}
@@ -405,6 +423,7 @@ export default function StockPage({
   };
 
   // Collapsible sections toggle states
+  const [showCost, setShowCost] = useState(false);
   const [isSetStockOpen, setIsSetStockOpen] = useState(false);
   const [isAddProductOpen, setIsAddProductOpen] = useState(false);
   const [isReferenceOpen, setIsReferenceOpen] = useState(false);
@@ -2266,6 +2285,22 @@ export default function StockPage({
               <Download size={14} />
               <span className="hidden sm:inline">Export</span>
             </button>
+
+            {(role === 'superadmin' || role === 'owner') && (
+              <button
+                type="button"
+                onClick={() => setShowCost(!showCost)}
+                className={`px-3.5 py-2.5 rounded-xl text-xs font-bold border transition-all flex items-center gap-1.5 cursor-pointer shadow-xs ${
+                  showCost
+                    ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-700'
+                    : 'bg-white dark:bg-zinc-900 text-slate-700 dark:text-zinc-300 border-slate-200 dark:border-zinc-800 hover:bg-slate-50 dark:hover:bg-zinc-800'
+                }`}
+                title={showCost ? 'Hide Cost & Margin' : 'Show Cost & Margin (Admin Only)'}
+              >
+                {showCost ? <EyeOff size={14} /> : <Eye size={14} />}
+                <span className="hidden sm:inline">{showCost ? 'Hide Cost' : 'Cost & Margin'}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -2364,7 +2399,7 @@ export default function StockPage({
                     Variants & Colours
                   </th>
                   <th className="py-3.5 px-4 text-[11px] font-black uppercase tracking-wider text-slate-500" style={{ width: '14%' }}>
-                    Price & Margin
+                    {showCost ? 'Price & Margin' : 'Price (W/S & Ret)'}
                   </th>
                   <th className="py-3.5 px-4 text-[11px] font-black uppercase tracking-wider text-slate-500" style={{ width: '12%' }}>
                     Stock Status
@@ -2392,6 +2427,7 @@ export default function StockPage({
                     setIsSetStockOpen={setIsSetStockOpen}
                     setIsAddProductOpen={setIsAddProductOpen}
                     setEditingProductId={setEditingProductId}
+                    showCost={showCost}
                   />
                 ))}
               </tbody>
@@ -2416,6 +2452,7 @@ export default function StockPage({
                 setIsSetStockOpen={setIsSetStockOpen}
                 setIsAddProductOpen={setIsAddProductOpen}
                 setEditingProductId={setEditingProductId}
+                showCost={showCost}
               />
             ))}
           </div>
