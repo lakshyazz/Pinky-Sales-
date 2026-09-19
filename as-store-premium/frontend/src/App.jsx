@@ -99,7 +99,8 @@ import {
   generateInvoicePDFDoc, 
   generateStatementPDFDoc, 
   generateLedgerPDFDoc,
-  getBrandName
+  getBrandName,
+  getCustomerTotalOutstanding
 } from './utils/pdfAndShareService';
 import { 
   exportToExcel, 
@@ -404,6 +405,8 @@ const groupPendingPayments = (rows = []) => {
       shop_area: sale.shop_area,
       shop_address: sale.shop_address,
       shop_phone: sale.shop_phone,
+      customer_opening_balance: sale.customer_opening_balance,
+      customer_pending_amount: sale.customer_pending_amount,
       total_amount: 0,
       paid_amount: 0,
       pending_amount: 0,
@@ -413,6 +416,9 @@ const groupPendingPayments = (rows = []) => {
     group.total_amount += Number(sale.total_amount || 0);
     group.paid_amount += Number(sale.paid_amount || 0);
     group.pending_amount += Number(sale.pending_amount || 0);
+    if (sale.customer_pending_amount !== undefined && sale.customer_pending_amount !== null) {
+      group.customer_pending_amount = Number(sale.customer_pending_amount);
+    }
     if (sale.due_date && (!group.due_date || sale.due_date < group.due_date)) group.due_date = sale.due_date;
     group.items.push(sale);
     groups.set(key, group);
@@ -6205,7 +6211,15 @@ function App() {
       || sale.customer
       || {};
     const customerAdvanceBal = Number(customerObj.advance_balance ?? sale.customer_advance_balance ?? sale.advance_balance ?? 0);
-    const customerAccountOutstanding = Number(customerObj?.pending_amount ?? sale.customer_pending_amount ?? 0);
+    const customerAccountOutstanding = Number(
+      customerObj?.total_outstanding ??
+      customerObj?.pending_amount ??
+      customerObj?.pending ??
+      sale.customer_pending_amount ??
+      customerObj?.customer_pending_amount ??
+      getCustomerTotalOutstanding(customerObj) ??
+      0
+    );
 
     if (!isConsolidated) {
       // Option A: Standard B2B Single Tax Invoice
@@ -6487,6 +6501,7 @@ function App() {
       let salesData = [];
       let customerData = customer;
       let shopData = targetShop;
+      let paymentsData = customer.payments || [];
 
       try {
         const params = new URLSearchParams({
@@ -6496,7 +6511,8 @@ function App() {
         const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
         if (resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
           salesData = resp.sales;
-          if (resp.customer) customerData = { ...customer, ...resp.customer, payments: resp.payments || [] };
+          paymentsData = resp.payments || customerData.payments || [];
+          if (resp.customer) customerData = { ...customer, ...resp.customer, payments: paymentsData };
           if (resp.shop) shopData = { ...targetShop, ...resp.shop };
         }
       } catch (err) {
@@ -6515,7 +6531,7 @@ function App() {
       }
 
       // [FIX B1] generateStatementPDFDoc is async (lazy-loads jsPDF). Must await before calling .output().
-      const doc = await generateStatementPDFDoc(customerData, salesData, shopData);
+      const doc = await generateStatementPDFDoc(customerData, salesData, shopData, paymentsData);
       const pdfBlob = doc.output('blob');
       const blobUrl = URL.createObjectURL(pdfBlob);
       window.open(blobUrl, '_blank');

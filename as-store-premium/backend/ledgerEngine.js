@@ -752,3 +752,117 @@ export async function getAPAgingReport(shopId, asOfDate) {
     summary,
   };
 }
+
+/**
+ * Single source of truth helper function for customer total outstanding balance.
+ * Total Outstanding = Remaining Opening Balance + Invoices Pending - Advance Balance
+ * (= Opening Balance + Total Invoiced - Total Paid - Total Credits)
+ *
+ * Strictly reconciles with getCustomerLedger closing balance.
+ *
+ * @param {number} customerId
+ * @param {number|null} shopId
+ * @returns {Promise<{
+ *   customer_id: number,
+ *   opening_balance: number,
+ *   settled_opening_balance: number,
+ *   remaining_opening_balance: number,
+ *   total_invoiced: number,
+ *   total_paid: number,
+ *   invoices_pending: number,
+ *   advance_balance: number,
+ *   total_outstanding: number
+ * }>}
+ */
+export async function getCustomerTotalOutstanding(customerId, shopId = null) {
+  const custId = Number(customerId);
+  if (!custId || isNaN(custId)) {
+    return {
+      customer_id: 0,
+      opening_balance: 0,
+      settled_opening_balance: 0,
+      remaining_opening_balance: 0,
+      total_invoiced: 0,
+      total_paid: 0,
+      invoices_pending: 0,
+      advance_balance: 0,
+      total_outstanding: 0,
+    };
+  }
+
+  const shopCondSales = shopId ? 'AND s.shop_id = ' + Number(shopId) : '';
+  const shopCondPm = shopId ? 'AND pm.shop_id = ' + Number(shopId) : '';
+
+  const row = await getRecord(
+    `SELECT 
+       c.id,
+       COALESCE(c.opening_balance, 0) AS opening_balance,
+       COALESCE(c.advance_balance, 0) AS advance_balance,
+       COALESCE((
+         SELECT SUM(pa.amount_applied) 
+         FROM payment_allocations pa 
+         WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL
+       ), 0) AS settled_opening_balance,
+       COALESCE((
+         SELECT SUM(COALESCE(NULLIF(s.current_invoice_total, 0), s.total_amount)) 
+         FROM sales s 
+         WHERE s.customer_id = c.id ${shopCondSales}
+       ), 0) AS total_invoiced,
+       COALESCE((
+         SELECT SUM(s.paid_amount) 
+         FROM sales s 
+         WHERE s.customer_id = c.id ${shopCondSales}
+       ), 0) AS invoices_paid,
+       COALESCE((
+         SELECT SUM(s.pending_amount) 
+         FROM sales s 
+         WHERE s.customer_id = c.id AND s.pending_amount > 0 ${shopCondSales}
+       ), 0) AS invoices_pending,
+       COALESCE((
+         SELECT SUM(pm.amount) 
+         FROM payments pm 
+         WHERE pm.customer_id = c.id AND pm.reversed_at IS NULL AND COALESCE(pm.payment_mode, '') != 'credit_note' ${shopCondPm}
+       ), 0) AS total_paid_payments
+     FROM customers c
+     WHERE c.id = ?`,
+    [custId]
+  );
+
+  if (!row) {
+    return {
+      customer_id: custId,
+      opening_balance: 0,
+      settled_opening_balance: 0,
+      remaining_opening_balance: 0,
+      total_invoiced: 0,
+      total_paid: 0,
+      invoices_pending: 0,
+      advance_balance: 0,
+      total_outstanding: 0,
+    };
+  }
+
+  const openingBalance = money(row.opening_balance);
+  const settledOB = money(row.settled_opening_balance);
+  const remainingOB = Math.max(0, money(openingBalance - settledOB));
+  const totalInvoiced = money(row.total_invoiced);
+  const invoicesPending = money(row.invoices_pending);
+  const advanceBalance = money(row.advance_balance);
+  const totalPaid = money(row.total_paid_payments);
+
+  // Dynamic Total Outstanding = remaining_opening_balance + invoices_pending - advance_balance
+  const totalOutstanding = Math.max(0, money(remainingOB + invoicesPending - advanceBalance));
+
+  return {
+    customer_id: custId,
+    opening_balance: openingBalance,
+    settled_opening_balance: settledOB,
+    remaining_opening_balance: remainingOB,
+    total_invoiced: totalInvoiced,
+    total_paid: totalPaid,
+    invoices_pending: invoicesPending,
+    advance_balance: advanceBalance,
+    total_outstanding: totalOutstanding,
+  };
+}
+

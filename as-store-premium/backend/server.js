@@ -8,7 +8,7 @@ import crypto from 'crypto';
 import { initDatabase, runQuery, getRecord, allRecords, runTransaction, executeTransaction } from './database.js';
 import { uploadImageToR2, deleteImageFromR2, isR2Configured, getImageBufferFromStorage } from './r2Storage.js';
 import { postSaleJournal, postPaymentJournal, postCreditNoteJournal, postPurchaseBillJournal, postDebitNoteJournal, reverseJournal } from './accountingEngine.js';
-import { getCustomerLedger, getVendorLedger, getARAgingReport, getAPAgingReport } from './ledgerEngine.js';
+import { getCustomerLedger, getVendorLedger, getARAgingReport, getAPAgingReport, getCustomerTotalOutstanding } from './ledgerEngine.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -3263,7 +3263,7 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
   `;
   const rows = await runPaginatedList({
     dataSql: `
-    SELECT c.*, sh.name AS shop_name, ${pendingSql} AS pending
+    SELECT c.*, sh.name AS shop_name, ${pendingSql} AS pending, ${pendingSql} AS pending_amount
     ${baseSql}
     ORDER BY c.created_at DESC
   `,
@@ -3539,6 +3539,14 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
       COALESCE(pm.payments, '[]'::json) AS payments,
       p.name AS product_name, p.short_name AS product_short_name, p.full_model_list, p.brand, p.category, p.description,
       c.name AS customer_name, c.mobile, c.address, COALESCE(c.opening_balance, 0) AS customer_opening_balance, COALESCE(c.advance_balance, 0) AS customer_advance_balance, COALESCE(c.advance_balance, 0) AS advance_balance,
+      (
+        GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+          (SELECT SUM(pa_sub.amount_applied) FROM payment_allocations pa_sub 
+           WHERE pa_sub.customer_id = c.id AND pa_sub.allocation_type = 'opening_balance' AND pa_sub.reversed_at IS NULL), 0
+        )))
+        + COALESCE((SELECT SUM(sa_sub.pending_amount) FROM sales sa_sub WHERE sa_sub.customer_id = c.id AND sa_sub.pending_amount > 0), 0)
+        - COALESCE(c.advance_balance, 0)
+      ) AS customer_pending_amount,
       sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone,
       p.company_brand_id, b.name AS company_brand_name, sa.manufacturing_brand_id, mb.name AS manufacturing_brand_name, p.model AS display_model
     ${baseSql}
@@ -3655,6 +3663,9 @@ app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoi
       }];
     }
 
+    const customerBal = sale.customer_id ? await getCustomerTotalOutstanding(sale.customer_id, sale.shop_id) : null;
+    const customerAccountOutstanding = customerBal ? customerBal.total_outstanding : 0;
+
     res.json({
       invoice: {
         id: sale.id,
@@ -3668,6 +3679,8 @@ app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoi
         total_amount: Number(sale.total_amount || 0),
         paid_amount: Number(sale.paid_amount || 0),
         pending_amount: Number(sale.pending_amount || 0),
+        customer_pending_amount: customerAccountOutstanding,
+        customer_opening_balance: customerBal?.opening_balance || 0,
         payment_mode: sale.payment_mode || 'credit',
         notes: sale.notes || '',
         items,
@@ -3676,7 +3689,10 @@ app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoi
           id: sale.customer_id,
           name: sale.customer_name || 'Walk-in Customer',
           mobile: sale.customer_mobile || '',
-          address: sale.customer_address || ''
+          address: sale.customer_address || '',
+          opening_balance: customerBal?.opening_balance || 0,
+          pending_amount: customerAccountOutstanding,
+          total_outstanding: customerAccountOutstanding,
         },
         shop: {
           id: sale.shop_id,
@@ -3930,6 +3946,9 @@ app.get(['/api/sales/by-ref/:ref', '/api/sales/invoice/:ref'], authenticateToken
       }
     }
 
+    const customerBal = sale.customer_id ? await getCustomerTotalOutstanding(sale.customer_id, sale.shop_id) : null;
+    const customerPendingAmount = customerBal ? customerBal.total_outstanding : 0;
+
     res.json({
       sale: {
         ...sale,
@@ -3941,6 +3960,9 @@ app.get(['/api/sales/by-ref/:ref', '/api/sales/invoice/:ref'], authenticateToken
         net_profit: netProfit,
         profit_margin_pct: Number(overallMarginPct.toFixed(2)),
         invoice_number: sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`,
+        customer_pending_amount: customerPendingAmount,
+        customer_opening_balance: customerBal?.opening_balance || 0,
+        customer_remaining_opening_balance: customerBal?.remaining_opening_balance || 0,
       },
       customer: {
         id: sale.customer_id,
@@ -3948,6 +3970,12 @@ app.get(['/api/sales/by-ref/:ref', '/api/sales/invoice/:ref'], authenticateToken
         mobile: sale.mobile,
         address: sale.address,
         gstin: sale.customer_gstin,
+        opening_balance: customerBal?.opening_balance || 0,
+        settled_opening_balance: customerBal?.settled_opening_balance || 0,
+        remaining_opening_balance: customerBal?.remaining_opening_balance || 0,
+        advance_balance: customerBal?.advance_balance || 0,
+        pending_amount: customerPendingAmount,
+        total_outstanding: customerPendingAmount,
       },
       shop: {
         id: sale.shop_id,
@@ -4262,18 +4290,7 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
       [customer.id]
     );
 
-    const dynBalRow = await getRecord(
-      `SELECT (
-         GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
-           (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
-            WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
-         )))
-         + COALESCE((SELECT SUM(s.total_amount - s.paid_amount) FROM sales s WHERE s.customer_id = c.id), 0)
-         - COALESCE(c.advance_balance, 0)
-       ) AS pending_amount
-       FROM customers c WHERE c.id = ?`,
-      [customer.id]
-    );
+    const dynBal = await getCustomerTotalOutstanding(customer.id);
 
     res.json({
       customer: {
@@ -4281,10 +4298,13 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         name: customer.name,
         mobile: customer.mobile,
         address: customer.address,
-        opening_balance: money(customer.opening_balance || 0),
+        opening_balance: dynBal.opening_balance,
         opening_balance_date: customer.opening_balance_date || customer.created_at,
-        advance_balance: money(customer.advance_balance || 0),
-        pending_amount: money(dynBalRow?.pending_amount || 0),
+        settled_opening_balance: dynBal.settled_opening_balance,
+        remaining_opening_balance: dynBal.remaining_opening_balance,
+        advance_balance: dynBal.advance_balance,
+        pending_amount: dynBal.total_outstanding,
+        total_outstanding: dynBal.total_outstanding,
       },
       shop: {
         id: customer.shop_id,
@@ -4299,7 +4319,8 @@ app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req
         quantity: sales.reduce((sum, sale) => sum + money(sale.quantity), 0),
         total_amount: sales.reduce((sum, sale) => sum + money(sale.total_amount), 0),
         paid_amount: sales.reduce((sum, sale) => sum + money(sale.paid_amount), 0),
-        pending_amount: money(dynBalRow?.pending_amount || 0),
+        pending_amount: dynBal.total_outstanding,
+        total_outstanding: dynBal.total_outstanding,
       },
     });
   } catch (error) {
@@ -4317,27 +4338,7 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
     const customer = await getRecord('SELECT id, name, mobile, address, shop_id, COALESCE(opening_balance, 0) AS opening_balance, COALESCE(advance_balance, 0) AS advance_balance FROM customers WHERE id = ?', [customerId]);
     if (!customer) return res.status(404).json({ error: 'Customer not found.' });
 
-    // Outstanding balance across customer's open sales (only pending_amount > 0)
-    const balanceRow = await getRecord(
-      'SELECT COALESCE(SUM(pending_amount), 0) AS outstanding_balance FROM sales WHERE customer_id = ? AND pending_amount > 0',
-      [customerId]
-    );
-    const invoiceOutstanding = money(balanceRow?.outstanding_balance || 0);
-    const openingBalance = money(customer.opening_balance || 0);
-    const advanceBalance = money(customer.advance_balance || 0);
-
-    // Active opening balance allocations
-    const settledOBRow = await getRecord(
-      `SELECT COALESCE(SUM(amount_applied), 0) AS settled
-       FROM payment_allocations
-       WHERE customer_id = ? AND allocation_type = 'opening_balance' AND reversed_at IS NULL`,
-      [customerId]
-    );
-    const settledOpeningBalance = money(settledOBRow?.settled || 0);
-    const remainingOpeningBalance = Math.max(0, money(openingBalance - settledOpeningBalance));
-
-    // Dynamic Outstanding Balance: (opening_balance - settled_ob) + invoices_outstanding - advance_balance
-    const dynamicOutstanding = Math.max(0, money(remainingOpeningBalance + invoiceOutstanding - advanceBalance));
+    const bal = await getCustomerTotalOutstanding(customerId);
 
     // Active credit notes with remaining balance
     const creditNotes = await allRecords(
@@ -4350,13 +4351,25 @@ app.get(['/api/customers/:id/balance', '/customers/:id/balance'], authenticateTo
     const availableCredits = creditNotes.reduce((sum, cn) => sum + money(cn.balance_amount), 0);
 
     res.json({
-      customer,
-      outstanding_balance: dynamicOutstanding,
-      invoices_outstanding: invoiceOutstanding,
-      opening_balance: openingBalance,
-      settled_opening_balance: settledOpeningBalance,
-      remaining_opening_balance: remainingOpeningBalance,
-      advance_balance: advanceBalance,
+      customer: {
+        ...customer,
+        opening_balance: bal.opening_balance,
+        settled_opening_balance: bal.settled_opening_balance,
+        remaining_opening_balance: bal.remaining_opening_balance,
+        advance_balance: bal.advance_balance,
+        pending_amount: bal.total_outstanding,
+        total_outstanding: bal.total_outstanding,
+      },
+      outstanding_balance: bal.total_outstanding,
+      pending_amount: bal.total_outstanding,
+      total_outstanding: bal.total_outstanding,
+      invoices_outstanding: bal.invoices_pending,
+      opening_balance: bal.opening_balance,
+      settled_opening_balance: bal.settled_opening_balance,
+      remaining_opening_balance: bal.remaining_opening_balance,
+      advance_balance: bal.advance_balance,
+      total_invoiced: bal.total_invoiced,
+      total_paid: bal.total_paid,
       available_credits: money(availableCredits),
       credit_notes: creditNotes,
     });

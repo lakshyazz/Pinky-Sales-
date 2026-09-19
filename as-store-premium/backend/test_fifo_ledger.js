@@ -8,7 +8,7 @@
 import 'dotenv/config';
 import assert from 'node:assert/strict';
 import { runQuery, getRecord, allRecords, runTransaction, pool } from './database.js';
-import { getCustomerLedger } from './ledgerEngine.js';
+import { getCustomerLedger, getCustomerTotalOutstanding } from './ledgerEngine.js';
 
 const money = (val) => Math.round(Number(val || 0) * 100) / 100;
 
@@ -81,6 +81,7 @@ async function runTests() {
   let testCustomer = null;
   let customer3Id = null;
   let customer4Id = null;
+  let customer5Id = null;
   let testProduct = null;
   let shopId = 1;
 
@@ -541,8 +542,76 @@ async function runTests() {
     console.log(`   [Credit Note Verification]: Found ${cnEntry.ref_no} in ledger with Cr ₹${cnEntry.credit}, Closing Bal: ₹${ledgerCust4.closing_balance}`);
     console.log('✔ Test 11 Passed: Credit Notes appear in customer party ledger with correct badge type, credit amount, and running balance.');
 
+    // ──────────────────────────────────────────────────────────────────────────
+    // TEST 12: Unified Customer Total Outstanding Reconciliation (Invoice, Statement & WhatsApp)
+    // ──────────────────────────────────────────────────────────────────────────
+    console.log('\n── TEST GROUP 12: Unified Customer Total Outstanding Reconciliation ──');
+    const cust5 = await runQuery(
+      `INSERT INTO customers (name, mobile, address, opening_balance, advance_balance, shop_id)
+       VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
+      [`Test Balance Customer ${Date.now()}`, `98765${Math.floor(10000 + Math.random() * 90000)}`, 'Unified Balance Street', 50000.00, 0.00, shopId]
+    );
+    customer5Id = cust5.id;
+
+    // 1. Partial payment applied to opening balance
+    const obPay = await runQuery(
+      `INSERT INTO payments (shop_id, customer_id, amount, payment_mode, payment_date, notes)
+       VALUES (?, ?, ?, 'cash', CURRENT_DATE, 'Partial OB Repayment') RETURNING id`,
+      [shopId, customer5Id, 10000.00]
+    );
+    await runQuery(
+      `INSERT INTO payment_allocations (payment_id, customer_id, allocation_type, amount_applied)
+       VALUES (?, ?, 'opening_balance', 10000.00)`,
+      [obPay.id, customer5Id]
+    );
+
+    // 2. Invoice with partial payment
+    const saleRow = await runQuery(
+      `INSERT INTO sales (shop_id, customer_id, invoice_number, total_amount, paid_amount, pending_amount, status, sale_date)
+       VALUES (?, ?, 'INV-TEST-SYNC', 20000.00, 5000.00, 15000.00, 'partial', CURRENT_DATE) RETURNING id`,
+      [shopId, customer5Id]
+    );
+
+    const invPay = await runQuery(
+      `INSERT INTO payments (shop_id, customer_id, sale_id, amount, payment_mode, payment_date, notes)
+       VALUES (?, ?, ?, 5000.00, 'cash', CURRENT_DATE, 'Invoice Checkout Downpayment') RETURNING id`,
+      [shopId, customer5Id, saleRow.id]
+    );
+    await runQuery(
+      `INSERT INTO payment_allocations (payment_id, customer_id, sale_id, allocation_type, amount_applied)
+       VALUES (?, ?, ?, 'sale', 5000.00)`,
+      [invPay.id, customer5Id, saleRow.id]
+    );
+
+    // Dynamic Outstanding expected:
+    // Remaining OB: 50,000 - 10,000 = 40,000
+    // Invoices Pending: 15,000
+    // Net Total Outstanding: 55,000.00
+    const dynamicTotal = await getCustomerTotalOutstanding(customer5Id, shopId);
+    assert.strictEqual(Number(dynamicTotal.total_outstanding), 55000.00, 'getCustomerTotalOutstanding must return exactly ₹55,000.00');
+
+    // Compare with Ledger closing balance
+    const ledgerCust5 = await getCustomerLedger(customer5Id, shopId);
+    assert.strictEqual(Number(ledgerCust5.closing_balance), 55000.00, 'Customer Ledger closing balance must strictly equal ₹55,000.00');
+
+    // Invariant check
+    await assertCustomerLedgerAndBalanceReconcile(customer5Id);
+
+    // Verify Customer 26 (JJ MOBILE) if present in database
+    const cust26 = await getRecord('SELECT id FROM customers WHERE id = 26');
+    if (cust26) {
+      const c26Outstanding = await getCustomerTotalOutstanding(26);
+      const c26Ledger = await getCustomerLedger(26);
+      assert.strictEqual(Number(c26Outstanding.total_outstanding), 1860720.00, 'Customer 26 total outstanding must strictly equal ₹18,60,720.00');
+      assert.strictEqual(Number(c26Ledger.closing_balance), 1860720.00, 'Customer 26 ledger closing balance must strictly equal ₹18,60,720.00');
+      await assertCustomerLedgerAndBalanceReconcile(26);
+      console.log(`   [Customer 26 Verified]: Total Outstanding = ₹${c26Outstanding.total_outstanding}, Ledger Closing = ₹${c26Ledger.closing_balance}`);
+    }
+
+    console.log('✔ Test 12 Passed: Customer Total Outstanding reconciles 100% with Party Ledger and Invariant across all scenarios.');
+
     console.log('\n================================================================');
-    console.log('   ALL 11 FIFO LEDGER & RECONCILIATION TEST GROUPS PASSED!       ');
+    console.log('   ALL 12 FIFO LEDGER & RECONCILIATION TEST GROUPS PASSED!       ');
     console.log('================================================================\n');
 
   } catch (err) {
@@ -566,6 +635,12 @@ async function runTests() {
       if (customer4Id) {
         await runQuery('DELETE FROM credit_notes WHERE customer_id = ?', [customer4Id]);
         await runQuery('DELETE FROM customers WHERE id = ?', [customer4Id]);
+      }
+      if (customer5Id) {
+        await runQuery('DELETE FROM payment_allocations WHERE customer_id = ?', [customer5Id]);
+        await runQuery('DELETE FROM payments WHERE customer_id = ?', [customer5Id]);
+        await runQuery('DELETE FROM sales WHERE customer_id = ?', [customer5Id]);
+        await runQuery('DELETE FROM customers WHERE id = ?', [customer5Id]);
       }
     } catch {}
     await pool.end();

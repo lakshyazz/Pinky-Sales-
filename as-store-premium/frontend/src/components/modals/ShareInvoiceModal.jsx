@@ -22,6 +22,7 @@ import {
   parseCleanPhoneNumber,
   generateInvoicePDFDoc, 
   generateStatementPDFDoc,
+  getCustomerTotalOutstanding,
   getBrandName
 } from '../../utils/pdfAndShareService';
 
@@ -49,6 +50,8 @@ export default function ShareInvoiceModal({
   const [editablePhone, setEditablePhone] = useState('');
   const [isEditingPhone, setIsEditingPhone] = useState(false);
   const [statementSales, setStatementSales] = useState(null);
+  const [statementPayments, setStatementPayments] = useState([]);
+  const [statementCustomer, setStatementCustomer] = useState(null);
   const [loadingStatement, setLoadingStatement] = useState(false);
 
   // Extract customer and invoices list
@@ -87,6 +90,8 @@ export default function ShareInvoiceModal({
   useEffect(() => {
     if (!isOpen || !target) {
       setStatementSales(null);
+      setStatementPayments([]);
+      setStatementCustomer(null);
       return;
     }
 
@@ -104,6 +109,8 @@ export default function ShareInvoiceModal({
         const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
         if (!isCancelled && resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
           setStatementSales(resp.sales);
+          setStatementPayments(resp.payments || []);
+          if (resp.customer) setStatementCustomer(resp.customer);
         }
       } catch (err) {
         console.warn('ShareInvoiceModal background /customer-invoice fetch failed:', err);
@@ -148,9 +155,18 @@ export default function ShareInvoiceModal({
   const customerMobile = customer.mobile || activeInvoice?.mobile || '';
 
   // Aggregate metrics for modal invoices
+  const effectiveCustomer = useMemo(() => {
+    return {
+      ...customer,
+      ...(statementCustomer || {}),
+      payments: (statementPayments && statementPayments.length > 0) ? statementPayments : (customer.payments || []),
+    };
+  }, [customer, statementCustomer, statementPayments]);
+
+  // Aggregate metrics for modal invoices
   const totalBilledAll = invoices.reduce((acc, inv) => acc + Number(inv.total_amount || 0), 0);
   const totalPaidAll = invoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
-  const totalPendingAll = Number(customer.pending_amount ?? invoices.reduce((acc, inv) => acc + Number(inv.pending_amount || 0), 0));
+  const totalPendingAll = getCustomerTotalOutstanding(effectiveCustomer, invoices, effectiveCustomer.payments || []);
 
   // Statement aggregated metrics from complete transaction history
   const statementInvoices = useMemo(() => {
@@ -161,9 +177,12 @@ export default function ShareInvoiceModal({
   }, [isStatement, statementSales, invoices]);
 
   const stmtTotalBilled = statementInvoices.reduce((acc, inv) => acc + Number(inv.total_amount || 0), 0);
-  const stmtTotalPaid = statementInvoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
-  const stmtOpeningBal = Number(customer.opening_balance || 0);
-  const stmtTotalPending = Number(customer.pending_amount ?? (statementInvoices.reduce((acc, inv) => acc + Number(inv.pending_amount || 0), 0) + (stmtOpeningBal > 0 ? stmtOpeningBal : 0)));
+  const validStatementPayments = (statementPayments || []).filter(p => !p.reversed_at && String(p.payment_mode || '').toLowerCase() !== 'credit_note');
+  const stmtTotalPaid = validStatementPayments.length > 0
+    ? validStatementPayments.reduce((acc, p) => acc + Number(p.amount || 0), 0)
+    : statementInvoices.reduce((acc, inv) => acc + Number(inv.paid_amount || 0), 0);
+  const stmtOpeningBal = Number(effectiveCustomer.opening_balance || 0);
+  const stmtTotalPending = getCustomerTotalOutstanding(effectiveCustomer, statementInvoices, statementPayments);
 
   // Helper to fetch complete statement data matching the row-level Statement/Print icon
   const fetchCompleteStatementData = async () => {
@@ -175,7 +194,8 @@ export default function ShareInvoiceModal({
     };
 
     let salesData = statementSales || [];
-    let customerData = customer;
+    let paymentsData = statementPayments || [];
+    let customerData = effectiveCustomer;
     let shopData = targetShop;
 
     if ((!salesData || salesData.length === 0) && authedFetch && (custId || customer.mobile || activeInvoice?.mobile)) {
@@ -187,9 +207,12 @@ export default function ShareInvoiceModal({
         const resp = await authedFetch(`/customer-invoice?${params.toString()}`);
         if (resp && Array.isArray(resp.sales) && resp.sales.length > 0) {
           salesData = resp.sales;
+          paymentsData = resp.payments || [];
           if (resp.customer) customerData = { ...customer, ...resp.customer, payments: resp.payments || [] };
           if (resp.shop) shopData = { ...targetShop, ...resp.shop };
           setStatementSales(resp.sales);
+          setStatementPayments(resp.payments || []);
+          if (resp.customer) setStatementCustomer(resp.customer);
         }
       } catch (err) {
         console.warn('ShareInvoiceModal: /customer-invoice fetch error, falling back to modal records:', err);
@@ -202,15 +225,20 @@ export default function ShareInvoiceModal({
         : (invoices.length > 0 ? invoices : (target?.sale ? [target.sale] : [customer]));
     }
 
+    const calculatedPending = getCustomerTotalOutstanding(customerData, salesData, paymentsData);
+
     return {
       customerData: {
         ...customerData,
-        pending_amount: customerData.pending_amount ?? (isStatement ? stmtTotalPending : totalPendingAll),
-        total_amount: customerData.total_amount ?? (isStatement ? stmtTotalBilled : totalBilledAll),
-        paid_amount: customerData.paid_amount ?? (isStatement ? stmtTotalPaid : totalPaidAll),
+        payments: paymentsData,
+        pending_amount: calculatedPending,
+        total_outstanding: calculatedPending,
+        total_amount: isStatement ? stmtTotalBilled : totalBilledAll,
+        paid_amount: isStatement ? stmtTotalPaid : totalPaidAll,
       },
       salesData,
       shopData,
+      paymentsData,
     };
   };
 
@@ -284,19 +312,22 @@ export default function ShareInvoiceModal({
 
   // Live formatted WhatsApp default message
   const defaultFormattedMessage = useMemo(() => {
+    const custToFormat = {
+      ...effectiveCustomer,
+      items: isStatement ? statementInvoices : invoices,
+      payments: (statementPayments && statementPayments.length > 0) ? statementPayments : (effectiveCustomer.payments || []),
+      pending_amount: isStatement ? stmtTotalPending : totalPendingAll,
+      total_outstanding: isStatement ? stmtTotalPending : totalPendingAll,
+      total_amount: isStatement ? stmtTotalBilled : totalBilledAll,
+      paid_amount: isStatement ? stmtTotalPaid : totalPaidAll,
+    };
     return formatWhatsAppMessage({
-      customer: {
-        ...customer,
-        items: isStatement ? statementInvoices : invoices,
-        pending_amount: isStatement ? stmtTotalPending : totalPendingAll,
-        total_amount: isStatement ? (stmtTotalBilled + (stmtOpeningBal > 0 ? stmtOpeningBal : 0)) : totalBilledAll,
-        paid_amount: isStatement ? stmtTotalPaid : totalPaidAll,
-      },
+      customer: custToFormat,
       sale: isStatement ? null : (isAllSelected ? consolidatedSale : activeInvoice),
       shop,
       type: shareType,
     });
-  }, [customer, invoices, isStatement, statementInvoices, stmtTotalPending, stmtTotalBilled, stmtTotalPaid, stmtOpeningBal, totalPendingAll, totalBilledAll, totalPaidAll, isAllSelected, consolidatedSale, activeInvoice, shop, shareType]);
+  }, [effectiveCustomer, statementInvoices, invoices, statementPayments, isStatement, stmtTotalPending, totalPendingAll, stmtTotalBilled, totalBilledAll, stmtTotalPaid, totalPaidAll, isAllSelected, consolidatedSale, activeInvoice, shop, shareType]);
 
   // Synchronize default message & phone into editable state when switching selection or docType
   useEffect(() => {
@@ -370,8 +401,8 @@ export default function ShareInvoiceModal({
       let invoiceNumber = '';
 
       if (docType === 'statement') {
-        const { customerData, salesData, shopData } = await fetchCompleteStatementData();
-        doc = await generateStatementPDFDoc(customerData, salesData, shopData);
+        const { customerData, salesData, shopData, paymentsData } = await fetchCompleteStatementData();
+        doc = await generateStatementPDFDoc(customerData, salesData, shopData, paymentsData || customerData.payments || []);
         invoiceNumber = `Statement-${Date.now()}`;
         filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
       } else {
@@ -479,8 +510,8 @@ export default function ShareInvoiceModal({
       let invoiceNumber = '';
 
       if (docType === 'statement') {
-        const { customerData, salesData, shopData } = await fetchCompleteStatementData();
-        doc = await generateStatementPDFDoc(customerData, salesData, shopData);
+        const { customerData, salesData, shopData, paymentsData } = await fetchCompleteStatementData();
+        doc = await generateStatementPDFDoc(customerData, salesData, shopData, paymentsData || customerData.payments || []);
         invoiceNumber = `Statement-${Date.now()}`;
         filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
       } else {
@@ -545,12 +576,12 @@ export default function ShareInvoiceModal({
   const handleDownloadStatementPdf = async () => {
     try {
       if (showToast) showToast('Preparing complete account statement...');
-      const { customerData, salesData, shopData } = await fetchCompleteStatementData();
+      const { customerData, salesData, shopData, paymentsData } = await fetchCompleteStatementData();
       if (!salesData.length || (salesData.length === 1 && !salesData[0]?.id && !salesData[0]?.total_amount)) {
         if (showToast) showToast('No purchase or payment history found for this customer');
         return;
       }
-      const doc = await generateStatementPDFDoc(customerData, salesData, shopData);
+      const doc = await generateStatementPDFDoc(customerData, salesData, shopData, paymentsData || customerData.payments || []);
       const filename = `Statement_${customerDisplayName.replace(/\s+/g, '_')}_${Date.now()}.pdf`;
       doc.save(filename);
       if (showToast) showToast(`📑 Complete Statement downloaded!`);

@@ -77,6 +77,61 @@ export const getBrandName = (item = {}, sale = null) => {
 };
 
 /**
+ * Unified Balance Utility Function (Frontend Single Source of Truth)
+ * Total Outstanding = Opening/Carry Forward Balance + SUM(Invoices) - SUM(Payments/Credits)
+ * Or remaining_opening_balance + invoices_pending - advance_balance
+ */
+export const getCustomerTotalOutstanding = (customer = {}, invoices = [], payments = []) => {
+  const openingBal = Number(customer?.opening_balance ?? customer?.customer_opening_balance ?? 0);
+  const advanceBal = Number(customer?.advance_balance ?? customer?.customer_advance_balance ?? 0);
+
+  const hasPayments = Array.isArray(payments) && payments.length > 0;
+  const hasInvoices = Array.isArray(invoices) && invoices.length > 0;
+
+  if (hasPayments || (hasInvoices && invoices.some(i => i?.pending_amount !== undefined || i?.paid_amount !== undefined))) {
+    const validInvoices = hasInvoices ? invoices : [];
+    const validPayments = hasPayments ? payments.filter(p => !p.reversed_at && String(p.payment_mode || '').toLowerCase() !== 'credit_note') : [];
+
+    // Calculate settled opening balance from allocations if present
+    const settledOBFromAllocs = validPayments
+      .flatMap(p => Array.isArray(p.allocations) ? p.allocations : [])
+      .filter(a => a.allocation_type === 'opening_balance' && !a.reversed_at)
+      .reduce((s, a) => s + Number(a.amount_applied || 0), 0);
+
+    const remainingOB = Math.max(0, openingBal - settledOBFromAllocs);
+
+    // Sum of invoice pending
+    const invoicesPending = validInvoices.reduce((s, inv) => {
+      const p = inv.pending_amount !== undefined 
+        ? Number(inv.pending_amount) 
+        : Math.max(0, Number(inv.total_amount || 0) - Number(inv.paid_amount || 0));
+      return s + p;
+    }, 0);
+
+    // Dynamic Outstanding
+    return Math.max(0, remainingOB + invoicesPending - advanceBal);
+  }
+
+  // Fallback to customer's pre-computed pending_amount or customer_pending_amount
+  const precomputed = Number(
+    customer?.pending_amount ?? 
+    customer?.customer_pending_amount ?? 
+    customer?.total_outstanding ?? 
+    customer?.pending ?? 
+    0
+  );
+  if (precomputed > 0) return precomputed;
+
+  // If opening balance exists and no payments known
+  if (openingBal > 0) {
+    const invPending = (invoices || []).reduce((s, i) => s + Number(i.pending_amount || 0), 0);
+    return Math.max(0, openingBal + invPending - advanceBal);
+  }
+
+  return 0;
+};
+
+/**
  * 1. GENERATE PROFESSIONAL TAX INVOICE PDF (Unified Single Engine)
  * Replaces old green/colored layout with 100% identical monochrome boxed tabular layout.
  */
@@ -514,7 +569,13 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
   doc.text('ORIGINAL LCD GOODS THREE MONTHS WARRANTY ONLY', 13, startY + 38);
 
   // Optional Footer Note for Single Tax Invoice: Total Account Outstanding
-  const customerAccountOutstanding = Number(customer?.pending_amount ?? sale?.customer_pending_amount ?? 0);
+  const customerAccountOutstanding = Number(
+    customer?.pending_amount ??
+    customer?.total_outstanding ??
+    sale?.customer_pending_amount ??
+    getCustomerTotalOutstanding(customer, Array.isArray(customer?.items) ? customer.items : [], customer?.payments || []) ??
+    0
+  );
   let noteOffset = 44;
   if (!isConsolidated && customerAccountOutstanding > 0) {
     doc.setFont('helvetica', 'bold');
@@ -592,11 +653,14 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
     ? paymentsArg
     : (Array.isArray(customer?.payments) && customer.payments.length > 0 ? customer.payments : []);
 
-  const totalBilled = validInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0) + (openingBal > 0 ? openingBal : 0);
-  const totalPaid = allPayments.length > 0
-    ? allPayments.reduce((s, pm) => s + Number(pm.amount || 0), 0)
+  const validPaymentsList = allPayments.filter(pm => !pm.reversed_at && String(pm.payment_mode || '').toLowerCase() !== 'credit_note');
+
+  const purchasesTotal = validInvoices.reduce((s, inv) => s + Number(inv.total_amount || 0), 0);
+  const totalPaid = validPaymentsList.length > 0
+    ? validPaymentsList.reduce((s, pm) => s + Number(pm.amount || 0), 0)
     : validInvoices.reduce((s, inv) => s + Number(inv.paid_amount || 0), 0);
-  const totalDue = Math.max(0, totalBilled - totalPaid);
+  const totalDebits = purchasesTotal + (openingBal > 0 ? openingBal : 0);
+  let totalDue = Math.max(0, totalDebits - totalPaid);
 
   // Calculate customer's remaining available advance / store credit balance
   const prevBal = Number(firstInvoice?.previous_balance ?? firstInvoice?.old_balance ?? 0);
@@ -605,17 +669,17 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
   let availableCreditBalance = rawCustomerAdvance;
   if (lastInvoice?.closing_balance !== undefined && Number(lastInvoice.closing_balance) < 0) {
     availableCreditBalance = Math.max(availableCreditBalance, Math.abs(Number(lastInvoice.closing_balance)));
-  } else if (prevBal < 0 && (totalBilled + prevBal) < 0) {
-    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(totalBilled + prevBal));
+  } else if (prevBal < 0 && (purchasesTotal + prevBal) < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(purchasesTotal + prevBal));
   } else if (prevBal < 0) {
     availableCreditBalance = Math.max(availableCreditBalance, Math.abs(prevBal));
-  } else if (totalDue < 0) {
-    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(totalDue));
+  } else if ((totalDebits - totalPaid) < 0) {
+    availableCreditBalance = Math.max(availableCreditBalance, Math.abs(totalDebits - totalPaid));
   } else if (openingBal < 0) {
     availableCreditBalance = Math.max(availableCreditBalance, Math.abs(openingBal));
   }
 
-  const hasCreditBalance = availableCreditBalance > 0;
+  let hasCreditBalance = availableCreditBalance > 0;
 
   // 1. Outer Border Box
   doc.setDrawColor(119, 119, 119);
@@ -711,7 +775,49 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
   doc.line(10, 58, 200, 58);
 
   // Summary Metrics Blocks (58 to 72mm)
-  if (hasCreditBalance) {
+  if (openingBal > 0) {
+    // Opening balance clearly separated from period purchases
+    if (hasCreditBalance) {
+      doc.setFontSize(7);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text('OPENING BALANCE', 12, 63);
+      doc.text('TOTAL INVOICED', 48, 63);
+      doc.text('TOTAL PAID', 85, 63);
+      doc.text('OUTSTANDING DUE', 122, 63);
+      doc.text('REMAINING CREDIT', 160, 63);
+
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(17, 17, 17);
+      doc.text(`Rs. ${formatMoney(openingBal)}`, 12, 69);
+      doc.text(`Rs. ${formatMoney(purchasesTotal)}`, 48, 69);
+      doc.setTextColor(15, 118, 110);
+      doc.text(`Rs. ${formatMoney(totalPaid)}`, 85, 69);
+      doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
+      doc.text(totalDue > 0 ? `Rs. ${formatMoney(totalDue)}` : 'Rs. 0', 122, 69);
+      doc.setTextColor(15, 118, 110);
+      doc.text(`Rs. ${formatMoney(availableCreditBalance)} Cr`, 160, 69);
+    } else {
+      doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(71, 85, 105);
+      doc.text('OPENING BALANCE', 14, 63);
+      doc.text('TOTAL INVOICED', 62, 63);
+      doc.text('TOTAL PAID / REPAID', 110, 63);
+      doc.text('TOTAL OUTSTANDING DUE', 155, 63);
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(17, 17, 17);
+      doc.text(`Rs. ${formatMoney(openingBal)}`, 14, 69);
+      doc.text(`Rs. ${formatMoney(purchasesTotal)}`, 62, 69);
+      doc.setTextColor(15, 118, 110);
+      doc.text(`Rs. ${formatMoney(totalPaid)}`, 110, 69);
+      doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
+      doc.text(`Rs. ${formatMoney(totalDue)}`, 155, 69);
+    }
+  } else if (hasCreditBalance) {
     // 4 Column Layout: Invoiced, Paid, Outstanding Due, Remaining Credit
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
@@ -724,7 +830,7 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
     doc.setFontSize(9);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(17, 17, 17);
-    doc.text(`Rs. ${formatMoney(totalBilled)}`, 14, 69);
+    doc.text(`Rs. ${formatMoney(purchasesTotal)}`, 14, 69);
     doc.setTextColor(15, 118, 110);
     doc.text(`Rs. ${formatMoney(totalPaid)}`, 62, 69);
     doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
@@ -743,7 +849,7 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(17, 17, 17);
-    doc.text(`Rs. ${formatMoney(totalBilled)}`, 20, 69);
+    doc.text(`Rs. ${formatMoney(purchasesTotal)}`, 20, 69);
     doc.setTextColor(15, 118, 110);
     doc.text(`Rs. ${formatMoney(totalPaid)}`, 85, 69);
     doc.setTextColor(totalDue > 0 ? 225 : 15, totalDue > 0 ? 29 : 118, totalDue > 0 ? 72 : 110);
@@ -835,9 +941,9 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
     }
   });
 
-  // Payment Events (Unified from allPayments or fallback to validInvoices)
-  if (allPayments.length > 0) {
-    allPayments.forEach((pm) => {
+  // Payment Events (Unified from validPaymentsList or fallback to validInvoices)
+  if (validPaymentsList.length > 0) {
+    validPaymentsList.forEach((pm) => {
       const pmDate = pm.payment_date || pm.created_at || '';
       const pmDateStr = String(pmDate).slice(0, 10);
       const pmNum = pm.payment_number || `PAY-${String(pm.id).padStart(6, '0')}`;
@@ -982,7 +1088,11 @@ export const generateStatementPDFDoc = async (customer = {}, invoices = [], shop
   const finalY = (doc.lastAutoTable?.finalY || 150) + 6;
   const currentY = Math.min(finalY, 260);
 
-  let summaryLine = `Total Invoiced: Rs. ${formatMoney(totalBilled)}   |   Total Paid: Rs. ${formatMoney(totalPaid)}`;
+  let summaryLine = `Total Invoiced: Rs. ${formatMoney(purchasesTotal)}`;
+  if (openingBal > 0) {
+    summaryLine += `   |   Opening Balance: Rs. ${formatMoney(openingBal)}`;
+  }
+  summaryLine += `   |   Total Paid: Rs. ${formatMoney(totalPaid)}`;
   if (totalDue > 0) {
     summaryLine += `   |   Net Outstanding Due: Rs. ${formatMoney(totalDue)}`;
   } else {
@@ -1208,6 +1318,17 @@ export const formatWhatsAppMessage = ({
       msg += `✨ *Payment Status:* Fully Paid\n`;
     }
 
+    const customerAccountOutstanding = Number(
+      customer?.pending_amount ??
+      customer?.total_outstanding ??
+      sale?.customer_pending_amount ??
+      getCustomerTotalOutstanding(customer, Array.isArray(customer?.items) ? customer.items : [], customer?.payments || []) ??
+      0
+    );
+    if (customerAccountOutstanding > 0 && Math.abs(customerAccountOutstanding - pendingAmount) > 0.01) {
+      msg += `📊 *Total Account Outstanding:* Rs. ${formatMoney(customerAccountOutstanding)}\n`;
+    }
+
     const prevBal = Number(inv?.previous_balance ?? inv?.old_balance ?? 0);
     const remainingCredit = (inv.closing_balance !== undefined && Number(inv.closing_balance) < 0)
       ? Math.abs(Number(inv.closing_balance))
@@ -1237,10 +1358,15 @@ export const formatWhatsAppMessage = ({
   const pendingInvoices = rawPendingInvoices.filter(inv => Number(inv.pending_amount || 0) > 0);
   const openingBalance = Number(customer?.opening_balance || 0);
 
-  const totalInvoicesPending = pendingInvoices.reduce((s, i) => s + Number(i.pending_amount || 0), 0);
-  const totalPending = Number(customer?.pending_amount ?? (totalInvoicesPending + openingBalance));
-  const totalBilled = Number(customer?.total_amount ?? rawPendingInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0));
-  const totalPaid = Number(customer?.paid_amount ?? rawPendingInvoices.reduce((s, i) => s + Number(i.paid_amount || 0), 0));
+  const totalBilled = Number(rawPendingInvoices.reduce((s, i) => s + Number(i.total_amount || 0), 0));
+  const validCustPayments = Array.isArray(customer?.payments)
+    ? customer.payments.filter(p => !p.reversed_at && String(p.payment_mode || '').toLowerCase() !== 'credit_note')
+    : [];
+  const totalPaid = validCustPayments.length > 0
+    ? validCustPayments.reduce((s, p) => s + Number(p.amount || 0), 0)
+    : Number(customer?.paid_amount ?? rawPendingInvoices.reduce((s, i) => s + Number(i.paid_amount || 0), 0));
+
+  const totalPending = getCustomerTotalOutstanding(customer, rawPendingInvoices, customer?.payments || []);
 
   if (type === 'ledger') {
     return `Dear ${custName},\n\nGreetings from *${shopName}*.\n\nPlease find your official *Customer Transaction Ledger* attached.\n\n📊 *Total Outstanding Balance:* Rs. ${formatMoney(totalPending)}\n\nPlease review the attached running statement for full debit and credit history.\n\nThank you!\n*${shopName}*\n${shopContact}`;
@@ -1260,9 +1386,9 @@ export const formatWhatsAppMessage = ({
     msg += `*Pending Invoices Breakdown:*\n${invoiceLines}\n\n`;
   }
   if (openingBalance > 0) {
-    msg += `📂 *Carry Forward (Opening) Balance:* Rs. ${formatMoney(openingBalance)}\n\n`;
+    msg += `📂 *Carry Forward (Opening) Balance:* Rs. ${formatMoney(openingBalance)}\n`;
   }
-  msg += `📊 *Total Invoiced:* Rs. ${formatMoney(totalBilled)}\n`;
+  msg += `📊 *Total Invoiced (Purchases):* Rs. ${formatMoney(totalBilled)}\n`;
   msg += `✅ *Total Paid:* Rs. ${formatMoney(totalPaid)}\n`;
   msg += `⚠️ *Total Outstanding Due:* *Rs. ${formatMoney(totalPending)}*\n\n`;
 
