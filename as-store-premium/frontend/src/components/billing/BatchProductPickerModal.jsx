@@ -103,7 +103,7 @@ export default function BatchProductPickerModal({
       };
       return {
         ...prev,
-        [productId]: { ...current, ...updates },
+        [productId]: { ...current, selected: true, ...updates },
       };
     });
   };
@@ -113,19 +113,42 @@ export default function BatchProductPickerModal({
     updateRowState(product.id, { selected: !current.selected });
   };
 
-  // Selected summaries
+  const allFilteredSelected =
+    filteredProducts.length > 0 &&
+    filteredProducts.every((p) => getRowState(p).selected);
+
+  const toggleSelectAll = () => {
+    const nextVal = !allFilteredSelected;
+    setRowStates((prev) => {
+      const next = { ...prev };
+      filteredProducts.forEach((p) => {
+        const current = next[p.id] || getRowState(p);
+        next[p.id] = { ...current, selected: nextVal };
+      });
+      return next;
+    });
+  };
+
+  // Selected summaries - include any checked item, even if unit cost is currently 0.00
   const selectedItems = useMemo(() => {
     const result = [];
     for (const [productId, state] of Object.entries(rowStates)) {
       if (state.selected) {
         const prod = products.find((p) => String(p.id) === String(productId));
-        if (prod && Number(state.qty) > 0 && Number(state.price) > 0) {
+        if (prod) {
+          const qty = Number(state.qty) > 0 ? Number(state.qty) : 1;
+          const rawPrice = state.price;
+          const price =
+            rawPrice !== '' && rawPrice !== undefined && !isNaN(Number(rawPrice))
+              ? Number(rawPrice)
+              : (Number(prod.purchase_price) || 0);
+
           result.push({
             product: prod,
             colour: state.colour,
-            qty: Number(state.qty),
-            price: Number(state.price),
-            lineTotal: money(Number(state.qty) * Number(state.price)),
+            qty,
+            price,
+            lineTotal: money(qty * price),
           });
         }
       }
@@ -146,8 +169,9 @@ export default function BatchProductPickerModal({
         : (item.product.short_name || item.product.name),
       colour: item.colour || null,
       quantity: item.qty,
-      unit_price: item.price,
+      unit_price: item.price !== null && item.price !== undefined && item.price !== '' ? item.price : 0,
       discount_amount: 0,
+      default_selling_price: item.product.sale_price || 0,
     }));
 
     onAddSelectedLines(linesToAdd);
@@ -243,7 +267,15 @@ export default function BatchProductPickerModal({
                 <table className="w-full min-w-[920px] text-left text-xs border-collapse">
                   <thead className="bg-zinc-50 dark:bg-zinc-900/90 backdrop-blur-xs text-[10.5px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
                     <tr>
-                      <th className="py-2.5 px-3 w-12 text-center">Select</th>
+                      <th className="py-2.5 px-3 w-12 text-center">
+                        <input
+                          type="checkbox"
+                          checked={allFilteredSelected}
+                          onChange={toggleSelectAll}
+                          title="Select / Deselect all products"
+                          className="rounded border-zinc-300 dark:border-zinc-700 text-violet-600 focus:ring-violet-500 cursor-pointer w-4 h-4"
+                        />
+                      </th>
                       <th className="py-2.5 px-3 min-w-[200px]">Product Name &amp; Model</th>
                       <th className="py-2.5 px-3 w-28 min-w-[100px]">Category</th>
                       <th className="py-2.5 px-3 w-48 min-w-[160px]">Variant / Color</th>
@@ -251,6 +283,7 @@ export default function BatchProductPickerModal({
                       <th className="py-2.5 px-3 text-right w-32 min-w-[110px]">Unit Cost</th>
                       <th className="py-2.5 px-3 text-right w-28 min-w-[100px]">Selling Price</th>
                       <th className="py-2.5 px-3 text-right w-32 min-w-[110px]">Subtotal</th>
+                      <th className="py-2.5 px-3 text-center w-24 min-w-[90px]">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-850">
@@ -265,7 +298,11 @@ export default function BatchProductPickerModal({
                       return (
                         <tr
                           key={p.id}
-                          className={`hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition-colors ${
+                          onClick={(e) => {
+                            if (['input', 'select', 'button'].includes(e.target.tagName.toLowerCase())) return;
+                            toggleSelect(p);
+                          }}
+                          className={`hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50 transition-colors cursor-pointer ${
                             row.selected ? 'bg-violet-50/50 dark:bg-violet-950/20' : ''
                           }`}
                         >
@@ -370,6 +407,23 @@ export default function BatchProductPickerModal({
 
                           <td className="py-2.5 px-3 text-right font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
                             {currency(subtotal)}
+                          </td>
+
+                          <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleSelect(p);
+                              }}
+                              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer shadow-2xs ${
+                                row.selected
+                                  ? 'bg-violet-600 text-white shadow-violet-500/20'
+                                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-violet-50 hover:text-violet-700 dark:hover:bg-violet-950/50 dark:hover:text-violet-300 border border-zinc-200/80 dark:border-zinc-700'
+                              }`}
+                            >
+                              {row.selected ? '✓ Added' : '+ Add'}
+                            </button>
                           </td>
                         </tr>
                       );

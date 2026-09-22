@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingBag, Plus, Search, Eye, X, AlertCircle, RefreshCw,
-  ChevronDown, ChevronUp, CreditCard, Loader2, Check, Trash2, Package
+  ChevronDown, ChevronUp, CreditCard, Loader2, Check, Trash2, Package, Pencil
 } from 'lucide-react';
 import NewPurchaseBillModal from './NewPurchaseBillModal';
 
@@ -34,79 +34,85 @@ function PayModal({ bill, onClose, onSaved, api, setGlobalToast }) {
   const [amount, setAmount] = useState(String(money(bill.pending_amount)));
   const [mode, setMode] = useState('cash');
   const [payDate, setPayDate] = useState(today());
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const handlePay = async (e) => {
     e.preventDefault();
-    const amt = money(amount);
-    if (amt <= 0) { setError('Enter a valid payment amount.'); return; }
-    setSaving(true);
+    const num = Number(amount);
+    if (!num || num <= 0) return setGlobalToast && setGlobalToast({ type: 'error', message: 'Enter a valid payment amount.' });
+    setSubmitting(true);
     try {
       await api(`/purchase-bills/${bill.id}/pay`, {
         method: 'POST',
-        body: JSON.stringify({ amount: amt, payment_mode: mode, payment_date: payDate }),
+        body: JSON.stringify({ amount: num, payment_mode: mode, payment_date: payDate }),
       });
-      setGlobalToast && setGlobalToast({ type: 'success', message: `Payment of ${currency(amt)} recorded.` });
-      onSaved();
+      setGlobalToast && setGlobalToast({ type: 'success', message: 'Payment recorded!' });
+      onSaved && onSaved();
     } catch (err) {
-      setError(err.message || 'Failed to record payment.');
+      setGlobalToast && setGlobalToast({ type: 'error', message: err.message || 'Payment failed.' });
     } finally {
-      setSaving(false);
+      setSubmitting(false);
     }
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 16, backdropFilter: 'blur(4px)' }}>
-      <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }}
-        style={{ background: '#fff', borderRadius: 18, width: '100%', maxWidth: 400, boxShadow: '0 25px 60px rgba(0,0,0,0.2)', padding: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-          <div style={{ fontWeight: 800, fontSize: 15, color: '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <CreditCard size={16} color="#16a34a" /> Pay Against Bill
-          </div>
-          <button onClick={onClose} style={{ border: 'none', background: '#f1f5f9', borderRadius: 8, padding: 7, cursor: 'pointer', color: '#64748b' }}><X size={15} /></button>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 380, padding: 24, boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 800, color: '#0f172a' }}>Record Vendor Payment</h3>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8' }}><X size={18} /></button>
         </div>
-        <div style={{ background: '#f8fafc', borderRadius: 10, padding: '10px 14px', marginBottom: 16, fontSize: 13 }}>
-          <div style={{ fontWeight: 700, color: '#0f172a' }}>{bill.bill_number}</div>
-          <div style={{ color: '#64748b', marginTop: 3 }}>Pending: <strong style={{ color: '#dc2626' }}>{currency(bill.pending_amount)}</strong></div>
-        </div>
-        {error && <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '8px 12px', color: '#dc2626', fontSize: 12, marginBottom: 12 }}>{error}</div>}
-        <form onSubmit={handlePay} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <p style={{ margin: '0 0 16px', fontSize: 12, color: '#64748b' }}>
+          Bill <strong>{bill.bill_number}</strong> · Pending: <strong style={{ color: '#dc2626' }}>{currency(bill.pending_amount)}</strong>
+        </p>
+        <form onSubmit={handlePay} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase' }}>Amount (₹)</label>
-            <input type="number" value={amount} onChange={e => setAmount(e.target.value)} min={0.01} step="0.01"
-              style={{ width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 15, fontWeight: 700, boxSizing: 'border-box' }} />
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Amount (₹)</label>
+            <input type="number" step="0.01" max={bill.pending_amount} min="0.01" value={amount} onChange={e => setAmount(e.target.value)} required
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid #e2e8f0', fontSize: 14, fontWeight: 700, color: '#0f172a', boxSizing: 'border-box' }} />
           </div>
           <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase' }}>Mode</label>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Payment Date</label>
+            <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} required
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid #e2e8f0', fontSize: 13, color: '#0f172a', boxSizing: 'border-box' }} />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#475569', marginBottom: 4 }}>Payment Mode</label>
             <select value={mode} onChange={e => setMode(e.target.value)}
-              style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, fontWeight: 600, background: '#f8fafc' }}>
-              {['cash', 'upi', 'bank', 'cheque'].map(m => <option key={m} value={m}>{m.charAt(0).toUpperCase() + m.slice(1)}</option>)}
+              style={{ width: '100%', padding: '9px 12px', borderRadius: 8, border: '1.5px solid #e2e8f0', fontSize: 13, color: '#0f172a', boxSizing: 'border-box' }}>
+              <option value="cash">Cash In Hand</option>
+              <option value="bank">Bank Transfer (NEFT/RTGS)</option>
+              <option value="upi">UPI / Online</option>
+              <option value="cheque">Cheque</option>
             </select>
           </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 5, textTransform: 'uppercase' }}>Payment Date</label>
-            <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)}
-              style={{ width: '100%', padding: '9px 10px', borderRadius: 10, border: '1.5px solid #e2e8f0', fontSize: 13, boxSizing: 'border-box' }} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+            <button type="button" onClick={onClose}
+              style={{ flex: 1, padding: '10px', borderRadius: 10, border: '1.5px solid #e2e8f0', background: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#64748b' }}>
+              Cancel
+            </button>
+            <button type="submit" disabled={submitting}
+              style={{ flex: 2, padding: '10px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#16a34a,#15803d)', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 700 }}>
+              {submitting ? 'Recording…' : 'Record Payment'}
+            </button>
           </div>
-          <button type="submit" disabled={saving}
-            style={{
-              padding: '11px', borderRadius: 10, border: 'none', cursor: 'pointer',
-              background: 'linear-gradient(135deg,#16a34a,#15803d)', color: '#fff', fontSize: 13, fontWeight: 800,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 4px 14px rgba(22,163,74,0.35)'
-            }}>
-            {saving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Check size={14} />}
-            {saving ? 'Processing…' : 'Record Payment'}
-          </button>
         </form>
-      </motion.div>
-      <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
-    </motion.div>
+      </div>
+    </div>
   );
 }
 
-export default function PurchaseBillsPage({ session, api, setGlobalToast, suppliers = [], products = [] }) {
+export default function PurchaseBillsPage({
+  session,
+  api,
+  setGlobalToast,
+  suppliers = [],
+  products = [],
+  shopId: propShopId,
+  shops = [],
+  warehouse = null,
+  role = '',
+}) {
   const [bills, setBills] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -114,13 +120,35 @@ export default function PurchaseBillsPage({ session, api, setGlobalToast, suppli
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [editingBill, setEditingBill] = useState(null);
   const [payingBill, setPayingBill] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [expandedItems, setExpandedItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(false);
   const perPage = 20;
 
-  const shopId = session?.shop_id;
+  const effectiveShopId =
+    propShopId ||
+    session?.shop_id ||
+    (role === 'shopkeeper' ? session?.shop_id : (warehouse?.id || shops?.[0]?.id)) ||
+    '';
+  const shopId = effectiveShopId;
+
+  const handleDeleteBill = async (bill) => {
+    if (!window.confirm(`Are you sure you want to delete purchase bill ${bill.bill_number}?\nThis will remove the bill and all associated line items.`)) {
+      return;
+    }
+    setLoading(true);
+    try {
+      await api(`/purchase-bills/${bill.id}`, { method: 'DELETE' });
+      setGlobalToast && setGlobalToast({ type: 'success', message: `Purchase bill ${bill.bill_number} deleted successfully.` });
+      fetchBills();
+    } catch (e) {
+      setGlobalToast && setGlobalToast({ type: 'error', message: e.message || 'Failed to delete purchase bill.' });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchBills = useCallback(async () => {
     setLoading(true);
@@ -128,15 +156,17 @@ export default function PurchaseBillsPage({ session, api, setGlobalToast, suppli
       const params = new URLSearchParams({ page, per_page: perPage });
       if (search) params.set('search', search);
       if (statusFilter) params.set('status', statusFilter);
+      if (effectiveShopId) params.set('shopId', String(effectiveShopId));
       const data = await api(`/purchase-bills?${params}`);
-      setBills(data.purchaseBills || data.bills || data.rows || []);
-      setTotal(data.totalPurchaseBills || data.total || 0);
+      const list = Array.isArray(data) ? data : (data?.data || data?.purchaseBills || data?.bills || data?.rows || []);
+      setBills(list);
+      setTotal(data?.totalPurchaseBills || data?.total || list.length || 0);
     } catch (e) {
       setGlobalToast && setGlobalToast({ type: 'error', message: e.message || 'Failed to load bills.' });
     } finally {
       setLoading(false);
     }
-  }, [page, search, statusFilter, api]);
+  }, [page, search, statusFilter, effectiveShopId, api, setGlobalToast]);
 
   useEffect(() => { fetchBills(); }, [fetchBills]);
 
@@ -241,6 +271,22 @@ export default function PurchaseBillsPage({ session, api, setGlobalToast, suppli
                             Pay
                           </button>
                         )}
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setEditingBill(bill); }}
+                          title="Edit Purchase Bill"
+                          style={{ padding: '5px 8px', borderRadius: 7, border: '1.5px solid #e2e8f0', background: '#fff', cursor: 'pointer', color: '#475569', fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Pencil size={12} /> Edit
+                        </button>
+                        {Number(bill.paid_amount || 0) === 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); handleDeleteBill(bill); }}
+                            title="Delete Purchase Bill"
+                            style={{ padding: '5px 7px', borderRadius: 7, border: '1.5px solid #fecaca', background: '#fef2f2', cursor: 'pointer', color: '#ef4444', display: 'flex', alignItems: 'center' }}>
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                         <button onClick={() => toggleExpand(bill.id)}
                           style={{ padding: '5px', borderRadius: 7, border: '1.5px solid #e2e8f0', background: '#fff', cursor: 'pointer', color: '#64748b', display: 'flex', alignItems: 'center' }}>
                           {expandedId === bill.id ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
@@ -304,17 +350,26 @@ export default function PurchaseBillsPage({ session, api, setGlobalToast, suppli
 
       {/* Modals */}
       <AnimatePresence>
-        {showForm && (
+        {(showForm || Boolean(editingBill)) && (
           <NewPurchaseBillModal
-            isOpen={showForm}
+            isOpen={showForm || Boolean(editingBill)}
+            billToEdit={editingBill}
             suppliers={suppliers}
             products={products}
-            shopId={shopId}
+            shopId={editingBill?.shop_id || effectiveShopId}
+            shops={shops}
+            warehouse={warehouse}
+            session={session}
+            role={role}
             api={api}
             setGlobalToast={setGlobalToast}
-            onClose={() => setShowForm(false)}
+            onClose={() => {
+              setShowForm(false);
+              setEditingBill(null);
+            }}
             onSaved={() => {
               setShowForm(false);
+              setEditingBill(null);
               fetchBills();
             }}
           />

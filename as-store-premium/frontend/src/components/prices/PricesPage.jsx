@@ -1,10 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Download, 
   Trash2, 
   Search, 
   Eye, 
-  EyeOff,
+  EyeOff, 
   MoreHorizontal, 
   Plus, 
   Minus, 
@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import ExpandableText from '../shared/ExpandableText';
 import ProductThumbnail from '../ui/ProductThumbnail';
+import Pagination from '../ui/Pagination';
 import { calculateConsolidatedProduct, consolidateProductList } from '../../utils/productConsolidation';
 import CostWithBatchHistory from './CostWithBatchHistory';
 
@@ -83,6 +84,28 @@ export default function PricesPage({
   onOpenAddToolSpare,
 }) {
   const [activeMenuId, setActiveMenuId] = useState(null);
+
+  // Local immediate input state for 0ms typing response + debounced propagation to parent fetcher
+  const [localSearch, setLocalSearch] = useState(search);
+  const debounceRef = useRef(null);
+
+  useEffect(() => {
+    setLocalSearch(search);
+  }, [search]);
+
+  const handleInputChange = (val) => {
+    setLocalSearch(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      onSearchChange(val);
+    }, 350);
+  };
+
+  const handleClearSearch = () => {
+    setLocalSearch('');
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    onSearchChange('');
+  };
 
   const normalizeString = (str) => {
     if (!str) return '';
@@ -444,15 +467,15 @@ export default function PricesPage({
           <input
             type="text"
             placeholder="Search catalog or models..."
-            value={search}
-            onChange={(e) => onSearchChange(e.target.value)}
-            style={{ paddingLeft: '42px', paddingRight: search ? '36px' : '16px' }}
+            value={localSearch}
+            onChange={(e) => handleInputChange(e.target.value)}
+            style={{ paddingLeft: '42px', paddingRight: localSearch ? '36px' : '16px' }}
             className="w-full !pl-11 pr-4 py-2.5 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-slate-900 placeholder-gray-400 transition-all shadow-2xs"
           />
-          {search && (
+          {localSearch && (
             <button
               type="button"
-              onClick={() => onSearchChange('')}
+              onClick={handleClearSearch}
               className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full cursor-pointer z-10"
               title="Clear search"
             >
@@ -843,6 +866,18 @@ export default function PricesPage({
           </div>
         )}
       </div>
+
+      {/* Pagination Controls */}
+      {pager && pager.loaded && (
+        <Pagination
+          meta={pager}
+          loading={loading}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          pageSizeOptions={[25, 50, 100]}
+          totalLabel="products"
+        />
+      )}
 
       {/* ========================================================================= */}
       {/* QUICK INLINE STOCK INTAKE / ADJUSTMENT MODAL DIALOG                       */}

@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ShoppingBag,
@@ -26,6 +26,8 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import SearchableCombobox from './SearchableCombobox';
+import ProductTableCell from './ProductTableCell';
+import ProductSearchDialog from './ProductSearchDialog';
 import QuickAddVendorModal from './QuickAddVendorModal';
 import QuickAddProductModal from './QuickAddProductModal';
 import BatchProductPickerModal from './BatchProductPickerModal';
@@ -54,16 +56,46 @@ const getColorDot = (colourName) => {
 
 export default function NewPurchaseBillModal({
   isOpen,
+  billToEdit = null,
   onClose,
   onSaved,
   suppliers: initialSuppliers = [],
   products: initialProducts = [],
-  shopId,
+  shopId: initialShopId,
+  shops = [],
+  warehouse = null,
+  session = null,
+  role = '',
   api,
   setGlobalToast,
 }) {
   const [suppliersList, setSuppliersList] = useState(initialSuppliers);
   const [productsList, setProductsList] = useState(initialProducts);
+
+  // Destination Shop / Warehouse resolution
+  const [selectedShopId, setSelectedShopId] = useState(() => {
+    return (
+      billToEdit?.shop_id ||
+      initialShopId ||
+      session?.shop_id ||
+      warehouse?.id ||
+      (shops && shops.length > 0 ? shops[0].id : '')
+    );
+  });
+
+  useEffect(() => {
+    if (billToEdit?.shop_id) {
+      setSelectedShopId(billToEdit.shop_id);
+    } else if (initialShopId) {
+      setSelectedShopId(initialShopId);
+    } else if (session?.shop_id) {
+      setSelectedShopId(session.shop_id);
+    } else if (warehouse?.id && !selectedShopId) {
+      setSelectedShopId(warehouse.id);
+    } else if (shops && shops.length > 0 && !selectedShopId) {
+      setSelectedShopId(shops[0].id);
+    }
+  }, [billToEdit, initialShopId, session?.shop_id, warehouse?.id, shops]);
 
   useEffect(() => {
     setSuppliersList(initialSuppliers);
@@ -80,6 +112,61 @@ export default function NewPurchaseBillModal({
   const [paymentMode, setPaymentMode] = useState('credit');
   const [notes, setNotes] = useState('');
   const [extraCharges, setExtraCharges] = useState('');
+
+  // Hydrate form if editing or reset if new bill
+  useEffect(() => {
+    if (!isOpen) return;
+    if (billToEdit) {
+      setSupplierId(billToEdit.supplier_id ? String(billToEdit.supplier_id) : '');
+      setBillDate(billToEdit.bill_date ? String(billToEdit.bill_date).slice(0, 10) : today());
+      setPaymentTerms(Number(billToEdit.payment_terms_days) || 30);
+      setPaymentMode(billToEdit.payment_mode || 'credit');
+      setNotes(billToEdit.notes || '');
+      setExtraCharges(billToEdit.extra_charges ? String(billToEdit.extra_charges) : '');
+      if (billToEdit.shop_id) setSelectedShopId(billToEdit.shop_id);
+
+      (async () => {
+        try {
+          const res = await api(`/purchase-bills/${billToEdit.id}`);
+          if (res && Array.isArray(res.items) && res.items.length > 0) {
+            setItems(
+              res.items.map((it) => ({
+                product_id: it.product_id ? String(it.product_id) : '',
+                custom_product_name: it.custom_product_name || '',
+                colour: it.colour || '',
+                quantity: Number(it.quantity) || 1,
+                unit_price: it.unit_price !== null && it.unit_price !== undefined ? it.unit_price : '',
+                discount_amount: Number(it.discount_amount || 0),
+                default_selling_price: 0,
+                showCustomInput: !it.product_id && !!it.custom_product_name,
+              }))
+            );
+          }
+        } catch (err) {
+          console.warn('Failed to load bill items for edit:', err);
+        }
+      })();
+    } else {
+      setSupplierId('');
+      setBillDate(today());
+      setPaymentTerms(30);
+      setPaymentMode('credit');
+      setNotes('');
+      setExtraCharges('');
+      setItems([
+        {
+          product_id: '',
+          custom_product_name: '',
+          colour: '',
+          quantity: 1,
+          unit_price: '',
+          discount_amount: 0,
+          default_selling_price: 0,
+          showCustomInput: false,
+        },
+      ]);
+    }
+  }, [isOpen, billToEdit, api]);
 
   // Items lines
   const [items, setItems] = useState([
@@ -171,6 +258,7 @@ export default function NewPurchaseBillModal({
         brand: p.brand || '',
         category: p.category || '',
         model: p.model || p.full_model_list || '',
+        sku: p.sku || p.code || p.part_number || '',
         colors: cleanColors,
         stock: p.stock ?? p.stock_qty ?? p.stockQty,
         purchase_price: p.purchase_price || 0,
@@ -179,6 +267,98 @@ export default function NewPurchaseBillModal({
       };
     });
   }, [productsList]);
+
+  // Keyboard navigation refs across table cells
+  const rowRefs = useRef([]);
+  const [pendingFocusRowIdx, setPendingFocusRowIdx] = useState(null);
+
+  const setFieldRef = (rowIdx, fieldName, el) => {
+    if (!rowRefs.current[rowIdx]) {
+      rowRefs.current[rowIdx] = {};
+    }
+    rowRefs.current[rowIdx][fieldName] = el;
+  };
+
+  const focusField = (rowIdx, fieldName) => {
+    const target = rowRefs.current[rowIdx]?.[fieldName];
+    if (!target) return;
+    if (typeof target.focus === 'function') {
+      target.focus();
+      if (typeof target.select === 'function') {
+        target.select();
+      }
+    }
+  };
+
+  const handleLastFieldEnter = (idx) => {
+    if (idx === items.length - 1) {
+      // Append blank row for fast batch inwarding and focus its product combobox
+      addItem();
+      setPendingFocusRowIdx(items.length);
+    } else {
+      // Move to next line item product search
+      focusField(idx + 1, 'product');
+    }
+  };
+
+  useEffect(() => {
+    if (pendingFocusRowIdx !== null && pendingFocusRowIdx < items.length) {
+      setTimeout(() => {
+        focusField(pendingFocusRowIdx, 'product');
+        setPendingFocusRowIdx(null);
+      }, 50);
+    }
+  }, [items.length, pendingFocusRowIdx]);
+
+  // Product Finder Dialog (Command Palette Cmd+K) State
+  const [finderState, setFinderState] = useState({
+    isOpen: false,
+    rowIndex: 0,
+  });
+
+  const openProductFinder = (rowIndex) => {
+    setFinderState({
+      isOpen: true,
+      rowIndex,
+    });
+  };
+
+  const closeProductFinder = () => {
+    setFinderState((prev) => ({ ...prev, isOpen: false }));
+  };
+
+  const handleFinderSelect = (product, isBatch = false) => {
+    const currentRowIdx = finderState.rowIndex;
+    handleProductSelect(currentRowIdx, product.id, product);
+
+    if (isBatch) {
+      // Batch mode: append new row and advance finder to next row immediately
+      addItem();
+      setFinderState({
+        isOpen: true,
+        rowIndex: currentRowIdx + 1,
+      });
+    } else {
+      // Single select: close dialog and focus QTY input on current row
+      closeProductFinder();
+      setTimeout(() => {
+        focusField(currentRowIdx, 'qty');
+      }, 60);
+    }
+  };
+
+  // Global Cmd+K / Ctrl+K listener
+  useEffect(() => {
+    const handleGlobalFinderKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        const emptyIdx = items.findIndex((it) => !it.product_id);
+        openProductFinder(emptyIdx !== -1 ? emptyIdx : Math.max(0, items.length - 1));
+      }
+    };
+    window.addEventListener('keydown', handleGlobalFinderKey);
+    return () => window.removeEventListener('keydown', handleGlobalFinderKey);
+  }, [items]);
 
   // Item helpers
   const addItem = () => {
@@ -195,6 +375,14 @@ export default function NewPurchaseBillModal({
         showCustomInput: false,
       },
     ]);
+  };
+
+  const handleAddNewLine = () => {
+    const nextIdx = items.length;
+    addItem();
+    setTimeout(() => {
+      openProductFinder(nextIdx);
+    }, 60);
   };
 
   const removeItem = (index) => {
@@ -236,6 +424,11 @@ export default function NewPurchaseBillModal({
         };
       })
     );
+
+    // Requirement 4: Selecting a product automatically advances focus to Color / Variant
+    setTimeout(() => {
+      focusField(index, 'color');
+    }, 60);
   };
 
   // When a new vendor is created via QuickAddVendorModal
@@ -338,12 +531,25 @@ export default function NewPurchaseBillModal({
       return;
     }
 
+    const effectiveShop = Number(
+      selectedShopId || initialShopId || session?.shop_id || warehouse?.id || (shops && shops[0]?.id)
+    );
+
+    if (!effectiveShop || isNaN(effectiveShop) || effectiveShop <= 0) {
+      setError('Please select a specific destination shop or warehouse.');
+      return;
+    }
+
     setSaving(true);
     try {
-      await api('/purchase-bills', {
-        method: 'POST',
+      const isEditing = Boolean(billToEdit);
+      const endpoint = isEditing ? `/purchase-bills/${billToEdit.id}` : '/purchase-bills';
+      const method = isEditing ? 'PUT' : 'POST';
+
+      await api(endpoint, {
+        method,
         body: JSON.stringify({
-          shop_id: shopId,
+          shop_id: effectiveShop,
           supplier_id: supplierId || null,
           bill_date: billDate,
           payment_terms_days: Number(paymentTerms) || 30,
@@ -363,7 +569,7 @@ export default function NewPurchaseBillModal({
 
       setGlobalToast?.({
         type: 'success',
-        message: 'Purchase bill recorded successfully!',
+        message: isEditing ? 'Purchase bill updated successfully!' : 'Purchase bill recorded successfully!',
       });
       onSaved && onSaved();
     } catch (err) {
@@ -392,13 +598,46 @@ export default function NewPurchaseBillModal({
               <ShoppingBag className="w-5 h-5 shrink-0 stroke-[1.75]" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm font-bold tracking-tight text-zinc-900 dark:text-white">
-                  Record Purchase Bill
+                  {billToEdit ? `Edit Purchase Bill #${billToEdit.bill_number}` : 'Record Purchase Bill'}
                 </h2>
                 <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300 border border-violet-200/60 dark:border-violet-800/50 font-semibold">
                   ERP Inward
                 </span>
+
+                {/* Destination Location / Shop Selector Badge */}
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700 text-[10.5px]">
+                  <Building2 className="w-3 h-3 text-violet-600 dark:text-violet-400 shrink-0" />
+                  <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-normal">Inward To:</span>
+                  {shops && shops.length > 1 && (role === 'superadmin' || !session?.shop_id) ? (
+                    <select
+                      value={selectedShopId}
+                      onChange={(e) => setSelectedShopId(e.target.value)}
+                      className="bg-transparent font-bold text-zinc-900 dark:text-zinc-100 text-[10.5px] outline-hidden cursor-pointer border-none p-0 pr-1"
+                    >
+                      {warehouse && (
+                        <option value={warehouse.id} className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-semibold">
+                          🏢 {warehouse.name || 'Main Warehouse'}
+                        </option>
+                      )}
+                      {shops
+                        .filter((s) => !warehouse || String(s.id) !== String(warehouse.id))
+                        .map((s) => (
+                          <option key={s.id} value={s.id} className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-semibold">
+                            🏪 {s.name} {s.location_type === 'warehouse' ? '(Warehouse)' : '(Branch)'}
+                          </option>
+                        ))}
+                    </select>
+                  ) : (
+                    <span className="font-bold text-zinc-900 dark:text-zinc-100">
+                      {shops.find((s) => String(s.id) === String(selectedShopId))?.name ||
+                       (String(selectedShopId) === String(warehouse?.id) ? (warehouse?.name || 'Main Warehouse') : null) ||
+                       session?.shop_name ||
+                       'Main Warehouse'}
+                    </span>
+                  )}
+                </div>
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal mt-0.5">
                 Record inward inventory shipments, batch purchases, and vendor payables
@@ -562,7 +801,7 @@ export default function NewPurchaseBillModal({
 
                 <button
                   type="button"
-                  onClick={addItem}
+                  onClick={handleAddNewLine}
                   className="px-3 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 dark:bg-violet-600 dark:hover:bg-violet-500 rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs"
                 >
                   <Plus className="w-3.5 h-3.5 shrink-0 stroke-[2]" />
@@ -607,17 +846,14 @@ export default function NewPurchaseBillModal({
                           {idx + 1}
                         </td>
 
-                        {/* Product Combobox Cell */}
+                        {/* Product / Model Cell (Passive trigger with Command Palette Finder) */}
                         <td className="py-2.5 px-3 min-w-[280px]">
-                          <SearchableCombobox
-                            options={productOptions}
-                            value={item.product_id}
-                            onChange={(val, opt) => handleProductSelect(idx, val, opt)}
-                            placeholder="Select product from catalog..."
-                            searchPlaceholder="Search model, brand, category..."
-                            actionText="+ Create New Product"
-                            onAction={() => setShowProductModal(true)}
-                            size="sm"
+                          <ProductTableCell
+                            ref={(el) => setFieldRef(idx, 'product', el)}
+                            product={productOpt}
+                            onClick={() => openProductFinder(idx)}
+                            onClear={() => handleProductSelect(idx, '', null)}
+                            placeholder="Search model, brand, or SKU..."
                           />
 
                           {/* Secondary Custom Name toggle/display */}
@@ -648,7 +884,7 @@ export default function NewPurchaseBillModal({
                                   <button
                                     type="button"
                                     onClick={() => updateItem(idx, 'showCustomInput', false)}
-                                    className="text-zinc-400 hover:text-zinc-600 p-0.5"
+                                    className="text-zinc-400 hover:text-zinc-600 p-0.5 cursor-pointer"
                                   >
                                     <X className="w-3 h-3 shrink-0 stroke-[1.75]" />
                                   </button>
@@ -675,8 +911,15 @@ export default function NewPurchaseBillModal({
                                   <span className={`w-2 h-2 rounded-full shrink-0 ${getColorDot(item.colour)}`} />
                                 </div>
                                 <select
-                                  value={item.colour}
+                                  ref={(el) => setFieldRef(idx, 'color', el)}
+                                  value={item.colour || ''}
                                   onChange={(e) => updateItem(idx, 'colour', e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      focusField(idx, 'qty');
+                                    }
+                                  }}
                                   style={{ backgroundImage: 'none' }}
                                   className="w-full h-9 pl-6 pr-6 border border-zinc-200 dark:border-zinc-800 rounded-lg font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden text-xs appearance-none transition-all cursor-pointer shadow-2xs"
                                 >
@@ -697,9 +940,16 @@ export default function NewPurchaseBillModal({
                                   </div>
                                 )}
                                 <input
+                                  ref={(el) => setFieldRef(idx, 'color', el)}
                                   type="text"
-                                  value={item.colour}
+                                  value={item.colour || ''}
                                   onChange={(e) => updateItem(idx, 'colour', e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      focusField(idx, 'qty');
+                                    }
+                                  }}
                                   placeholder="Universal"
                                   className={`w-full h-9 ${item.colour ? 'pl-6' : 'pl-2.5'} pr-2 border border-zinc-200 dark:border-zinc-800 rounded-lg font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden text-xs shadow-2xs`}
                                 />
@@ -726,10 +976,17 @@ export default function NewPurchaseBillModal({
                         {/* Quantity */}
                         <td className="py-2.5 px-2 w-20 text-right">
                           <input
+                            ref={(el) => setFieldRef(idx, 'qty', el)}
                             type="number"
                             min={1}
                             value={item.quantity}
                             onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                focusField(idx, 'cost');
+                              }
+                            }}
                             className="w-full h-9 px-2 border border-zinc-200 dark:border-zinc-800 rounded-lg font-mono font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden text-right text-xs shadow-2xs"
                           />
                         </td>
@@ -738,9 +995,16 @@ export default function NewPurchaseBillModal({
                         <td className="py-2.5 px-2 w-28 text-right">
                           <div className="space-y-1">
                             <CurrencyInput
+                              ref={(el) => setFieldRef(idx, 'cost', el)}
                               size="sm"
                               value={item.unit_price}
                               onChange={(e) => updateItem(idx, 'unit_price', e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleLastFieldEnter(idx);
+                                }
+                              }}
                               placeholder="0.00"
                               isWarning={isCostInflated}
                               warningMessage={`> Sell ₹${sellPrice}`}
@@ -757,9 +1021,16 @@ export default function NewPurchaseBillModal({
                         {/* Discount with CurrencyInput */}
                         <td className="py-2.5 px-2 w-20 text-right">
                           <CurrencyInput
+                            ref={(el) => setFieldRef(idx, 'discount', el)}
                             size="sm"
                             value={item.discount_amount}
                             onChange={(e) => updateItem(idx, 'discount_amount', e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleLastFieldEnter(idx);
+                              }
+                            }}
                             placeholder="0.00"
                             className="w-full"
                           />
@@ -905,12 +1176,12 @@ export default function NewPurchaseBillModal({
               {saving ? (
                 <>
                   <Loader2 className="w-4 h-4 shrink-0 animate-spin" />
-                  <span>Recording Bill...</span>
+                  <span>{billToEdit ? 'Updating Bill...' : 'Recording Bill...'}</span>
                 </>
               ) : (
                 <>
                   <Check className="w-4 h-4 shrink-0 stroke-[2]" />
-                  <span>Record Purchase Bill ({currency(totalAmount)})</span>
+                  <span>{billToEdit ? `Update Bill (${currency(totalAmount)})` : `Record Purchase Bill (${currency(totalAmount)})`}</span>
                 </>
               )}
             </button>
@@ -919,6 +1190,15 @@ export default function NewPurchaseBillModal({
       </motion.div>
 
       {/* Submodals */}
+      <ProductSearchDialog
+        isOpen={finderState.isOpen}
+        onClose={closeProductFinder}
+        products={productOptions}
+        onSelect={handleFinderSelect}
+        activeRowIndex={finderState.rowIndex}
+        onCreateNewProduct={() => setShowProductModal(true)}
+      />
+
       {showVendorModal && (
         <QuickAddVendorModal
           isOpen={showVendorModal}

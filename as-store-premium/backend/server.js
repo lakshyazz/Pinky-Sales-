@@ -191,7 +191,7 @@ const lastDays = (count = 7) => Array.from({ length: count }, (_, index) => {
 // Math.round(x * 100) / 100 ensures all monetary sums match PostgreSQL NUMERIC(12,2) behaviour.
 const money = (value) => Math.round(Number(value || 0) * 100) / 100;
 const productDisplayName = (row) => row.short_name || row.name;
-const DEFAULT_PAGE_LIMIT = 5000;
+const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 5000;
 const clampInteger = (value, fallback, min, max) => {
   const number = Number(value);
@@ -201,7 +201,8 @@ const clampInteger = (value, fallback, min, max) => {
 const cleanQueryText = (value, maxLength = 120) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 const hasQueryValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
 const parsePagination = (query, options = {}) => {
-  const limit = clampInteger(query.limit, options.defaultLimit || DEFAULT_PAGE_LIMIT, 1, options.maxLimit || MAX_PAGE_LIMIT);
+  const defaultLimit = options.defaultLimit || DEFAULT_PAGE_LIMIT;
+  const limit = clampInteger(query.limit, defaultLimit, 1, options.maxLimit || MAX_PAGE_LIMIT);
   const page = clampInteger(query.page, 1, 1, Number.MAX_SAFE_INTEGER);
   return {
     page,
@@ -217,17 +218,12 @@ const appendSearchFilter = (where, params, search, columns) => {
   if (terms.length === 0) return;
 
   terms.forEach((term) => {
-    const termClean = term.replace(/[\s\-_/\\+]/g, '').toLowerCase();
     const clauses = [];
     columns.forEach((column) => {
-      // Strip outer COALESCE around table columns so PostgreSQL GIN trigram indexes can be used
+      // Strip outer COALESCE around table columns so PostgreSQL GIN trigram indexes can be used directly
       const directCol = column.replace(/^COALESCE\((p\.[a-z0-9_]+),\s*''\)$/i, '$1');
       clauses.push(`${directCol} ILIKE ?`);
       params.push(`%${term}%`);
-      if (termClean && termClean !== term.toLowerCase() && termClean.length >= 2) {
-        clauses.push(`REGEXP_REPLACE(LOWER(${directCol}), '[\\s\\-_/\\\\+]', '', 'g') LIKE ?`);
-        params.push(`%${termClean}%`);
-      }
     });
     where.push(`(${clauses.join(' OR ')})`);
   });
@@ -254,13 +250,20 @@ const runPaginatedList = async ({ dataSql, countSql, params = [], pagination, to
     getRecord(countSql, params),
   ]);
   const total = Number(totalRow?.total || 0);
+  const totalPages = Math.max(Math.ceil(total / pagination.limit), 1);
   return {
     data: rows,
     page: pagination.page,
     limit: pagination.limit,
     total,
     [totalKey]: total,
-    totalPages: Math.max(Math.ceil(total / pagination.limit), 1),
+    totalPages,
+    pagination: {
+      total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages,
+    },
   };
 };
 const responseCache = new Map();
@@ -502,7 +505,7 @@ const getReferenceData = (user = null) => {
 
 const getProductsForRole = async (role, query = {}, user = null) => {
   const columns = await productColumnsForRole(role, query, user);
-  const pagination = parsePagination(query);
+  const pagination = parsePagination(query, { defaultLimit: 50, force: true });
   const params = [];
   const where = ['p.is_active = 1', 'p.name IS NOT NULL'];
 
@@ -871,13 +874,23 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
   const visibleBatchShopScope = shopId ? `AND ib.shop_id = ${Number(shopId)}` : '';
   const visibleStockSql = `COALESCE((SELECT SUM(ib.quantity_remaining) FROM inventory_batches ib WHERE ib.shop_id = st.shop_id AND ib.product_id = st.product_id ${visibleBatchAccess}), 0)`;
 
+  const todayDate = today();
+  const monthStart = todayDate.slice(0, 7) + '-01';
+  const yesterdayDate = lastDays(2)[0];
+  const dateExpr = "COALESCE(sa.invoice_date, (CASE WHEN sa.sale_date ~ '^\\d{4}-\\d{2}-\\d{2}' THEN SUBSTRING(sa.sale_date FROM 1 FOR 10)::date ELSE NULL END), (sa.created_at AT TIME ZONE 'Asia/Kolkata')::date)";
+
   const [totals, lowStock, shopWise, topProducts, salesTrendRows, pendingTrendRows, modelAvailability] = await Promise.all([
     getRecord(`
       SELECT
         (SELECT COUNT(*) FROM shops WHERE status = 'active' ${shopId ? 'AND id = ?' : ''}) AS total_shops,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib WHERE 1 = 1 ${visibleBatchShopScope} ${visibleBatchAccess}) AS total_stock,
         (SELECT COALESCE(SUM(ib.quantity_remaining), 0) FROM inventory_batches ib JOIN shops wh ON wh.id = ib.shop_id WHERE wh.location_type = 'warehouse') AS warehouse_stock,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM sales ${shopId ? 'WHERE shop_id = ? AND' : 'WHERE'} COALESCE(invoice_date::TEXT, sale_date) = ? AND status NOT IN ('cancelled', 'void')) AS today_sales,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM sales sa ${shopId ? 'WHERE sa.shop_id = ? AND' : 'WHERE'} ${dateExpr} = ?::date AND sa.status NOT IN ('cancelled', 'void')) AS today_sales,
+        (SELECT COUNT(*) FROM sales sa ${shopId ? 'WHERE sa.shop_id = ? AND' : 'WHERE'} ${dateExpr} = ?::date AND sa.status NOT IN ('cancelled', 'void')) AS today_orders,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM sales sa ${shopId ? 'WHERE sa.shop_id = ? AND' : 'WHERE'} ${dateExpr} >= ?::date AND sa.status NOT IN ('cancelled', 'void')) AS month_sales,
+        (SELECT COUNT(*) FROM sales sa ${shopId ? 'WHERE sa.shop_id = ? AND' : 'WHERE'} ${dateExpr} >= ?::date AND sa.status NOT IN ('cancelled', 'void')) AS month_orders,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM sales sa ${shopId ? 'WHERE sa.shop_id = ? AND' : 'WHERE'} sa.status NOT IN ('cancelled', 'void')) AS all_time_sales,
+        (SELECT COUNT(*) FROM sales sa ${shopId ? 'WHERE sa.shop_id = ? AND' : 'WHERE'} sa.status NOT IN ('cancelled', 'void')) AS all_time_orders,
         COALESCE((
           SELECT SUM(customer_pending)
           FROM (
@@ -897,7 +910,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
           ) cust_dues
           WHERE customer_pending > 0
         ), 0) AS pending_payments
-    `, shopId ? [shopId, shopId, today(), shopId, shopId] : [today()]),
+    `, shopId ? [shopId, shopId, todayDate, shopId, todayDate, shopId, monthStart, shopId, monthStart, shopId, shopId, shopId, shopId] : [todayDate, todayDate, monthStart, monthStart]),
         allRecords(`
       SELECT st.id, sh.name AS shop_name, p.id AS product_id, p.name AS product_name, p.short_name AS product_short_name, p.brand,
         ${visibleStockSql} AS quantity, sh.low_stock_threshold
@@ -951,11 +964,11 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
               WHERE customer_pending > 0
             ), 0) ELSE 0 END`
         } AS pending,
-        COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND COALESCE(sa.invoice_date::TEXT, sa.sale_date) = ? AND sa.status NOT IN ('cancelled', 'void')), 0) AS sales_today
+        COALESCE((SELECT SUM(sa.total_amount) FROM sales sa WHERE sa.shop_id = sh.id AND ${dateExpr} = ?::date AND sa.status NOT IN ('cancelled', 'void')), 0) AS sales_today
       FROM shops sh
       ${shopId ? 'WHERE sh.id = ?' : ''}
       ORDER BY sales_today DESC, pending DESC
-    `, shopId ? (isSuper ? [today(), shopId] : [shopId, today(), shopId]) : [today()]),
+    `, shopId ? (isSuper ? [todayDate, shopId] : [shopId, todayDate, shopId]) : [todayDate]),
     allRecords(`
       SELECT p.name, p.short_name, p.brand, COALESCE(SUM(sa.quantity), 0) AS sold
       FROM products p
@@ -965,10 +978,10 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       LIMIT 6
     `, shopId ? [shopId] : []),
     allRecords(`
-      SELECT COALESCE(invoice_date::TEXT, sale_date) AS day, COALESCE(SUM(total_amount), 0) AS value
-      FROM sales
-      WHERE COALESCE(invoice_date::TEXT, sale_date) IN (${trendPlaceholders}) AND status NOT IN ('cancelled', 'void') ${shopId ? 'AND shop_id = ?' : ''}
-      GROUP BY COALESCE(invoice_date::TEXT, sale_date)
+      SELECT ${dateExpr}::TEXT AS day, COALESCE(SUM(sa.total_amount), 0) AS value
+      FROM sales sa
+      WHERE ${dateExpr}::TEXT IN (${trendPlaceholders}) AND sa.status NOT IN ('cancelled', 'void') ${shopId ? 'AND sa.shop_id = ?' : ''}
+      GROUP BY ${dateExpr}::TEXT
     `, shopId ? [...trendDays, shopId] : trendDays),
     allRecords(`
       SELECT due_date AS day, COALESCE(SUM(pending_amount), 0) AS value
@@ -1040,6 +1053,92 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
     ORDER BY low_stock_count DESC
   `, shopId ? [shopId] : []);
 
+  // Compute live real dataset for SalesOverviewChart (Today, Yesterday, Weekly, Monthly)
+  const timeSlots = ['08:00', '10:00', '12:00', '14:00', '16:00', '18:00', '20:00', '22:00'];
+  const daySalesRaw = await allRecords(`
+    SELECT 
+      sa.total_amount,
+      EXTRACT(HOUR FROM (sa.created_at AT TIME ZONE 'Asia/Kolkata')) AS sale_hour,
+      ${dateExpr}::text AS s_date
+    FROM sales sa
+    WHERE ${dateExpr} IN (?::date, ?::date) AND sa.status NOT IN ('cancelled', 'void') ${shopId ? 'AND sa.shop_id = ?' : ''}
+  `, shopId ? [todayDate, yesterdayDate, shopId] : [todayDate, yesterdayDate]);
+
+  const buildHourlyData = (targetDate) => {
+    const targetRows = daySalesRaw.filter(r => r.s_date === targetDate);
+    let cumSales = 0;
+    let cumOrders = 0;
+    return timeSlots.map((slot) => {
+      const slotMaxHour = parseInt(slot.split(':')[0], 10);
+      const slotMinHour = slotMaxHour - 2;
+      const matched = targetRows.filter(r => Number(r.sale_hour) >= slotMinHour && Number(r.sale_hour) < slotMaxHour);
+      const slotSales = matched.reduce((sum, r) => sum + Number(r.total_amount || 0), 0);
+      const slotOrders = matched.length;
+      cumSales += slotSales;
+      cumOrders += slotOrders;
+      return {
+        label: slot,
+        sales: money(cumSales),
+        orders: cumOrders,
+      };
+    });
+  };
+
+  // Weekly data: trendDays with day name (e.g. Mon, Tue)
+  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const weeklySalesRows = await allRecords(`
+    SELECT 
+      ${dateExpr}::text AS day,
+      COALESCE(SUM(sa.total_amount), 0) AS sales,
+      COUNT(sa.id) AS orders
+    FROM sales sa
+    WHERE ${dateExpr}::text IN (${trendPlaceholders}) AND sa.status NOT IN ('cancelled', 'void') ${shopId ? 'AND sa.shop_id = ?' : ''}
+    GROUP BY ${dateExpr}::text
+  `, shopId ? [...trendDays, shopId] : trendDays);
+  const weeklyMap = new Map(weeklySalesRows.map(r => [r.day, { sales: Number(r.sales || 0), orders: Number(r.orders || 0) }]));
+  const weeklyData = trendDays.map((dStr) => {
+    const d = new Date(dStr + 'T00:00:00');
+    const dayLabel = dayNames[d.getDay()];
+    const entry = weeklyMap.get(dStr) || { sales: 0, orders: 0 };
+    return {
+      label: dayLabel,
+      sales: money(entry.sales),
+      orders: entry.orders,
+    };
+  });
+
+  // Monthly data: Current month broken into Week 1, Week 2, Week 3, Week 4
+  const monthWeeksRows = await allRecords(`
+    SELECT
+      CASE 
+        WHEN EXTRACT(DAY FROM ${dateExpr}) <= 7 THEN 'Week 1'
+        WHEN EXTRACT(DAY FROM ${dateExpr}) <= 14 THEN 'Week 2'
+        WHEN EXTRACT(DAY FROM ${dateExpr}) <= 21 THEN 'Week 3'
+        ELSE 'Week 4'
+      END AS label,
+      COALESCE(SUM(sa.total_amount), 0) AS sales,
+      COUNT(sa.id) AS orders
+    FROM sales sa
+    WHERE ${dateExpr} >= ?::date AND sa.status NOT IN ('cancelled', 'void') ${shopId ? 'AND sa.shop_id = ?' : ''}
+    GROUP BY label
+  `, shopId ? [monthStart, shopId] : [monthStart]);
+  const monthWeeksMap = new Map(monthWeeksRows.map(r => [r.label, { sales: Number(r.sales || 0), orders: Number(r.orders || 0) }]));
+  const monthlyData = ['Week 1', 'Week 2', 'Week 3', 'Week 4'].map((wLabel) => {
+    const entry = monthWeeksMap.get(wLabel) || { sales: 0, orders: 0 };
+    return {
+      label: wLabel,
+      sales: money(entry.sales),
+      orders: entry.orders,
+    };
+  });
+
+  const salesOverview = {
+    Today: buildHourlyData(todayDate),
+    Yesterday: buildHourlyData(yesterdayDate),
+    Weekly: weeklyData,
+    Monthly: monthlyData,
+  };
+
   res.json({
     totals,
     lowStock,
@@ -1050,6 +1149,7 @@ app.get('/api/dashboard', authenticateToken, requireShopStaff, async (req, res) 
       sales: trendValues(salesTrendRows),
       pending: trendValues(pendingTrendRows),
     },
+    salesOverview,
     mfgBrandStats: {
       products: mfgProducts,
       stockAndValue: mfgStockAndValue,
@@ -1709,59 +1809,11 @@ const handleGetBrands = async (req, res) => {
 
 app.get(['/api/products', '/products'], authenticateToken, async (req, res) => {
   try {
-    const isSuperAdmin = req.user.role === 'superadmin';
-    const isShopkeeper = isShopStaffRole(req.user.role);
-    const visibility = await getPriceVisibility();
-    const extraPrices = isSuperAdmin
-      ? ', p.purchase_price, p.wholesale_price'
-      : `${visibility.show_purchase_price_shopkeeper ? ', p.purchase_price' : ''}${visibility.show_wholesale_price_shopkeeper ? ', p.wholesale_price' : ''}`;
-    const officialPrice = isSuperAdmin || visibility.show_official_price_shopkeeper ? ', p.official_price' : '';
-
-    const limit = req.query.limit ? Math.min(Number(req.query.limit), 10000) : 10000;
-    const search = cleanQueryText(req.query.search, 120);
-
-    const where = ['p.is_active = 1'];
-    const params = [];
-
-    if (search) {
-      appendSearchFilter(where, params, search, [
-        'p.name',
-        'p.short_name',
-        'p.full_model_list',
-        'p.brand',
-        'p.category',
-        'p.part_category',
-        'p.quality_variant',
-        'p.model',
-      ]);
-    }
-
-    const rows = await allRecords(`
-      SELECT p.id, p.name, p.short_name, p.full_model_list, p.brand,
-        COALESCE(p.part_category, p.category, 'Display') AS category,
-        COALESCE(p.part_category, p.category, 'Display') AS part_category,
-        p.quality_variant, p.part_category_id, p.product_variant_id, p.model,
-        p.sale_price, p.retail_price, p.wholesale_price, p.purchase_price, p.description, p.colours,
-        p.company_brand_id, b.name AS company_brand_name,
-        p.manufacturing_brand_id, mb.name AS manufacturing_brand_name,
-        p.supplier_id, s.name AS supplier_name,
-        pc.name AS part_category_name, pv.name AS product_variant_name
-        ${officialPrice}
-      FROM products p
-      LEFT JOIN brands b ON b.id = p.company_brand_id
-      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
-      LEFT JOIN suppliers s ON s.id = p.supplier_id
-      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
-      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
-      WHERE ${where.join(' AND ')}
-      ORDER BY p.brand, COALESCE(p.short_name, p.name)
-      LIMIT ?
-    `, [...params, limit]);
-
-    res.json(rows);
+    const productsData = await getProductsForRole(req.user.role, req.query, req.user);
+    res.json(productsData);
   } catch (error) {
     console.error('[ProductsAPI] Error fetching products:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch products' });
+    res.status(500).json({ success: false, error: error.message || 'Failed to fetch products' });
   }
 });
 
@@ -1911,6 +1963,14 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
         productId
       ]);
 
+      // Synchronize active inventory batch purchase_price when Super Admin updates product cost price
+      if (isSuperAdmin && newPurchasePrice !== null && !isNaN(newPurchasePrice) && newPurchasePrice >= 0) {
+        await tx.runQuery(
+          'UPDATE inventory_batches SET purchase_price = ? WHERE product_id = ? AND quantity_remaining > 0',
+          [newPurchasePrice, productId]
+        );
+      }
+
       // Stock status update: if set_stock_zero or stock_status === 'no_stock' or stock_quantity === 0
       if (stock_status === 'no_stock' || set_stock_zero === true || stock_quantity === 0) {
         await tx.runQuery(
@@ -1979,7 +2039,27 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
 
     const updatedProduct = await getRecord(`
       SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name,
-        pc.name AS part_category_name, pv.name AS product_variant_name
+        pc.name AS part_category_name, pv.name AS product_variant_name,
+        COALESCE(
+          (SELECT ROUND(SUM(ib_cost.purchase_price * ib_cost.quantity_remaining)::numeric / SUM(ib_cost.quantity_remaining)::numeric, 2)
+           FROM inventory_batches ib_cost
+           WHERE ib_cost.product_id = p.id AND ib_cost.quantity_remaining > 0),
+          p.purchase_price,
+          0
+        ) AS avg_cost_price,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'batch_id', ib_sup.id,
+            'supplier_id', ib_sup.supplier_id,
+            'supplier_name', COALESCE(sup.name, 'Default Supplier'),
+            'quantity_remaining', ib_sup.quantity_remaining,
+            'purchase_price', ib_sup.purchase_price,
+            'received_date', ib_sup.received_date
+          ) ORDER BY ib_sup.received_date ASC, ib_sup.id ASC)
+          FROM inventory_batches ib_sup
+          LEFT JOIN suppliers sup ON sup.id = ib_sup.supplier_id
+          WHERE ib_sup.product_id = p.id AND ib_sup.quantity_remaining > 0
+        ), '[]'::jsonb) AS supplier_batches
       FROM products p
       LEFT JOIN brands b ON b.id = p.company_brand_id
       LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
@@ -2230,20 +2310,6 @@ app.get('/api/low-stock', authenticateToken, requireShopStaff, async (req, res) 
   } catch (error) {
     console.error('[API LOW STOCK ERROR]', error.message, error.stack);
     res.status(500).json({ error: error.message || 'Failed to fetch low stock alerts' });
-  }
-});
-
-app.get('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
-  try {
-    const productsData = await getProductsForRole(req.user.role, req.query, req.user);
-    res.json(productsData);
-  } catch (error) {
-    console.error('[API PRODUCTS ERROR]', error.message, error.stack);
-    res.status(500).json({
-      success: false,
-      error: error.message || 'Failed to fetch products',
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
   }
 });
 
@@ -3068,6 +3134,18 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
           'UPDATE products SET purchase_price = ? WHERE id = ?',
           [effectivePurchasePrice, product_id]
         );
+        // Also synchronize accessible active batches for this shop/product
+        if (req.user.role === 'superadmin' && !shop_id) {
+          await tx.runQuery(
+            'UPDATE inventory_batches SET purchase_price = ? WHERE product_id = ? AND quantity_remaining > 0',
+            [effectivePurchasePrice, product_id]
+          );
+        } else if (shopId) {
+          await tx.runQuery(
+            'UPDATE inventory_batches SET purchase_price = ? WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0',
+            [effectivePurchasePrice, shopId, product_id]
+          );
+        }
       }
 
       // Update product wholesale price if supplied
@@ -3281,10 +3359,11 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
     const { name, mobile, address, notes, gstin, customer_type, opening_balance, opening_balance_date } = req.body;
     if (!name || !mobile) return res.status(400).json({ error: 'Customer name and mobile are required.' });
     
-    const cleanName = String(name).trim();
-    const cleanMobile = String(mobile).trim();
-    const cleanAddress = String(address || '').trim();
-    const cleanGstin = gstin ? String(gstin).trim().toUpperCase() : null;
+    const cleanName = String(name).trim().slice(0, 255);
+    const cleanMobile = String(mobile).trim().slice(0, 50);
+    const cleanAddress = String(address || '').trim().slice(0, 1000);
+    const cleanNotes = notes ? String(notes).trim().slice(0, 5000) : '';
+    const cleanGstin = gstin ? String(gstin).trim().toUpperCase().slice(0, 30) : null;
     const cleanType = (customer_type && String(customer_type).trim().toLowerCase() === 'wholesaler') ? 'wholesaler' : 'retailer';
     const cleanOpeningBalance = opening_balance !== undefined && !isNaN(Number(opening_balance))
       ? money(Number(opening_balance))
@@ -3304,7 +3383,7 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
 
     const result = await runQuery(
       'INSERT INTO customers (shop_id, name, mobile, address, notes, gstin, customer_type, opening_balance, opening_balance_date, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [shopId, cleanName, cleanMobile, cleanAddress, notes || '', cleanGstin, cleanType, cleanOpeningBalance, cleanOpeningBalanceDate, req.user.id]
+      [shopId, cleanName, cleanMobile, cleanAddress, cleanNotes, cleanGstin, cleanType, cleanOpeningBalance, cleanOpeningBalanceDate, req.user.id]
     );
 
     if (cleanOpeningBalance > 0) {
@@ -3316,7 +3395,7 @@ app.post('/api/customers', authenticateToken, requireShopStaff, async (req, res)
     }
 
     await audit(req, 'Created customer', 'customer', result.id, cleanName);
-    res.status(201).json({ id: result.id, shop_id: shopId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes, gstin: cleanGstin, customer_type: cleanType, opening_balance: cleanOpeningBalance, opening_balance_date: cleanOpeningBalanceDate });
+    res.status(201).json({ id: result.id, shop_id: shopId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes: cleanNotes, gstin: cleanGstin, customer_type: cleanType, opening_balance: cleanOpeningBalance, opening_balance_date: cleanOpeningBalanceDate });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to create customer.' });
   }
@@ -3340,11 +3419,11 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
       return res.status(400).json({ error: 'Customer name is required.' });
     }
 
-    const cleanName = String(name).trim();
-    const cleanMobile = mobile !== undefined ? String(mobile).trim() : customer.mobile;
-    const cleanAddress = address !== undefined ? String(address).trim() : customer.address;
-    const cleanNotes = notes !== undefined ? String(notes).trim() : customer.notes;
-    const cleanGstin = gstin !== undefined ? (String(gstin).trim().toUpperCase() || null) : (customer.gstin || null);
+    const cleanName = String(name).trim().slice(0, 255);
+    const cleanMobile = mobile !== undefined ? String(mobile).trim().slice(0, 50) : customer.mobile;
+    const cleanAddress = address !== undefined ? String(address).trim().slice(0, 1000) : customer.address;
+    const cleanNotes = notes !== undefined ? String(notes).trim().slice(0, 5000) : customer.notes;
+    const cleanGstin = gstin !== undefined ? (String(gstin).trim().toUpperCase().slice(0, 30) || null) : (customer.gstin || null);
     const cleanType = customer_type !== undefined
       ? (String(customer_type).trim().toLowerCase() === 'wholesaler' ? 'wholesaler' : 'retailer')
       : (customer.customer_type || 'retailer');
@@ -5047,7 +5126,10 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         if (it.productColours && it.productColours.length === 1) return it.productColours[0];
         return null;
       }).filter(Boolean);
-      const overallColourStr = colourSummaries.length ? colourSummaries.join(', ') : null;
+      const overallColourStr = colourSummaries.length ? colourSummaries.join(', ').trim() : null;
+      const cleanNotes = notes ? String(notes).trim().slice(0, 5000) : '';
+      const cleanPaymentMode = String(payment_mode || 'credit').trim().slice(0, 50);
+      const cleanIdempotencyKey = req.body.idempotency_key ? String(req.body.idempotency_key).trim().slice(0, 255) : null;
 
       const publicToken = crypto.randomUUID();
 
@@ -5075,10 +5157,10 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           finalPaymentTerms,
           productsTotal,
           extraExpensesTotal,
-          notes || '', 
+          cleanNotes, 
           thisSalePending > 0 ? 'open' : 'paid', 
           req.user.id, 
-          payment_mode, 
+          cleanPaymentMode, 
           primaryProduct.price_type || 'wholesale', 
           primaryProduct.product?.manufacturing_brand_id || null,
           originalTotal,
@@ -5092,7 +5174,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           closingBalance,
           advanceDeduction,
           publicToken,
-          req.body.idempotency_key || null
+          cleanIdempotencyKey
         ]
       );
 
@@ -5122,12 +5204,12 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         }
 
         const customProductName = item.custom_product_name !== undefined && item.custom_product_name !== null
-          ? (String(item.custom_product_name).trim() || null)
-          : (item.product_name !== undefined ? (String(item.product_name).trim() || null) : null);
+          ? (String(item.custom_product_name).trim().slice(0, 255) || null)
+          : (item.product_name !== undefined ? (String(item.product_name).trim().slice(0, 255) || null) : null);
 
         const customBrandName = item.custom_brand_name !== undefined && item.custom_brand_name !== null
-          ? (String(item.custom_brand_name).trim() || null)
-          : (item.manufacturing_brand_name !== undefined ? (String(item.manufacturing_brand_name).trim() || null) : null);
+          ? (String(item.custom_brand_name).trim().slice(0, 255) || null)
+          : (item.manufacturing_brand_name !== undefined ? (String(item.manufacturing_brand_name).trim().slice(0, 255) || null) : null);
 
         const frozenPurchasePrice = resolveSafePurchasePrice(
           item.batches,
@@ -5429,9 +5511,9 @@ const handleUpdateSale = async (req, res) => {
       // 2. Resolve notes & payment_mode & customer_id
       let notes = sale.notes || '';
       if (req.body.notes !== undefined || req.body.remarks !== undefined) {
-        notes = String(req.body.notes ?? req.body.remarks ?? '').trim();
+        notes = String(req.body.notes ?? req.body.remarks ?? '').trim().slice(0, 5000);
       }
-      const paymentMode = req.body.payment_mode || sale.payment_mode || 'cash';
+      const paymentMode = String(req.body.payment_mode || sale.payment_mode || 'cash').trim().slice(0, 50);
       const targetCustomerId = req.body.customer_id ? Number(req.body.customer_id) : sale.customer_id;
 
       // 3. Resolve extra_expenses (Courier / Other charges)
@@ -5620,10 +5702,10 @@ const handleUpdateSale = async (req, res) => {
           }
 
           const customProductName = item.custom_product_name !== undefined && item.custom_product_name !== null
-            ? (String(item.custom_product_name).trim() || null)
+            ? (String(item.custom_product_name).trim().slice(0, 255) || null)
             : null;
           const customBrandName = item.custom_brand_name !== undefined && item.custom_brand_name !== null
-            ? (String(item.custom_brand_name).trim() || null)
+            ? (String(item.custom_brand_name).trim().slice(0, 255) || null)
             : null;
 
           const frozenPurchasePrice = resolveSafePurchasePrice(
@@ -5674,7 +5756,7 @@ const handleUpdateSale = async (req, res) => {
           if (it.selected_colour || it.colour) return String(it.selected_colour || it.colour).trim();
           return null;
         }).filter(Boolean);
-        overallColourStr = colourSummaries.length ? colourSummaries.join(', ') : null;
+        overallColourStr = colourSummaries.length ? colourSummaries.join(', ').trim() : null;
       } else if (!productsTotal || productsTotal <= 0) {
         const itemTotals = await tx.getRecord(
           'SELECT COALESCE(SUM(total_price), 0) AS pt FROM sale_items WHERE sale_id = ?',
@@ -7626,10 +7708,12 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
       ? Number(filterShopId)
       : rawShopId;
 
-    // Date range resolution
+    // Date range resolution with full end-of-day boundary support
     const todayStr = today();
-    const fromDate = String(req.query.from || req.query.dateFrom || todayStr.slice(0, 7) + '-01').slice(0, 10);
-    const toDate = String(req.query.to || req.query.dateTo || todayStr).slice(0, 10);
+    let fromDate = String(req.query.from || req.query.dateFrom || todayStr.slice(0, 7) + '-01').trim();
+    if (fromDate.length > 10) fromDate = fromDate.slice(0, 10);
+    let toDate = String(req.query.to || req.query.dateTo || todayStr).trim();
+    if (toDate.length > 10) toDate = toDate.slice(0, 10);
 
     // Calculate duration in days for previous period comparison
     const fromTime = new Date(fromDate + 'T00:00:00').getTime();
@@ -7641,8 +7725,10 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
     const prevFromDate = prevFromDateObj.toISOString().slice(0, 10);
     const prevToDate = prevToDateObj.toISOString().slice(0, 10);
 
+    const dateExpr = "COALESCE(sa.invoice_date, (CASE WHEN sa.sale_date ~ '^\\d{4}-\\d{2}-\\d{2}' THEN SUBSTRING(sa.sale_date FROM 1 FOR 10)::date ELSE NULL END), (sa.created_at AT TIME ZONE 'Asia/Kolkata')::date)";
+
     const where = [
-      "COALESCE(sa.invoice_date::TEXT, sa.sale_date) BETWEEN ? AND ?",
+      `${dateExpr} BETWEEN ?::date AND ?::date`,
       "sa.status NOT IN ('cancelled', 'void')"
     ];
     const params = [fromDate, toDate];
@@ -7680,7 +7766,7 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
       SELECT
         sa.id,
         COALESCE(sa.invoice_number, CONCAT('INV-', LPAD(sa.id::TEXT, 6, '0'))) AS invoice_number,
-        COALESCE(sa.invoice_date::TEXT, sa.sale_date) AS invoice_date,
+        COALESCE(sa.invoice_date::TEXT, SUBSTRING(sa.sale_date FROM 1 FOR 10), (sa.created_at AT TIME ZONE 'Asia/Kolkata')::date::TEXT) AS invoice_date,
         sa.shop_id,
         sh.name AS shop_name,
         sa.customer_id,
@@ -7703,7 +7789,7 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
       LEFT JOIN sale_items si ON si.sale_id = sa.id
       WHERE ${whereSql}
       GROUP BY sa.id, sh.name, c.name, c.mobile, c.address
-      ORDER BY COALESCE(sa.invoice_date::TEXT, sa.sale_date) DESC, sa.id DESC
+      ORDER BY ${dateExpr} DESC, sa.id DESC
     `, params);
 
     // 2. Fetch all line items for the matched sales
@@ -7789,6 +7875,8 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
 
     // 3. Aggregate Current Period Summary Totals
     const totalSalesAmount = invoices.reduce((sum, inv) => sum + inv.billed_amount, 0);
+    const totalPaidAmount = invoices.reduce((sum, inv) => sum + Number(inv.paid_amount || 0), 0);
+    const totalPendingAmount = invoices.reduce((sum, inv) => sum + Number(inv.pending_amount || 0), 0);
     const totalCostAmount = invoices.reduce((sum, inv) => sum + inv.total_cost, 0);
     const totalExpensesAmount = invoices.reduce((sum, inv) => sum + Number(inv.extra_expenses_total || 0), 0);
     const grossProfitEarned = totalSalesAmount - totalCostAmount - totalExpensesAmount;
@@ -7805,7 +7893,7 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
     const prevPeriodRow = await getRecord(`
       SELECT COALESCE(SUM(sa.total_amount), 0) AS prev_sales
       FROM sales sa
-      WHERE COALESCE(sa.invoice_date::TEXT, sa.sale_date) BETWEEN ? AND ?
+      WHERE ${dateExpr} BETWEEN ?::date AND ?::date
         AND sa.status NOT IN ('cancelled', 'void')
         ${prevShopSql}
     `, prevParams);
@@ -7818,6 +7906,8 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
     res.json({
       summary: {
         total_sales: totalSalesAmount,
+        total_paid: totalPaidAmount,
+        total_pending: totalPendingAmount,
         total_cost: totalCostAmount,
         total_expenses: totalExpensesAmount,
         gross_profit: grossProfitEarned,
@@ -7908,7 +7998,7 @@ app.get('/api/purchase-bills', authenticateToken, requireShopStaff, async (req, 
       pagination,
       totalKey: 'totalPurchaseBills',
     });
-    res.json(rows);
+    res.json({ ...rows, purchaseBills: rows.data, bills: rows.data });
   } catch (error) {
     res.status(500).json({ error: error.message || 'Failed to fetch purchase bills.' });
   }
@@ -8049,6 +8139,170 @@ app.post('/api/purchase-bills/:id/pay', authenticateToken, requireShopStaff, asy
     res.json({ success: true, ...result });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Failed to record bill payment.' });
+  }
+});
+
+app.put('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const billId = Number(req.params.id);
+    if (!Number.isInteger(billId) || billId <= 0) return res.status(400).json({ error: 'Valid bill ID required.' });
+
+    const { supplier_id, bill_date, payment_terms_days = 30, notes, payment_mode = 'credit', items = [], extra_charges = 0 } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one item is required.' });
+    }
+
+    const billDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(bill_date || '')) ? String(bill_date) : today();
+    const terms = Math.max(0, Number(payment_terms_days) || 30);
+    const dueDateObj = new Date(billDateStr + 'T00:00:00');
+    dueDateObj.setDate(dueDateObj.getDate() + terms);
+    const dueDate = dueDateObj.toISOString().slice(0, 10);
+
+    const result = await runTransaction(async (tx) => {
+      const existingBill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [billId]);
+      if (!existingBill) {
+        const err = new Error('Purchase bill not found.');
+        err.status = 404;
+        throw err;
+      }
+      if (existingBill.status === 'cancelled') {
+        const err = new Error('Cannot edit a cancelled purchase bill.');
+        err.status = 400;
+        throw err;
+      }
+
+      // Check shop access
+      const targetShopId = req.body.shop_id ? requireScopedShopId(req, req.body.shop_id) : existingBill.shop_id;
+
+      const validItems = [];
+      let productsTotal = 0;
+      for (const item of items) {
+        const qty = Number(item.quantity);
+        const unitPrice = money(item.unit_price);
+        const discAmt = money(item.discount_amount || 0);
+        if (!Number.isInteger(qty) || qty <= 0 || unitPrice <= 0) {
+          const err = new Error('Each item requires a valid quantity and unit price.');
+          err.status = 400;
+          throw err;
+        }
+        const lineTotal = money(qty * unitPrice - discAmt);
+        productsTotal += lineTotal;
+        validItems.push({
+          product_id: item.product_id || null,
+          custom_product_name: item.custom_product_name || null,
+          quantity: qty,
+          unit_price: unitPrice,
+          discount_amount: discAmt,
+          total_price: lineTotal,
+          colour: item.colour || null,
+        });
+      }
+      productsTotal = money(productsTotal);
+      const extraCharges = money(extra_charges);
+      const totalAmount = money(productsTotal + extraCharges);
+
+      const paidAmount = money(existingBill.paid_amount || 0);
+      if (totalAmount < paidAmount) {
+        const err = new Error(`Cannot reduce bill total below already paid amount (₹${paidAmount.toFixed(2)}).`);
+        err.status = 400;
+        throw err;
+      }
+
+      const pendingAmount = Math.max(0, money(totalAmount - paidAmount));
+      const newStatus = pendingAmount <= 0 ? 'paid' : (paidAmount > 0 ? 'partially_paid' : 'open');
+
+      await tx.runQuery(
+        `UPDATE purchase_bills SET
+          shop_id = ?,
+          supplier_id = ?,
+          bill_date = ?,
+          due_date = ?,
+          payment_terms_days = ?,
+          products_total = ?,
+          extra_charges = ?,
+          total_amount = ?,
+          pending_amount = ?,
+          status = ?,
+          payment_mode = ?,
+          notes = ?,
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          targetShopId,
+          supplier_id || null,
+          billDateStr,
+          dueDate,
+          terms,
+          productsTotal,
+          extraCharges,
+          totalAmount,
+          pendingAmount,
+          newStatus,
+          payment_mode,
+          notes || '',
+          billId,
+        ]
+      );
+
+      // Replace items
+      await tx.runQuery('DELETE FROM purchase_bill_items WHERE bill_id = ?', [billId]);
+      for (const vi of validItems) {
+        await tx.runQuery(
+          `INSERT INTO purchase_bill_items (bill_id, product_id, custom_product_name, quantity, unit_price, discount_amount, total_price, colour)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [billId, vi.product_id, vi.custom_product_name, vi.quantity, vi.unit_price, vi.discount_amount, vi.total_price, vi.colour]
+        );
+      }
+
+      // Reverse existing purchase bill journal and post updated
+      await reverseJournal(tx, 'purchase_bill', billId, existingBill.shop_id, billDateStr, req.user.id);
+      await postPurchaseBillJournal(tx, billId, targetShopId, supplier_id, totalAmount, billDateStr, req.user.id);
+
+      return { id: billId, bill_number: existingBill.bill_number, total_amount: totalAmount, pending_amount: pendingAmount, status: newStatus };
+    });
+
+    await audit(req, 'Updated purchase bill', 'purchase_bill', result.id, `${result.bill_number}, new total ${result.total_amount}`);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update purchase bill.' });
+  }
+});
+
+app.delete('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const billId = Number(req.params.id);
+    if (!Number.isInteger(billId) || billId <= 0) return res.status(400).json({ error: 'Valid bill ID required.' });
+
+    const result = await runTransaction(async (tx) => {
+      const bill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [billId]);
+      if (!bill) {
+        const err = new Error('Purchase bill not found.');
+        err.status = 404;
+        throw err;
+      }
+      if (money(bill.paid_amount) > 0) {
+        const err = new Error(`Cannot delete bill #${bill.bill_number} because payments of ₹${money(bill.paid_amount).toFixed(2)} have already been recorded against it.`);
+        err.status = 400;
+        throw err;
+      }
+
+      // Check shop access
+      requireScopedShopId(req, bill.shop_id);
+
+      // Reverse journals
+      await reverseJournal(tx, 'purchase_bill', billId, bill.shop_id, today(), req.user.id);
+
+      // Delete items and bill
+      await tx.runQuery('DELETE FROM purchase_bill_items WHERE bill_id = ?', [billId]);
+      await tx.runQuery('DELETE FROM purchase_bills WHERE id = ?', [billId]);
+
+      return { id: billId, bill_number: bill.bill_number };
+    });
+
+    await audit(req, 'Deleted purchase bill', 'purchase_bill', result.id, `Deleted ${result.bill_number}`);
+    res.json({ success: true, message: `Purchase bill ${result.bill_number} deleted successfully.` });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to delete purchase bill.' });
   }
 });
 

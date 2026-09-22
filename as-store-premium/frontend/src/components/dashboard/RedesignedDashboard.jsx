@@ -132,57 +132,71 @@ const SparklineChart = React.memo(function SparklineChart({ data = [], color = '
 });
 
 // Interactive Area Chart for Sales Overview
-const SalesOverviewChart = React.memo(function SalesOverviewChart({ timeframe, setTimeframe, currency, totals }) {
+const SalesOverviewChart = React.memo(function SalesOverviewChart({ timeframe, setTimeframe, currency, totals, salesOverview }) {
   const chartDataMap = useMemo(() => {
+    if (salesOverview && Object.keys(salesOverview).length) {
+      return salesOverview;
+    }
     return {
       Today: [
-        { label: '08:00', sales: 1200, orders: 2 },
-        { label: '10:00', sales: 4500, orders: 5 },
-        { label: '12:00', sales: 12800, orders: 12 },
-        { label: '14:00', sales: 24500, orders: 18 },
-        { label: '16:00', sales: 38900, orders: 24 },
-        { label: '18:00', sales: 52100, orders: 31 },
-        { label: '20:00', sales: 68400, orders: 42 },
-        { label: '22:00', sales: totals?.today_sales || 82450, orders: 48 },
+        { label: '08:00', sales: 0, orders: 0 },
+        { label: '10:00', sales: 0, orders: 0 },
+        { label: '12:00', sales: 0, orders: 0 },
+        { label: '14:00', sales: 0, orders: 0 },
+        { label: '16:00', sales: 0, orders: 0 },
+        { label: '18:00', sales: 0, orders: 0 },
+        { label: '20:00', sales: 0, orders: 0 },
+        { label: '22:00', sales: totals?.today_sales || 0, orders: totals?.today_orders || 0 },
       ],
       Yesterday: [
-        { label: '08:00', sales: 800, orders: 1 },
-        { label: '10:00', sales: 3200, orders: 4 },
-        { label: '12:00', sales: 9400, orders: 9 },
-        { label: '14:00', sales: 18500, orders: 15 },
-        { label: '16:00', sales: 31000, orders: 21 },
-        { label: '18:00', sales: 44200, orders: 28 },
-        { label: '20:00', sales: 59800, orders: 36 },
-        { label: '22:00', sales: 69800, orders: 41 },
+        { label: '08:00', sales: 0, orders: 0 },
+        { label: '12:00', sales: 0, orders: 0 },
+        { label: '16:00', sales: 0, orders: 0 },
+        { label: '20:00', sales: 0, orders: 0 },
       ],
       Weekly: [
-        { label: 'Mon', sales: 45000, orders: 32 },
-        { label: 'Tue', sales: 58000, orders: 39 },
-        { label: 'Wed', sales: 62000, orders: 44 },
-        { label: 'Thu', sales: 71000, orders: 51 },
-        { label: 'Fri', sales: 89000, orders: 63 },
-        { label: 'Sat', sales: 104000, orders: 75 },
-        { label: 'Sun', sales: 92000, orders: 68 },
+        { label: 'Mon', sales: 0, orders: 0 },
+        { label: 'Tue', sales: 0, orders: 0 },
+        { label: 'Wed', sales: 0, orders: 0 },
+        { label: 'Thu', sales: 0, orders: 0 },
+        { label: 'Fri', sales: 0, orders: 0 },
+        { label: 'Sat', sales: 0, orders: 0 },
+        { label: 'Sun', sales: 0, orders: 0 },
       ],
       Monthly: [
-        { label: 'Week 1', sales: 280000, orders: 190 },
-        { label: 'Week 2', sales: 340000, orders: 245 },
-        { label: 'Week 3', sales: 410000, orders: 290 },
-        { label: 'Week 4', sales: 485000, orders: 340 },
+        { label: 'Week 1', sales: 0, orders: 0 },
+        { label: 'Week 2', sales: 0, orders: 0 },
+        { label: 'Week 3', sales: 0, orders: 0 },
+        { label: 'Week 4', sales: 0, orders: 0 },
       ]
     };
-  }, [totals]);
+  }, [totals, salesOverview]);
 
   const currentData = chartDataMap[timeframe] || chartDataMap['Today'];
   const [hoverIndex, setHoverIndex] = useState(null);
 
-  const maxVal = Math.max(...currentData.map(d => d.sales)) * 1.15 || 100000;
+  // Period total and order count
+  const periodTotal = useMemo(() => {
+    if (timeframe === 'Today' || timeframe === 'Yesterday') {
+      return currentData[currentData.length - 1]?.sales || 0;
+    }
+    return currentData.reduce((sum, d) => sum + Number(d.sales || 0), 0);
+  }, [currentData, timeframe]);
+
+  const periodOrders = useMemo(() => {
+    if (timeframe === 'Today' || timeframe === 'Yesterday') {
+      return currentData[currentData.length - 1]?.orders || 0;
+    }
+    return currentData.reduce((sum, d) => sum + Number(d.orders || 0), 0);
+  }, [currentData, timeframe]);
+
+  const maxVal = Math.max(...currentData.map(d => Number(d.sales || 0))) * 1.15 || 100000;
   const chartHeight = 220;
   const chartWidth = 650;
 
   const points = currentData.map((d, i) => {
-    const x = (i / (currentData.length - 1)) * chartWidth;
-    const y = chartHeight - (d.sales / maxVal) * (chartHeight - 40) - 20;
+    const x = (i / Math.max(currentData.length - 1, 1)) * chartWidth;
+    const y = chartHeight - (Number(d.sales || 0) / maxVal) * (chartHeight - 40) - 20;
     return `${x},${y}`;
   }).join(' ');
 
@@ -199,6 +213,9 @@ const SalesOverviewChart = React.memo(function SalesOverviewChart({ timeframe, s
             <span className="text-xs font-black uppercase tracking-widest text-slate-400">Revenue & Sales Trends</span>
           </div>
           <h2 className="text-xl font-black tracking-tight text-slate-800 dark:text-white">Sales Performance Overview</h2>
+          <div className="text-xs font-bold text-slate-500 dark:text-slate-400 mt-0.5">
+            {timeframe} Total: <strong className="text-teal-600 dark:text-teal-400 font-extrabold">{currency(periodTotal)}</strong> ({periodOrders} {periodOrders === 1 ? 'order' : 'orders'})
+          </div>
         </div>
 
         {/* Timeframe Selector Pills */}
@@ -861,9 +878,20 @@ const RedesignedDashboard = React.memo(function RedesignedDashboard({
                 <strong className="text-2xl sm:text-3xl font-black tracking-tight text-slate-900 dark:text-white block">
                   <AnimatedCounter value={data.dashboard?.totals?.today_sales || 0} prefix="₹" />
                 </strong>
-                <span className="text-[11px] font-bold text-slate-400 block mt-1">vs Yesterday</span>
+                <span className="text-[11px] font-bold text-slate-400 block mt-1">
+                  Today ({data.dashboard?.totals?.today_orders || 0} {data.dashboard?.totals?.today_orders === 1 ? 'order' : 'orders'})
+                </span>
               </div>
               <SparklineChart data={salesSparkline} color="#0d9488" />
+            </div>
+
+            <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-[11px] font-bold text-slate-400">
+              <span title="Current month sales matching Sales & Profit Ledger">
+                Month: <strong className="text-slate-700 dark:text-slate-200 font-extrabold">{currency(data.dashboard?.totals?.month_sales || 0)}</strong>
+              </span>
+              <span title="Total all-time sales matching Sales & Profit Ledger">
+                All-Time: <strong className="text-slate-700 dark:text-slate-200 font-extrabold">{currency(data.dashboard?.totals?.all_time_sales || 0)}</strong>
+              </span>
             </div>
           </motion.div>
 
@@ -1034,6 +1062,7 @@ const RedesignedDashboard = React.memo(function RedesignedDashboard({
         setTimeframe={setTimeframe}
         currency={currency}
         totals={data.dashboard?.totals}
+        salesOverview={data.dashboard?.salesOverview}
       />
 
       {/* ---------------------------------------------------- */}

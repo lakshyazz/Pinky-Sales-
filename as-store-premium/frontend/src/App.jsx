@@ -1225,6 +1225,7 @@ const SaleItemRow = React.memo(function SaleItemRow({
               </label>
               <input
                 type="text"
+                maxLength={255}
                 value={item.custom_product_name !== undefined ? item.custom_product_name : (selectedProd?.short_name || selectedProd?.name || '')}
                 onChange={(e) => updateSaleItemCustomName && updateSaleItemCustomName(idx, e.target.value)}
                 placeholder="e.g. V40E (without WF)"
@@ -1238,6 +1239,7 @@ const SaleItemRow = React.memo(function SaleItemRow({
               </label>
               <input
                 type="text"
+                maxLength={255}
                 value={item.custom_brand_name !== undefined ? item.custom_brand_name : (selectedProd?.manufacturing_brand_name || selectedProd?.brand || '')}
                 onChange={(e) => updateSaleItemCustomBrand && updateSaleItemCustomBrand(idx, e.target.value)}
                 placeholder="e.g. AS CARE / FRESH NEW CARE"
@@ -1881,6 +1883,7 @@ function SalesCreationWorkspace({
                       <div className="relative">
                         <input
                           type="text"
+                          maxLength={255}
                           list="sale-expense-presets"
                           placeholder="e.g. COURIER, PACKAGING, TRANSPORT..."
                           value={exp.expense_name !== undefined ? exp.expense_name : 'COURIER'}
@@ -2684,7 +2687,7 @@ function App() {
   const deferredPendingFilters = useDeferredValue(pendingFilters);
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
-  const [productPager, setProductPager] = useState(() => createPager(5000));
+  const [productPager, setProductPager] = useState(() => createPager(50));
   const [stockPager, setStockPager] = useState(() => createPager(5000));
   const [customerPager, setCustomerPager] = useState(() => createPager(50));
   const [salesPager, setSalesPager] = useState(() => createPager(50));
@@ -3385,7 +3388,7 @@ function App() {
     try {
       const params = new URLSearchParams({
         page: String(page),
-        limit: String(Math.max(productPager.limit || 5000, 5000)),
+        limit: String(productPager.limit || 50),
       });
       if (currentShop) {
         params.set('shop_id', String(currentShop));
@@ -6607,31 +6610,24 @@ function App() {
   };
 
   const modelItems = useMemo(() => {
-    const fullPool = role === 'customer'
-      ? (data.catalog || [])
-      : ((data.products && data.products.length >= (productPageItems?.length || 0)) ? data.products : (productPageItems || []));
-
-    if (!deferredModelSearch || !deferredModelSearch.trim()) {
-      return role === 'customer'
-        ? (data.catalog || [])
-        : (productPageItems?.length ? productPageItems : (data.products || []));
+    if (role === 'customer') {
+      const fullPool = data.catalog || [];
+      if (!deferredModelSearch || !deferredModelSearch.trim()) return fullPool;
+      return fullPool.filter((item) => matchesProductSearch(item, deferredModelSearch));
     }
-    // Filter against the full pool in memory instantly (0ms latency)
-    return fullPool.filter((item) => matchesProductSearch(item, deferredModelSearch));
-  }, [role, data.catalog, data.products, productPageItems, deferredModelSearch]);
+    // For staff/admin, server handles filtering and pagination
+    return productPageItems || [];
+  }, [role, data.catalog, productPageItems, deferredModelSearch]);
 
   const priceItems = useMemo(() => {
-    const fullPool = role === 'customer'
-      ? (data.catalog || [])
-      : ((data.products && data.products.length >= (productPageItems?.length || 0)) ? data.products : (productPageItems || []));
-
-    if (!deferredPriceSearch || !deferredPriceSearch.trim()) {
-      return role === 'customer'
-        ? (data.catalog || [])
-        : (productPageItems?.length ? productPageItems : (data.products || []));
+    if (role === 'customer') {
+      const fullPool = data.catalog || [];
+      if (!deferredPriceSearch || !deferredPriceSearch.trim()) return fullPool;
+      return fullPool.filter((item) => matchesProductSearch(item, deferredPriceSearch));
     }
-    return fullPool.filter((item) => matchesProductSearch(item, deferredPriceSearch));
-  }, [role, data.catalog, data.products, productPageItems, deferredPriceSearch]);
+    // For staff/admin, server handles filtering and pagination
+    return productPageItems || [];
+  }, [role, data.catalog, productPageItems, deferredPriceSearch]);
 
   const allCategoryPool = role === 'customer' ? data.catalog : (data.products || []);
 
@@ -7346,6 +7342,10 @@ function App() {
                 setGlobalToast={showToast}
                 suppliers={data.reference?.suppliers || []}
                 products={data.products || []}
+                shopId={shopId || (role === 'shopkeeper' ? session?.shop_id : (selectedShop || data.warehouse?.id || data.shops?.[0]?.id))}
+                shops={data.shops || []}
+                warehouse={data.warehouse}
+                role={role}
               />
             </PageWrapper>
           )}
@@ -7673,10 +7673,10 @@ function App() {
                   <div className="loading">Choose one shop from the top-right filter before adding customers or purchases.</div>
                 )}
                 <FormPanel title="Add customer" action="Add customer" onSubmit={() => post('/customers', 'customer', 'Customer added')} disabled={saving || needsSpecificShop}>
-                  <Input label="Name" className="md:col-span-1" value={forms.customer.name} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, name: v } })} />
-                  <Input label="Mobile" className="md:col-span-1" value={forms.customer.mobile} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, mobile: v } })} />
-                  <Input label="Address" className="md:col-span-1" value={forms.customer.address} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, address: v } })} />
-                  <Input label="GSTIN (Optional)" className="md:col-span-1" placeholder="e.g. 24AAAAA0000A1Z5" value={forms.customer.gstin || ''} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, gstin: v.toUpperCase() } })} />
+                  <Input label="Name" maxLength={255} className="md:col-span-1" value={forms.customer.name} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, name: v } })} />
+                  <Input label="Mobile" maxLength={30} className="md:col-span-1" value={forms.customer.mobile} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, mobile: v } })} />
+                  <Input label="Address" maxLength={500} className="md:col-span-1" value={forms.customer.address} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, address: v } })} />
+                  <Input label="GSTIN (Optional)" maxLength={15} className="md:col-span-1" placeholder="e.g. 24AAAAA0000A1Z5" value={forms.customer.gstin || ''} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, gstin: v.toUpperCase() } })} />
                   <Input label="Opening Balance (₹ - Optional)" type="number" step="0.01" className="md:col-span-1" placeholder="0.00" value={forms.customer.opening_balance || ''} onChange={(v) => setForms({ ...forms, customer: { ...forms.customer, opening_balance: v } })} />
                   <div className="md:col-span-4 flex flex-col gap-1.5">
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">Customer Type</label>
@@ -9965,6 +9965,7 @@ function App() {
                     <input
                       type="text"
                       required
+                      maxLength={255}
                       placeholder="e.g. Rahul Sharma"
                       value={quickCustomerForm.name}
                       onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, name: e.target.value })}
@@ -9976,6 +9977,7 @@ function App() {
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Mobile Number</label>
                     <input
                       type="text"
+                      maxLength={30}
                       placeholder="e.g. 9876543210"
                       value={quickCustomerForm.mobile}
                       onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, mobile: e.target.value })}
@@ -9986,6 +9988,7 @@ function App() {
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">Address</label>
                     <input
                       type="text"
+                      maxLength={500}
                       placeholder="City or location"
                       value={quickCustomerForm.address}
                       onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, address: e.target.value })}
@@ -9996,6 +9999,7 @@ function App() {
                     <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-1">GSTIN (GST Number - Optional)</label>
                     <input
                       type="text"
+                      maxLength={15}
                       placeholder="e.g. 24AAAAA0000A1Z5"
                       value={quickCustomerForm.gstin || ''}
                       onChange={(e) => setQuickCustomerForm({ ...quickCustomerForm, gstin: e.target.value.toUpperCase() })}

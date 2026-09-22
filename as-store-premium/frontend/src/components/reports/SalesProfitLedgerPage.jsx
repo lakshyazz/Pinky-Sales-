@@ -349,6 +349,8 @@ export default function SalesProfitLedgerPage({
 
   const summary = reportData?.summary || {
     total_sales: 0,
+    total_paid: 0,
+    total_pending: 0,
     total_cost: 0,
     total_expenses: 0,
     gross_profit: 0,
@@ -454,10 +456,12 @@ export default function SalesProfitLedgerPage({
             })}
           </div>
 
-          {/* Custom Date Pickers */}
-          <div className="flex items-center gap-2 text-xs">
-            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
-              <span className="text-[11px] font-bold text-slate-400">From:</span>
+          {/* Date Pickers */}
+          <div className="flex items-center gap-2">
+            <div className="relative">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 absolute -top-2 left-2 bg-white px-1 z-10">
+                From
+              </label>
               <input
                 type="date"
                 value={dateFrom}
@@ -465,12 +469,14 @@ export default function SalesProfitLedgerPage({
                   setDateFrom(e.target.value);
                   setActivePreset('custom');
                 }}
-                className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+                className="h-9 px-3 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
               />
             </div>
-            <span className="text-slate-400 font-bold">to</span>
-            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-xl px-2.5 py-1">
-              <span className="text-[11px] font-bold text-slate-400">To:</span>
+            <span className="text-slate-400 text-xs font-bold">to</span>
+            <div className="relative">
+              <label className="text-[10px] uppercase font-bold tracking-wider text-slate-400 absolute -top-2 left-2 bg-white px-1 z-10">
+                To
+              </label>
               <input
                 type="date"
                 value={dateTo}
@@ -478,23 +484,23 @@ export default function SalesProfitLedgerPage({
                   setDateTo(e.target.value);
                   setActivePreset('custom');
                 }}
-                className="bg-transparent text-xs font-semibold text-slate-800 focus:outline-none cursor-pointer"
+                className="h-9 px-3 text-xs font-semibold bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none cursor-pointer"
               />
             </div>
           </div>
         </div>
 
-        {/* Row 2: Search, Branch, and Payment Status Filter */}
-        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center pt-2 border-t border-slate-100">
+        {/* Row 2: Search, Branch, Status Filters */}
+        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1 border-t border-slate-100">
           {/* Search Box */}
           <div className="sm:col-span-6 relative">
-            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search by customer name, mobile, address, or INV-xxxxxx..."
-              className="w-full h-10 pl-9 pr-4 text-xs font-semibold bg-slate-50 hover:bg-slate-50/80 focus:bg-white border border-slate-200 focus:border-teal-500 rounded-xl focus:outline-none transition-all placeholder:text-slate-400"
+              className="w-full h-10 pl-9 pr-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none placeholder:text-slate-400 font-medium"
             />
           </div>
 
@@ -532,7 +538,7 @@ export default function SalesProfitLedgerPage({
 
       {/* ─── 4 Glassmorphism Summary Metric Cards ─── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Sales */}
+        {/* Card 1: Total Sales & Collection Status */}
         <div className="bg-gradient-to-br from-white to-slate-50/70 border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-2 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Total Sales</span>
@@ -557,6 +563,17 @@ export default function SalesProfitLedgerPage({
               <span className="text-slate-400">vs prev. period</span>
             )}
             <span className="text-slate-400 font-medium">({summary.invoices_count} orders)</span>
+          </div>
+          {/* Collected vs Pending Breakdown */}
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold">
+            <span className="text-emerald-700 flex items-center gap-1" title="Amount received for these sales">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+              Paid: <strong className="font-extrabold">{currency(summary.total_paid || 0)}</strong>
+            </span>
+            <span className="text-rose-700 flex items-center gap-1" title="Amount pending/credit on these sales">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block" />
+              Due: <strong className="font-extrabold">{currency(summary.total_pending || 0)}</strong>
+            </span>
           </div>
         </div>
 
@@ -753,9 +770,18 @@ export default function SalesProfitLedgerPage({
                           {currency(inv.total_cost)}
                         </td>
 
-                        {/* Billed Amount */}
-                        <td className="py-3 px-4 text-right font-extrabold text-slate-900 whitespace-nowrap">
-                          {currency(inv.billed_amount)}
+                        {/* Billed Amount & Collection Status */}
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <div className="font-extrabold text-slate-900">{currency(inv.billed_amount)}</div>
+                          {Number(inv.pending_amount || 0) > 0 ? (
+                            <div className="text-[10.5px] font-bold text-rose-600">
+                              Due: {currency(inv.pending_amount)}
+                            </div>
+                          ) : (
+                            <div className="text-[10px] font-medium text-emerald-600">
+                              Fully Paid
+                            </div>
+                          )}
                         </td>
 
                         {/* Profit Earned */}

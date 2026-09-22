@@ -349,9 +349,14 @@ export default function CostWithBatchHistory({
               </div>
 
               {/* Popover Footer */}
-              <div className="px-3.5 py-1.5 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-400 flex items-center gap-1">
-                <Info className="w-3 h-3 shrink-0 opacity-70" />
-                <span>Older batch rates factored into current stock valuation.</span>
+              <div className="px-3.5 py-2 bg-slate-50 border-t border-slate-100 text-[10px] text-slate-500 space-y-1">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <Info className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                  <span>Cost displayed is the weighted average across active lots.</span>
+                </div>
+                <div className="text-[9.5px] text-slate-400 pl-5">
+                  Super Admins can edit product details to update valuation of active warehouse lots.
+                </div>
               </div>
             </div>,
             document.body

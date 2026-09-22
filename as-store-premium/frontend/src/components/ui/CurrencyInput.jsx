@@ -8,7 +8,7 @@ import React from 'react';
  * - High-contrast dark mode support
  * - Warning/guardrail border support
  */
-export default function CurrencyInput({
+const CurrencyInput = React.forwardRef(function CurrencyInput({
   value,
   onChange,
   placeholder = '0.00',
@@ -25,7 +25,7 @@ export default function CurrencyInput({
   name,
   id,
   ...props
-}) {
+}, ref) {
   const sizeClasses = {
     sm: {
       height: 'h-8 text-xs',
@@ -57,6 +57,7 @@ export default function CurrencyInput({
           {prefix}
         </span>
         <input
+          ref={ref}
           type="number"
           min={min}
           max={max}
@@ -82,4 +83,6 @@ export default function CurrencyInput({
       )}
     </div>
   );
-}
+});
+
+export default CurrencyInput;

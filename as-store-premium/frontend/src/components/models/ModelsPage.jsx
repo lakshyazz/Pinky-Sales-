@@ -40,6 +40,29 @@ export default function ModelsPage({
   const isSuperAdmin = role === 'superadmin';
   const isShopkeeper = role === 'shopkeeper' || role === 'admin';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
+
+  // Local immediate input state for 0ms typing response + debounced propagation to parent fetcher
+  const [localSearch, setLocalSearch] = useState(search);
+  const debounceRef = React.useRef(null);
+
+  React.useEffect(() => {
+    setLocalSearch(search);
+  }, [search]);
+
+  const handleInputChange = (val) => {
+    setLocalSearch(val);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      onSearchChange(val);
+    }, 350);
+  };
+
+  const handleClearSearch = () => {
+    setLocalSearch('');
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    onSearchChange('');
+  };
+
   const [viewMode, setViewModeState] = useState(() => {
     try {
       return localStorage.getItem('models_view_mode') || 'table';
@@ -288,6 +311,7 @@ export default function ModelsPage({
         sale_price: payload.sale_price,
         wholesale_price: payload.wholesale_price,
         purchase_price: payload.purchase_price,
+        avg_cost_price: isSuperAdmin && payload.purchase_price !== undefined ? payload.purchase_price : editingProduct.avg_cost_price,
         full_model_list: payload.full_model_list,
         description: payload.description,
         colours: payload.colours,
@@ -299,6 +323,13 @@ export default function ModelsPage({
         image_urls: payload.image_urls,
         ...(isNoStock ? { quantity: 0, available_stock: 0, warehouse_stock: 0, stock: 0 } : {}),
       });
+
+      if (isSuperAdmin && payload.purchase_price !== undefined && Array.isArray(editingProduct.supplier_batches)) {
+        editingProduct.supplier_batches = editingProduct.supplier_batches.map(b => ({
+          ...b,
+          purchase_price: payload.purchase_price,
+        }));
+      }
 
       if (setGlobalToast) {
         setGlobalToast(
@@ -641,6 +672,11 @@ export default function ModelsPage({
                               : 'bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:border-cyan-500 focus:bg-white dark:focus:bg-slate-800'
                           }`}
                         />
+                        {isSuperAdmin && (
+                          <p className="text-[10px] text-slate-400 mt-1 font-medium leading-tight">
+                            Updating cost adjusts valuation of active warehouse lots.
+                          </p>
+                        )}
                       </div>
                     </div>
 
@@ -749,15 +785,15 @@ export default function ModelsPage({
         <input
           type="text"
           placeholder="Search models, brands or categories..."
-          value={search}
-          onChange={(e) => onSearchChange(e.target.value)}
-          style={{ paddingLeft: '42px', paddingRight: search ? '36px' : '16px' }}
+          value={localSearch}
+          onChange={(e) => handleInputChange(e.target.value)}
+          style={{ paddingLeft: '42px', paddingRight: localSearch ? '36px' : '16px' }}
           className="w-full !pl-11 pr-4 py-2.5 text-sm bg-white border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-slate-900 placeholder-gray-400 transition-all shadow-2xs"
         />
-        {search && (
+        {localSearch && (
           <button
             type="button"
-            onClick={() => onSearchChange('')}
+            onClick={handleClearSearch}
             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-0.5 rounded-full cursor-pointer z-10"
             title="Clear search"
           >
@@ -1128,6 +1164,18 @@ export default function ModelsPage({
         </div>
       )}
 
+      {/* Pagination Controls */}
+      {pager && pager.loaded && (
+        <Pagination
+          meta={pager}
+          loading={loading}
+          onPageChange={onPageChange}
+          onPageSizeChange={onPageSizeChange}
+          pageSizeOptions={[25, 50, 100]}
+          totalLabel="models"
+        />
+      )}
+
 
 
       {/* Add Stock to Model Modal */}
@@ -1454,6 +1502,11 @@ export default function ModelsPage({
                                 : 'bg-rose-50/60 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 focus:border-rose-500 focus:bg-white dark:focus:bg-slate-800'
                             }`}
                           />
+                          {isSuperAdmin && (
+                            <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1 font-medium leading-tight">
+                              Updating cost adjusts valuation of active warehouse lots.
+                            </p>
+                          )}
                         </div>
                       </div>
                     </div>
