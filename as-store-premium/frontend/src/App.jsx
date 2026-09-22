@@ -203,12 +203,15 @@ const readStoredSession = () => {
     const payload = JSON.parse(atob(paddedSegment));
     if (!payload.exp || payload.exp * 1000 <= Date.now()) {
       localStorage.removeItem('session');
+      localStorage.removeItem('token');
       return null;
     }
     if (parsed.name === 'Father - Super Admin') parsed.name = 'Super Admin';
+    if (parsed.token) localStorage.setItem('token', parsed.token);
     return normalizeSession(parsed);
   } catch {
     localStorage.removeItem('session');
+    localStorage.removeItem('token');
     return null;
   }
 };
@@ -2734,6 +2737,7 @@ function App() {
         if (cancelled) return;
         const verifiedSession = normalizeSession({ ...session, ...user });
         localStorage.setItem('session', JSON.stringify(verifiedSession));
+        if (verifiedSession.token) localStorage.setItem('token', verifiedSession.token);
         setSession(verifiedSession);
         setAuthReady(true);
       })
@@ -2741,6 +2745,7 @@ function App() {
         if (cancelled) return;
         if (error?.status === 401 || error?.status === 403) {
           localStorage.removeItem('session');
+          localStorage.removeItem('token');
           setSession(null);
           setActivePage('dashboard', { replace: true });
         } else {
@@ -3796,6 +3801,7 @@ function App() {
   const login = (nextSession) => {
     const normalizedSession = normalizeSession(nextSession);
     localStorage.setItem('session', JSON.stringify(normalizedSession));
+    if (normalizedSession.token) localStorage.setItem('token', normalizedSession.token);
     setSession(normalizedSession);
     setAuthReady(true);
     setActivePage(defaultPageForRole(normalizedSession.role), { replace: true });
@@ -3803,6 +3809,7 @@ function App() {
 
   const logout = () => {
     localStorage.removeItem('session');
+    localStorage.removeItem('token');
     setSession(null);
     setAuthReady(true);
     setSelectedShop('');
@@ -9244,6 +9251,8 @@ function App() {
                     if (editProduct) editProduct(prod);
                   }}
                   role={role}
+                  session={session}
+                  token={token}
                   priceVisibility={data.priceVisibility}
                   productName={productName}
                   fullModelList={fullModelList}

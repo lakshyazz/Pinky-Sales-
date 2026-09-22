@@ -75,8 +75,13 @@ export default function LowStockPage({
   // Self-contained fetch ensuring all products are retrieved without dropping 0-stock items
   const fetchAlertProducts = async () => {
     try {
-      setLoadingAlerts(true);
-      const token = session?.token || localStorage.getItem('token');
+      let token = session?.token || localStorage.getItem('token') || localStorage.getItem('as_store_token');
+      if (!token) {
+        try {
+          const raw = localStorage.getItem('session');
+          if (raw) token = JSON.parse(raw).token;
+        } catch (_) {}
+      }
       let loaded = [];
       if (api) {
         try {

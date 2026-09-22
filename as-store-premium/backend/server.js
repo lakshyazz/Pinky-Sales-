@@ -2048,7 +2048,7 @@ app.put(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
           0
         ) AS avg_cost_price,
         COALESCE((
-          SELECT json_agg(json_build_object(
+          SELECT jsonb_agg(jsonb_build_object(
             'batch_id', ib_sup.id,
             'supplier_id', ib_sup.supplier_id,
             'supplier_name', COALESCE(sup.name, 'Default Supplier'),

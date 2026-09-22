@@ -49,6 +49,8 @@ export default function ProductDetailPage({
   productName = (p) => p?.name || p?.short_name || p?.product_name || 'Product Details',
   fullModelList = (p) => p?.full_model_list || p?.model || '',
   priceLabel = (val) => `₹${Number(val || 0).toLocaleString('en-IN')}`,
+  session = null,
+  token: propToken = null,
 }) {
   const rawProduct = product || selectedModel || model;
   const [liveProduct, setLiveProduct] = useState(null);
@@ -56,7 +58,13 @@ export default function ProductDetailPage({
   useEffect(() => {
     const targetId = rawProduct?.product_id || rawProduct?.id;
     if (!targetId) return;
-    const token = localStorage.getItem('token');
+    let token = propToken || session?.token || localStorage.getItem('token') || localStorage.getItem('as_store_token');
+    if (!token) {
+      try {
+        const raw = localStorage.getItem('session');
+        if (raw) token = JSON.parse(raw).token;
+      } catch (_) {}
+    }
     const urlParams = new URLSearchParams(window.location.search);
     const shopQuery = urlParams.get('shop_id') || urlParams.get('shopId') ? `?shop_id=${urlParams.get('shop_id') || urlParams.get('shopId')}` : '';
     fetch(`/api/products/${targetId}${shopQuery}`, {

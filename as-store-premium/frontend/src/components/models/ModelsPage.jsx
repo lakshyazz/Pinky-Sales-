@@ -41,6 +41,17 @@ export default function ModelsPage({
   const isShopkeeper = role === 'shopkeeper' || role === 'admin';
   const canEditSellingPrice = isSuperAdmin || isShopkeeper;
 
+  const getAuthToken = () => {
+    let tok = session?.token || localStorage.getItem('token') || localStorage.getItem('as_store_token');
+    if (!tok) {
+      try {
+        const raw = localStorage.getItem('session');
+        if (raw) tok = JSON.parse(raw).token;
+      } catch (_) {}
+    }
+    return tok;
+  };
+
   // Local immediate input state for 0ms typing response + debounced propagation to parent fetcher
   const [localSearch, setLocalSearch] = useState(search);
   const debounceRef = React.useRef(null);
@@ -199,7 +210,7 @@ export default function ModelsPage({
 
     try {
       setSavingStock(true);
-      const token = session?.token || localStorage.getItem('token');
+      const token = getAuthToken();
       const payload = {
         product_id: addStockProduct.id,
         quantity: qty,
@@ -250,7 +261,7 @@ export default function ModelsPage({
 
     try {
       setSavingEdit(true);
-      const token = session?.token || localStorage.getItem('token');
+      const token = getAuthToken();
       const isNoStock = editForm.stock_status === 'no_stock';
       const partCat = editForm.product_type || editForm.category || 'Display';
       const parsedColours = typeof editForm.colours === 'string'
@@ -359,6 +370,8 @@ export default function ModelsPage({
             onEdit={(prod) => handleOpenEdit(prod)}
             onAddStock={(prod) => handleOpenAddStock(prod)}
             role={role}
+            session={session}
+            token={getAuthToken()}
             priceVisibility={reference?.priceVisibility}
             productName={productName}
             fullModelList={fullModelList}
