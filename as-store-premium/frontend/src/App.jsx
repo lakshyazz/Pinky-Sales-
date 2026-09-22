@@ -2691,7 +2691,18 @@ function App() {
   const deferredPriceSearch = useDeferredValue(priceSearch);
   const deferredModelSearch = useDeferredValue(modelSearch);
   const [productPager, setProductPager] = useState(() => createPager(50));
-  const [stockPager, setStockPager] = useState(() => createPager(5000));
+  const [stockPager, setStockPager] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const isStockRoute = window.location.pathname === '/stock' || window.location.pathname.endsWith('/stock');
+      if (isStockRoute) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const page = Math.max(Number(urlParams.get('page')) || 1, 1);
+        const limit = Math.max(Number(urlParams.get('limit')) || 25, 1);
+        return { page, limit, total: 0, totalPages: 1, loaded: false };
+      }
+    }
+    return createPager(25);
+  });
   const [customerPager, setCustomerPager] = useState(() => createPager(50));
   const [salesPager, setSalesPager] = useState(() => createPager(50));
   const [pendingPager, setPendingPager] = useState(() => createPager(50));
@@ -3201,7 +3212,7 @@ function App() {
     try {
       const stockParams = applyStockQueryParams(scopedParams(currentShop), filters, search);
       stockParams.set('page', String(stockPage));
-      stockParams.set('limit', String(stockPager.limit || 5000));
+      stockParams.set('limit', String(stockPager.limit || 25));
       stockParams.set('includeSummary', 'true');
       const [stockResponse, shopkeepers] = await Promise.all([
         authedFetch(`/stock?${stockParams.toString()}`),
@@ -3708,10 +3719,17 @@ function App() {
     return () => clearTimeout(timer);
   }, [active, activeProductSearch, selectedShop, productPager.page, productPager.limit, session?.token, authReady]);
 
-  // Synchronize stock status filter from URL query params (e.g. /stock?filter=low_stock or ?status=out_of_stock)
+  const initialStockFilterMountedRef = useRef(false);
+  const initialShopMountedRef = useRef(false);
+
+  // Synchronize stock status, search, and pagination from URL query params (e.g. /stock?page=1&limit=25&status=low_stock)
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined' || active !== 'stock') return;
     const urlParams = new URLSearchParams(window.location.search);
+    const p = Math.max(Number(urlParams.get('page')) || 1, 1);
+    const l = Math.max(Number(urlParams.get('limit')) || 25, 1);
+    setStockPager((prev) => (prev.page === p && prev.limit === l ? prev : { ...prev, page: p, limit: l }));
+
     const filter = urlParams.get('filter') || urlParams.get('status');
     if (filter) {
       const normalized = filter.toLowerCase().trim();
@@ -3723,12 +3741,76 @@ function App() {
         setStockFilters((prev) => (prev.status === 'in_stock' ? prev : { ...prev, status: 'in_stock' }));
       }
     }
+    const searchVal = urlParams.get('search');
+    if (searchVal) {
+      setStockFilters((prev) => (prev.search === searchVal ? prev : { ...prev, search: searchVal }));
+    }
   }, [active]);
+
+  // Synchronize URL query params with active /stock pagination and filters
+  useEffect(() => {
+    if (active !== 'stock' || typeof window === 'undefined') return;
+    const currentSearch = window.location.search;
+    const targetParams = new URLSearchParams();
+
+    targetParams.set('page', String(stockPager.page || 1));
+    targetParams.set('limit', String(stockPager.limit || 25));
+
+    if (stockFilters.status) targetParams.set('status', stockFilters.status);
+    if (stockFilters.search) targetParams.set('search', stockFilters.search);
+    if (stockFilters.brand) targetParams.set('brand', stockFilters.brand);
+    if (stockFilters.category) targetParams.set('category', stockFilters.category);
+    if (stockFilters.colour) targetParams.set('colour', stockFilters.colour);
+    if (stockFilters.ownership) targetParams.set('ownership', stockFilters.ownership);
+
+    const queryString = `?${targetParams.toString()}`;
+    if (currentSearch !== queryString) {
+      window.history.replaceState({}, '', `/stock${queryString}`);
+    }
+  }, [
+    active,
+    stockPager.page,
+    stockPager.limit,
+    deferredStockFilters,
+  ]);
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handlePopState = () => {
+      const isStock = window.location.pathname === '/stock' || window.location.pathname.endsWith('/stock');
+      if (isStock) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const p = Math.max(Number(urlParams.get('page')) || 1, 1);
+        const l = Math.max(Number(urlParams.get('limit')) || 25, 1);
+        setStockPager((prev) => (prev.page === p && prev.limit === l ? prev : { ...prev, page: p, limit: l }));
+        const filter = urlParams.get('filter') || urlParams.get('status');
+        if (filter) setStockFilters((prev) => (prev.status === filter ? prev : { ...prev, status: filter }));
+        const s = urlParams.get('search');
+        if (s !== null) setStockFilters((prev) => (prev.search === s ? prev : { ...prev, search: s }));
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   useEffect(() => {
     if (active !== 'stock') return;
+    if (!initialStockFilterMountedRef.current) {
+      initialStockFilterMountedRef.current = true;
+      return;
+    }
     setStockPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
   }, [deferredStockFilters]);
+
+  useEffect(() => {
+    if (active !== 'stock') return;
+    if (!initialShopMountedRef.current) {
+      initialShopMountedRef.current = true;
+      return;
+    }
+    setStockPager((prev) => (prev.page === 1 ? prev : { ...prev, page: 1 }));
+  }, [selectedShop]);
 
   useEffect(() => {
     if (active !== 'customers') return;

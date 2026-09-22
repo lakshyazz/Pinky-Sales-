@@ -2467,9 +2467,19 @@ export default function StockPage({
           <Pagination
             meta={stockPager}
             loading={pageLoading?.stock}
-            onPageChange={(page) => setStockPager && setStockPager((prev) => ({ ...prev, page }))}
-            onPageSizeChange={onStockPageSizeChange}
-            pageSizeOptions={[50, 100, 200, 500, 1000, 5000]}
+            onPageChange={(page) => {
+              if (setStockPager) {
+                setStockPager((prev) => ({ ...prev, page }));
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }
+            }}
+            onPageSizeChange={(limit) => {
+              if (onStockPageSizeChange) {
+                onStockPageSizeChange(limit);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }
+            }}
+            pageSizeOptions={[20, 25, 50, 100, 200]}
             totalLabel="products in stock"
           />
         </div>

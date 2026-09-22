@@ -200,15 +200,26 @@ const clampInteger = (value, fallback, min, max) => {
 };
 const cleanQueryText = (value, maxLength = 120) => String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 const hasQueryValue = (value) => value !== undefined && value !== null && String(value).trim() !== '';
-const parsePagination = (query, options = {}) => {
+const parsePagination = (query = {}, options = {}) => {
   const defaultLimit = options.defaultLimit || DEFAULT_PAGE_LIMIT;
-  const limit = clampInteger(query.limit, defaultLimit, 1, options.maxLimit || MAX_PAGE_LIMIT);
-  const page = clampInteger(query.page, 1, 1, Number.MAX_SAFE_INTEGER);
+  const rawLimit = query.limit ?? query.take;
+  const rawPage = query.page;
+  const rawSkip = query.skip;
+  const limit = clampInteger(rawLimit, defaultLimit, 1, options.maxLimit || MAX_PAGE_LIMIT);
+  let offset = 0;
+  let page = 1;
+  if (hasQueryValue(rawSkip)) {
+    offset = Math.max(Number(rawSkip) || 0, 0);
+    page = Math.floor(offset / limit) + 1;
+  } else {
+    page = clampInteger(rawPage, 1, 1, Number.MAX_SAFE_INTEGER);
+    offset = (page - 1) * limit;
+  }
   return {
     page,
     limit,
-    offset: (page - 1) * limit,
-    isPaginated: options.force || hasQueryValue(query.page) || hasQueryValue(query.limit),
+    offset,
+    isPaginated: options.force || hasQueryValue(rawPage) || hasQueryValue(rawLimit) || hasQueryValue(rawSkip),
   };
 };
 const appendSearchFilter = (where, params, search, columns) => {
@@ -2770,7 +2781,7 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
       : (isShopStaffRole(req.user.role) ? Number(req.user.shop_id) : null);
     const includeWarehouse = isShopStaffRole(req.user.role) && String(req.query.includeWarehouse || '').toLowerCase() === 'true';
     const warehouse = includeWarehouse ? await getWarehouse() : null;
-    const pagination = parsePagination(req.query);
+    const pagination = parsePagination(req.query, { defaultLimit: 25 });
     const visibility = await getPriceVisibility();
     const extraPrices = (req.user.role === 'superadmin' || req.user.role === 'owner')
       ? ', p.purchase_price'
