@@ -3651,7 +3651,7 @@ app.get('/api/sales', authenticateToken, requireShopStaff, async (req, res) => {
 });
 
 // Public Dynamic Invoice View API (Zero-Storage Customer Access without Auth)
-app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoice/:ref'], async (req, res) => {
+app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoice/:ref', '/api/invoice/public/:ref', '/invoice/public/:ref', '/view/invoice/:ref'], async (req, res) => {
   try {
     const rawRef = String(req.params.ref || '').trim();
     if (!rawRef) {
@@ -3670,11 +3670,11 @@ app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoi
     const where = ['1 = 1'];
 
     if (saleId !== null) {
-      where.push('(sa.id = ? OR LOWER(sa.invoice_number) = LOWER(?))');
-      params.push(saleId, rawRef);
+      where.push('(sa.id = ? OR LOWER(sa.invoice_number) = LOWER(?) OR sa.public_token = ?)');
+      params.push(saleId, rawRef, rawRef);
     } else {
-      where.push('LOWER(sa.invoice_number) = LOWER(?)');
-      params.push(rawRef);
+      where.push('(LOWER(sa.invoice_number) = LOWER(?) OR sa.public_token = ?)');
+      params.push(rawRef, rawRef);
     }
 
     const baseSql = `
@@ -3727,6 +3727,7 @@ app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoi
         c.name AS customer_name,
         c.mobile AS customer_mobile,
         c.address AS customer_address,
+        c.gstin AS customer_gstin,
         p.name AS product_name,
         p.short_name AS product_short_name,
         p.brand AS product_brand,
@@ -3749,50 +3750,66 @@ app.get(['/api/public/invoice/:ref', '/api/invoices/public/:ref', '/public/invoi
         brand_name: sale.manufacturing_brand_name || sale.company_brand_name || sale.product_brand,
         quantity: Number(sale.quantity) || 1,
         unit_price: Number(sale.unit_price || sale.selling_price || 0),
-        total_price: Number(sale.total_amount || 0)
+        total_price: Number(sale.total_amount || 0),
+        colour: sale.colour || null,
+        quality_variant: null
       }];
     }
 
     const customerBal = sale.customer_id ? await getCustomerTotalOutstanding(sale.customer_id, sale.shop_id) : null;
     const customerAccountOutstanding = customerBal ? customerBal.total_outstanding : 0;
 
-    res.json({
-      invoice: {
-        id: sale.id,
-        invoice_number: sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`,
-        sale_date: sale.sale_date || sale.invoice_date,
-        invoice_date: sale.invoice_date || sale.sale_date,
-        payment_terms_days: sale.payment_terms_days,
-        due_date: sale.due_date,
-        products_total: Number(sale.products_total || sale.total_amount || 0),
-        extra_expenses_total: Number(sale.extra_expenses_total || 0),
-        total_amount: Number(sale.total_amount || 0),
-        paid_amount: Number(sale.paid_amount || 0),
-        pending_amount: Number(sale.pending_amount || 0),
-        customer_pending_amount: customerAccountOutstanding,
-        customer_opening_balance: customerBal?.opening_balance || 0,
-        payment_mode: sale.payment_mode || 'credit',
-        notes: sale.notes || '',
-        items,
-        expenses: Array.isArray(sale.expenses) ? sale.expenses : [],
-        customer: {
-          id: sale.customer_id,
-          name: sale.customer_name || 'Walk-in Customer',
-          mobile: sale.customer_mobile || '',
-          address: sale.customer_address || '',
-          opening_balance: customerBal?.opening_balance || 0,
-          pending_amount: customerAccountOutstanding,
-          total_outstanding: customerAccountOutstanding,
-        },
-        shop: {
-          id: sale.shop_id,
-          name: sale.shop_name || 'Pinky Sales',
-          area: sale.shop_area || '',
-          address: sale.shop_address || '',
-          phone: sale.shop_phone || '',
-          gstin: sale.shop_gstin || ''
-        }
+    const enrichedInvoice = {
+      ...sale,
+      id: sale.id,
+      invoice_number: sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`,
+      sale_date: sale.sale_date || sale.invoice_date,
+      invoice_date: sale.invoice_date || sale.sale_date,
+      payment_terms_days: sale.payment_terms_days,
+      due_date: sale.due_date,
+      products_total: Number(sale.products_total || sale.total_amount || 0),
+      extra_expenses_total: Number(sale.extra_expenses_total || 0),
+      total_amount: Number(sale.total_amount || 0),
+      current_invoice_total: Number(sale.current_invoice_total || sale.total_amount || 0),
+      previous_balance: Number(sale.previous_balance || 0),
+      applied_credit_amount: Number(sale.applied_credit_amount || 0),
+      advance_applied: Number(sale.advance_applied || 0),
+      net_payable_amount: Number(sale.net_payable_amount || sale.total_amount || 0),
+      paid_amount: Number(sale.paid_amount || 0),
+      pending_amount: Number(sale.pending_amount || 0),
+      closing_balance: Number(sale.closing_balance ?? sale.pending_amount ?? 0),
+      discount_amount: Number(sale.discount_amount || 0),
+      discount_percentage: Number(sale.discount_percentage || 0),
+      colour: sale.colour || null,
+      customer_pending_amount: customerAccountOutstanding,
+      customer_opening_balance: customerBal?.opening_balance || 0,
+      payment_mode: sale.payment_mode || 'credit',
+      notes: sale.notes || '',
+      items,
+      expenses: Array.isArray(sale.expenses) ? sale.expenses : [],
+      customer: {
+        id: sale.customer_id,
+        name: sale.customer_name || 'Walk-in Customer',
+        mobile: sale.customer_mobile || '',
+        address: sale.customer_address || '',
+        gstin: sale.customer_gstin || '',
+        opening_balance: customerBal?.opening_balance || 0,
+        pending_amount: customerAccountOutstanding,
+        total_outstanding: customerAccountOutstanding,
+      },
+      shop: {
+        id: sale.shop_id,
+        name: sale.shop_name || 'Pinky Sales',
+        area: sale.shop_area || '',
+        address: sale.shop_address || '',
+        phone: sale.shop_phone || '',
+        gstin: sale.shop_gstin || ''
       }
+    };
+
+    res.json({
+      invoice: enrichedInvoice,
+      sale: enrichedInvoice
     });
   } catch (err) {
     console.error('[Public Invoice View] Error fetching invoice:', err);
@@ -4914,7 +4931,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           error.status = 400;
           throw error;
         }
-        const product = await tx.getRecord('SELECT id, short_name, name, purchase_price, sale_price, wholesale_price, manufacturing_brand_id, colours FROM products WHERE id = ?', [item.product_id]);
+        const product = await tx.getRecord('SELECT id, short_name, name, purchase_price, sale_price, wholesale_price, manufacturing_brand_id, colours, colour_stock, quality_variant FROM products WHERE id = ?', [item.product_id]);
         let unitPrice = 0;
         if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
           unitPrice = money(item.selling_price);
@@ -4929,19 +4946,25 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           throw error;
         }
 
-        // Validate selected colour(s) strictly against Product Master available colours
-        const rawColours = product?.available_colours || product?.colours;
+        // Validate selected colour(s) strictly against Product Master available colours & variants
+        const rawColours = product?.available_colours || product?.colours || product?.colour_stock;
         let productColours = [];
         if (Array.isArray(rawColours)) {
           productColours = rawColours.map(c => String(c).trim()).filter(Boolean);
+        } else if (typeof rawColours === 'object' && rawColours !== null) {
+          productColours = Object.keys(rawColours).map(c => String(c).trim()).filter(Boolean);
         } else if (typeof rawColours === 'string' && rawColours.trim()) {
           try {
             const parsed = JSON.parse(rawColours);
             if (Array.isArray(parsed)) productColours = parsed.map(c => String(c).trim()).filter(Boolean);
+            else if (typeof parsed === 'object' && parsed !== null) productColours = Object.keys(parsed).map(c => String(c).trim()).filter(Boolean);
             else productColours = rawColours.split(',').map(c => c.trim()).filter(Boolean);
           } catch {
             productColours = rawColours.split(',').map(c => c.trim()).filter(Boolean);
           }
+        }
+        if (product?.quality_variant && !productColours.includes(String(product.quality_variant).trim())) {
+          productColours.push(String(product.quality_variant).trim());
         }
 
         const colorBreakdown = Array.isArray(item.color_breakdown) 
@@ -5103,18 +5126,14 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
       }
       const closingBalance = money(netBalance - numPaid);
 
-      // If previous balance was negative or closing balance is negative, update customer advance pool
-      if (closingBalance < 0) {
-        await tx.runQuery(
-          'UPDATE customers SET advance_balance = ? WHERE id = ?',
-          [Math.abs(closingBalance), customer_id]
-        );
-      } else if (previousBalance < 0 && closingBalance >= 0) {
-        await tx.runQuery(
-          'UPDATE customers SET advance_balance = 0 WHERE id = ?',
-          [customer_id]
-        );
-      }
+      // Persist customer current_balance and update customer advance pool
+      const newAdvanceBal = closingBalance < 0 
+        ? Math.abs(closingBalance) 
+        : (previousBalance < 0 ? 0 : Math.max(0, money(Number(customer.advance_balance || 0) - totalAdvanceApplied)));
+      await tx.runQuery(
+        'UPDATE customers SET current_balance = ?, advance_balance = ? WHERE id = ?',
+        [closingBalance, newAdvanceBal, customer_id]
+      );
 
       // Portion of direct paid amount covering this sale
       const directPaidForThisSale = Math.min(numPaid, netAfterAdvance);
@@ -5208,8 +5227,8 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           itemColourStr = item.colorBreakdown[0].color;
         } else if (item.colorBreakdown && item.colorBreakdown.length > 1) {
           itemColourStr = item.colorBreakdown.map((c) => `${c.color}: ${c.qty}`).join(', ');
-        } else if (item.selected_colour || item.colour) {
-          itemColourStr = String(item.selected_colour || item.colour).trim();
+        } else if (item.selected_colour || item.colour || item.color || item.variant || item.quality_variant) {
+          itemColourStr = String(item.selected_colour || item.colour || item.color || item.variant || item.quality_variant).trim();
         } else if (item.productColours && item.productColours.length === 1) {
           itemColourStr = item.productColours[0];
         }
@@ -5411,55 +5430,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
   }
 });
 
-// Public invoice retrieval endpoint via secure public_token
-app.get(['/api/public/invoice/:token', '/public/invoice/:token', '/api/invoice/public/:token', '/invoice/public/:token'], async (req, res) => {
-  try {
-    const token = String(req.params.token || '').trim();
-    if (!token) return res.status(400).json({ error: 'Invoice token is required.' });
 
-    const sale = await getRecord(`
-      SELECT sa.*, 
-        c.name AS customer_name, c.mobile AS customer_mobile, c.address AS customer_address, c.gstin AS customer_gstin,
-        COALESCE(c.advance_balance, 0) AS customer_advance_balance,
-        sh.name AS shop_name, sh.area AS shop_area, sh.address AS shop_address, sh.phone AS shop_phone
-      FROM sales sa
-      JOIN shops sh ON sh.id = sa.shop_id
-      LEFT JOIN customers c ON c.id = sa.customer_id
-      WHERE sa.public_token = ?
-    `, [token]);
-
-    if (!sale) return res.status(404).json({ error: 'Invoice not found or invalid link.' });
-
-    const items = await allRecords(`
-      SELECT si.*, 
-        COALESCE(si.custom_product_name, p.short_name, p.name) AS product_name,
-        p.brand, p.category, p.model, p.full_model_list
-      FROM sale_items si
-      LEFT JOIN products p ON p.id = si.product_id
-      WHERE si.sale_id = ?
-      ORDER BY si.id ASC
-    `, [sale.id]);
-
-    const expenses = await allRecords(`
-      SELECT * FROM sale_expenses WHERE sale_id = ? ORDER BY id ASC
-    `, [sale.id]);
-
-    const payments = await allRecords(`
-      SELECT * FROM payments WHERE sale_id = ? ORDER BY payment_date ASC, id ASC
-    `, [sale.id]);
-
-    res.json({
-      sale: {
-        ...sale,
-        items,
-        expenses,
-        payments
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message || 'Unable to load public invoice.' });
-  }
-});
 
 const handleUpdateSale = async (req, res) => {
   try {
@@ -5706,8 +5677,8 @@ const handleUpdateSale = async (req, res) => {
             itemColourStr = item.colorBreakdown[0].color;
           } else if (item.colorBreakdown && item.colorBreakdown.length > 1) {
             itemColourStr = item.colorBreakdown.map((c) => `${c.color}: ${c.qty}`).join(', ');
-          } else if (item.selected_colour || item.colour) {
-            itemColourStr = String(item.selected_colour || item.colour).trim();
+          } else if (item.selected_colour || item.colour || item.color || item.variant || item.quality_variant) {
+            itemColourStr = String(item.selected_colour || item.colour || item.color || item.variant || item.quality_variant).trim();
           } else if (item.productColours && item.productColours.length === 1) {
             itemColourStr = item.productColours[0];
           }
@@ -6923,12 +6894,20 @@ app.post('/api/payments', authenticateToken, requireShopStaff, async (req, res) 
          FROM customers c WHERE c.id = ?`,
         [targetCustomerId]
       );
-      const remainingTotalPending = Math.max(0, money(totalPendingRow?.total_pending || 0));
+      const signedNetBalance = money(totalPendingRow?.total_pending || 0);
+      const remainingTotalPending = Math.max(0, signedNetBalance);
+
+      // Persist customer's updated current_balance
+      await tx.runQuery(
+        'UPDATE customers SET current_balance = ? WHERE id = ?',
+        [signedNetBalance, targetCustomerId]
+      );
 
       return {
         payment: paymentRecord,
         allocations: allocationsToInsert,
         pending_amount: remainingTotalPending,
+        current_balance: signedNetBalance,
         excess_credited: unallocatedAmount,
         unallocated_amount: unallocatedAmount,
       };
@@ -7023,6 +7002,24 @@ app.post('/api/payments/:id/reverse', authenticateToken, requireShopStaff, async
           'UPDATE customers SET advance_balance = GREATEST(0, COALESCE(advance_balance, 0) - ?) WHERE id = ?',
           [excess, customer.id]
         );
+      }
+
+      // 8.5 Recompute and persist current_balance for customer
+      const custNetRow = await tx.getRecord(
+        `SELECT (
+           GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
+             (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
+              WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
+           )))
+           + COALESCE((SELECT SUM(s.pending_amount) FROM sales s WHERE s.customer_id = c.id), 0)
+           - COALESCE(c.advance_balance, 0)
+         ) AS total_pending
+         FROM customers c WHERE c.id = ?`,
+        [payment.customer_id]
+      );
+      if (custNetRow) {
+        const netBal = money(custNetRow.total_pending || 0);
+        await tx.runQuery('UPDATE customers SET current_balance = ? WHERE id = ?', [netBal, payment.customer_id]);
       }
 
       const updatedPayment = await tx.getRecord('SELECT * FROM payments WHERE id = ?', [paymentId]);

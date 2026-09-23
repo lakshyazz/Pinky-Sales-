@@ -347,9 +347,9 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
         const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
 
         const descLines = [shortName];
-        if (it.colour && String(it.colour).trim()) {
-          const c = String(it.colour).trim();
-          descLines.push(c.startsWith('[') ? c : `[ ${c} ]`);
+        const variantStr = String(it.colour || it.color || it.quality_variant || it.variant || '').trim();
+        if (variantStr) {
+          descLines.push(variantStr.startsWith('[') ? variantStr : `[ ${variantStr} ]`);
         }
         const brandName = getBrandName(it, sale);
         if (brandName) {
@@ -377,9 +377,9 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
       const shortName = String(rawShort).split('/')[0].split(',')[0].trim() || 'Product';
 
       const descLines = [shortName];
-      if (it.colour && String(it.colour).trim()) {
-        const c = String(it.colour).trim();
-        descLines.push(c.startsWith('[') ? c : `[ ${c} ]`);
+      const variantStr = String(it.colour || it.color || it.quality_variant || it.variant || '').trim();
+      if (variantStr) {
+        descLines.push(variantStr.startsWith('[') ? variantStr : `[ ${variantStr} ]`);
       }
       const brandName = getBrandName(it, sale);
       if (brandName) {
@@ -454,6 +454,12 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
 
   if (!isConsolidated) {
     // Option A: Standard B2B Single Tax Invoice (Self-contained single invoice)
+    const prevBalance = Number(sale?.previous_balance ?? 0);
+    if (prevBalance > 0) {
+      rightRows.push({ label: '+ PREVIOUS BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
+    } else if (prevBalance < 0) {
+      rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
+    }
     if (appliedCredit > 0) {
       rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
     }
@@ -461,10 +467,15 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
       rightRows.push({ label: '- STORE CREDIT / ADVANCE', amount: `-${formatMoney(advanceApplied)}`, bold: false, color: [15, 118, 110] });
     }
 
-    finalBillAmount = Math.max(0, (productsSubtotal + courier) - appliedCredit - advanceApplied);
-    balanceDue = Math.max(0, finalBillAmount - paidAmount);
+    finalBillAmount = sale?.net_payable_amount !== undefined && sale?.net_payable_amount !== null
+      ? Number(sale.net_payable_amount)
+      : Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit - advanceApplied);
+    balanceDue = sale?.closing_balance !== undefined && sale?.closing_balance !== null
+      ? Number(sale.closing_balance)
+      : Math.max(0, finalBillAmount - paidAmount);
 
-    rightRows.push({ label: 'Invoice Total', amount: formatMoney(finalBillAmount), bold: true });
+    const grandTotalLabel = (prevBalance !== 0 || appliedCredit > 0 || advanceApplied > 0) ? 'Grand Total / Net Due' : 'Invoice Total';
+    rightRows.push({ label: grandTotalLabel, amount: formatMoney(finalBillAmount), bold: true });
     rightRows.push({ label: 'Amount Paid', amount: formatMoney(paidAmount), bold: false });
 
     if (balanceDue <= 0) {
@@ -481,7 +492,7 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
         });
       }
     } else {
-      rightRows.push({ label: 'Balance Due for this Invoice', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
+      rightRows.push({ label: 'Balance Due', amount: formatMoney(balanceDue), bold: true, color: [225, 29, 72] });
     }
   } else {
     // Consolidated Statement / Bill with Prior Ledger Balance
@@ -1308,10 +1319,36 @@ export const formatWhatsAppMessage = ({
     
     const totalAmount = Number(inv.total_amount || 0);
     const paidAmount = Number(inv.paid_amount || 0);
-    const pendingAmount = Number(inv.pending_amount ?? (totalAmount - paidAmount));
+    const prevBal = Number(inv?.previous_balance ?? inv?.old_balance ?? 0);
+    const appliedCredit = Number(inv?.applied_credit_amount ?? 0);
+    const advanceApplied = Number(inv?.advance_applied ?? 0);
+    const grandTotal = Number(inv.net_payable_amount ?? inv.total_amount ?? 0);
+    const pendingAmount = Number(inv.closing_balance ?? inv.pending_amount ?? (grandTotal - paidAmount));
     
     let msg = `Dear ${custName},\n\nGreetings from *${shopName}*!\n\n📄 *TAX INVOICE: ${invNo}*\n📅 *Invoice Date:* ${invDate}\n${termsStr}⏰ *Due Date:* ${dueDate}\n\n`;
 
+    if (Number(inv.products_total || 0) > 0 && Math.abs(Number(inv.products_total) - grandTotal) > 0.01) {
+      msg += `📦 *Bill Items:* Rs. ${formatMoney(inv.products_total)}\n`;
+    }
+    if (prevBal > 0) {
+      msg += `➕ *Previous Balance:* Rs. ${formatMoney(prevBal)}\n`;
+    } else if (prevBal < 0) {
+      msg += `➖ *Previous Advance:* -Rs. ${formatMoney(Math.abs(prevBal))}\n`;
+    }
+    if (appliedCredit > 0) {
+      msg += `🏷️ *Credit Note Applied:* -Rs. ${formatMoney(appliedCredit)}\n`;
+    }
+    if (advanceApplied > 0) {
+      msg += `💼 *Advance Applied:* -Rs. ${formatMoney(advanceApplied)}\n`;
+    }
+    if (prevBal !== 0 || appliedCredit > 0 || advanceApplied > 0) {
+      msg += `🧾 *Grand Total Due:* Rs. ${formatMoney(grandTotal)}\n`;
+    } else {
+      msg += `🧾 *Invoice Total:* Rs. ${formatMoney(grandTotal)}\n`;
+    }
+    if (paidAmount > 0) {
+      msg += `💵 *Amount Paid:* Rs. ${formatMoney(paidAmount)}\n`;
+    }
     if (pendingAmount > 0) {
       msg += `⚠️ *Balance Due:* Rs. ${formatMoney(pendingAmount)}\n`;
     } else {
@@ -1329,7 +1366,6 @@ export const formatWhatsAppMessage = ({
       msg += `📊 *Total Account Outstanding:* Rs. ${formatMoney(customerAccountOutstanding)}\n`;
     }
 
-    const prevBal = Number(inv?.previous_balance ?? inv?.old_balance ?? 0);
     const remainingCredit = (inv.closing_balance !== undefined && Number(inv.closing_balance) < 0)
       ? Math.abs(Number(inv.closing_balance))
       : (prevBal < 0 && (Number(inv.products_total || 0) + prevBal) < 0

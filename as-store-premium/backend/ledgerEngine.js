@@ -851,7 +851,8 @@ export async function getCustomerTotalOutstanding(customerId, shopId = null) {
   const totalPaid = money(row.total_paid_payments);
 
   // Dynamic Total Outstanding = remaining_opening_balance + invoices_pending - advance_balance
-  const totalOutstanding = Math.max(0, money(remainingOB + invoicesPending - advanceBalance));
+  const netBalance = money(remainingOB + invoicesPending - advanceBalance);
+  const totalOutstanding = Math.max(0, netBalance);
 
   return {
     customer_id: custId,
@@ -863,6 +864,8 @@ export async function getCustomerTotalOutstanding(customerId, shopId = null) {
     invoices_pending: invoicesPending,
     advance_balance: advanceBalance,
     total_outstanding: totalOutstanding,
+    net_balance: netBalance,
+    current_balance: netBalance,
   };
 }
 

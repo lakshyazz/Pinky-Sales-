@@ -863,19 +863,52 @@ export default function ShareInvoiceModal({
 
               {/* Items & Expenses breakdown */}
               <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                {Array.isArray(activeInvoice.items) && activeInvoice.items.map((item, idx) => (
-                  <div key={idx} className="flex justify-between text-xs text-slate-700 py-0.5">
-                    <span className="truncate pr-2">{item.product_name || `Item #${idx + 1}`} ({item.quantity} {item.unit || 'pcs'})</span>
-                    <span className="font-semibold shrink-0">{currency(item.total_price || item.price * item.quantity)}</span>
-                  </div>
-                ))}
+                {Array.isArray(activeInvoice.items) && activeInvoice.items.map((item, idx) => {
+                  const varStr = item.colour || item.color || item.quality_variant;
+                  return (
+                    <div key={idx} className="flex justify-between text-xs text-slate-700 py-0.5">
+                      <span className="truncate pr-2">
+                        {item.product_name || item.name || `Item #${idx + 1}`}
+                        {varStr ? <span className="text-slate-500 font-semibold"> [{varStr}]</span> : null}
+                        {' '}({item.quantity} {item.unit || 'pcs'})
+                      </span>
+                      <span className="font-semibold shrink-0">{currency(item.total_price || (Number(item.unit_price || item.price || 0) * Number(item.quantity || 1)))}</span>
+                    </div>
+                  );
+                })}
               </div>
 
-              {/* Financial line */}
-              <div className="pt-3 border-t border-slate-200 flex items-center justify-between text-xs font-bold text-slate-900">
-                <span>Total <strong>{currency(activeInvoice.total_amount)}</strong></span>
-                <span className="text-emerald-700">Paid {currency(activeInvoice.paid_amount || 0)}</span>
-                <span className="text-rose-600">Due {currency(activeInvoice.pending_amount || 0)}</span>
+              {/* Financial summary breakdown matching invoice preview */}
+              <div className="pt-2.5 border-t border-slate-200 space-y-1 text-xs text-slate-700">
+                {Number(activeInvoice.previous_balance || 0) > 0 && (
+                  <div className="flex justify-between text-amber-700 font-semibold">
+                    <span>+ Previous Balance</span>
+                    <span>{currency(activeInvoice.previous_balance)}</span>
+                  </div>
+                )}
+                {Number(activeInvoice.previous_balance || 0) < 0 && (
+                  <div className="flex justify-between text-teal-700 font-semibold">
+                    <span>- Previous Advance</span>
+                    <span>-{currency(Math.abs(activeInvoice.previous_balance))}</span>
+                  </div>
+                )}
+                {Number(activeInvoice.applied_credit_amount || 0) > 0 && (
+                  <div className="flex justify-between text-teal-700 font-semibold">
+                    <span>- Credit Note Applied</span>
+                    <span>-{currency(activeInvoice.applied_credit_amount)}</span>
+                  </div>
+                )}
+                {Number(activeInvoice.advance_applied || 0) > 0 && (
+                  <div className="flex justify-between text-teal-700 font-semibold">
+                    <span>- Advance Credit Applied</span>
+                    <span>-{currency(activeInvoice.advance_applied)}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between font-bold text-slate-900 pt-1 border-t border-slate-100">
+                  <span>Grand Total: <strong>{currency(activeInvoice.net_payable_amount ?? activeInvoice.total_amount)}</strong></span>
+                  <span className="text-emerald-700">Paid: {currency(activeInvoice.paid_amount || 0)}</span>
+                  <span className="text-rose-600">Balance: {currency(activeInvoice.closing_balance ?? activeInvoice.pending_amount ?? 0)}</span>
+                </div>
               </div>
             </section>
           ) : null}

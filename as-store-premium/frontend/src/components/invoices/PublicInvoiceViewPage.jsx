@@ -153,7 +153,9 @@ export default function PublicInvoiceViewPage() {
 
   const items = Array.isArray(invoice.items) ? invoice.items : [];
   const expenses = Array.isArray(invoice.expenses) ? invoice.expenses : [];
-  const balanceDue = Math.max(0, Number(invoice.total_amount || 0) - Number(invoice.paid_amount || 0));
+  const balanceDue = invoice.closing_balance !== undefined && invoice.closing_balance !== null
+    ? Number(invoice.closing_balance)
+    : Math.max(0, Number(invoice.total_amount || 0) - Number(invoice.paid_amount || 0));
   const isPaid = balanceDue <= 0;
 
   return (
@@ -317,8 +319,11 @@ export default function PublicInvoiceViewPage() {
                         </p>
                         <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] text-slate-500">
                           {item.brand_name && <span>Brand: {item.brand_name}</span>}
-                          {item.quality_variant && <span>Variant: {item.quality_variant}</span>}
-                          {item.colour && <span>Color: {item.colour}</span>}
+                          {(item.colour || item.color || item.quality_variant) && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-700">
+                              Variant: {item.colour || item.color || item.quality_variant}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="py-3 px-3 text-right font-mono font-medium text-slate-700">
@@ -372,7 +377,7 @@ export default function PublicInvoiceViewPage() {
               </p>
             </div>
 
-            <div className="w-full sm:w-64 space-y-2 text-xs">
+            <div className="w-full sm:w-72 space-y-2 text-xs">
               <div className="flex justify-between text-slate-600">
                 <span>Products Subtotal</span>
                 <span className="font-mono font-medium">{formatCurrency(invoice.products_total)}</span>
@@ -383,16 +388,40 @@ export default function PublicInvoiceViewPage() {
                   <span className="font-mono font-medium">{formatCurrency(invoice.extra_expenses_total)}</span>
                 </div>
               )}
+              {Number(invoice.previous_balance || 0) > 0 && (
+                <div className="flex justify-between text-amber-700 font-semibold">
+                  <span>+ Previous Balance</span>
+                  <span className="font-mono font-medium">{formatCurrency(invoice.previous_balance)}</span>
+                </div>
+              )}
+              {Number(invoice.previous_balance || 0) < 0 && (
+                <div className="flex justify-between text-teal-700 font-semibold">
+                  <span>- Previous Advance</span>
+                  <span className="font-mono font-medium">-{formatCurrency(Math.abs(invoice.previous_balance))}</span>
+                </div>
+              )}
+              {Number(invoice.applied_credit_amount || 0) > 0 && (
+                <div className="flex justify-between text-teal-700 font-semibold">
+                  <span>- Credit Notes Applied</span>
+                  <span className="font-mono font-medium">-{formatCurrency(invoice.applied_credit_amount)}</span>
+                </div>
+              )}
+              {Number(invoice.advance_applied || 0) > 0 && (
+                <div className="flex justify-between text-teal-700 font-semibold">
+                  <span>- Store Credit / Advance</span>
+                  <span className="font-mono font-medium">-{formatCurrency(invoice.advance_applied)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm font-black text-slate-900 pt-2 border-t border-slate-200">
-                <span>Total Amount</span>
-                <span className="font-mono">{formatCurrency(invoice.total_amount)}</span>
+                <span>Grand Total / Net Due</span>
+                <span className="font-mono">{formatCurrency(invoice.net_payable_amount ?? invoice.total_amount)}</span>
               </div>
               <div className="flex justify-between text-slate-600 pt-1">
                 <span>Amount Paid</span>
                 <span className="font-mono font-medium text-emerald-700">{formatCurrency(invoice.paid_amount)}</span>
               </div>
               <div className="flex justify-between text-sm font-black text-rose-700 pt-1 border-t border-slate-200">
-                <span>Balance Due</span>
+                <span>Closing Balance Due</span>
                 <span className="font-mono">{formatCurrency(balanceDue)}</span>
               </div>
             </div>

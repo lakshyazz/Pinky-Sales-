@@ -298,6 +298,25 @@ function getProductAvailableColors(product) {
     }
   }
 
+  // 3. From colour_stock keys
+  if (product.colour_stock && typeof product.colour_stock === 'object') {
+    Object.keys(product.colour_stock).forEach(addColor);
+  } else if (typeof product.colour_stock === 'string' && product.colour_stock.trim()) {
+    try {
+      const parsed = JSON.parse(product.colour_stock);
+      if (typeof parsed === 'object' && parsed !== null) {
+        Object.keys(parsed).forEach(addColor);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 4. From quality variant or variant properties
+  if (product.quality_variant) addColor(product.quality_variant);
+  if (product.product_variant_name) addColor(product.product_variant_name);
+  if (product.variant) addColor(product.variant);
+  if (product.color) addColor(product.color);
+  if (product.colour) addColor(product.colour);
+
   return Array.from(colorSet);
 }
 
@@ -1116,9 +1135,9 @@ const SaleItemRow = React.memo(function SaleItemRow({
         </div>
 
         {/* Color / Variant Selector Dropdown */}
-        {Boolean(item.product_id) && availableColors.length > 0 && (
-          <div className="w-[140px]">
-            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
+        <div className="w-[140px]">
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
+          {availableColors.length > 0 ? (
             <select
               value={currentVariantValue}
               onChange={(e) => {
@@ -1144,8 +1163,21 @@ const SaleItemRow = React.memo(function SaleItemRow({
                 <option value="__split__">⚡ Multi-Color Split</option>
               )}
             </select>
-          </div>
-        )}
+          ) : (
+            <input
+              type="text"
+              placeholder="e.g. OLED / Black"
+              value={item.selected_colour || item.colour || (activeBreakdown[0]?.color) || ''}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (updateSaleItemSingleColor) {
+                  updateSaleItemSingleColor(idx, val);
+                }
+              }}
+              className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
+            />
+          )}
+        </div>
 
         {/* Price Tier */}
         <div className="w-[115px]">
@@ -4446,10 +4478,9 @@ function App() {
       || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(productId))
       || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(productId));
     const availableColors = getProductAvailableColors(selectedProd);
-
-    // If only 1 colour exists, auto-select it under the hood with quantity = qty
-    const initialBreakdown = availableColors.length === 1 && numericQty > 0
-      ? [{ color: availableColors[0], qty: numericQty }] 
+    const initialColor = availableColors.length > 0 ? availableColors[0] : '';
+    const initialBreakdown = initialColor && numericQty > 0
+      ? [{ color: initialColor, qty: numericQty }] 
       : [];
 
     const cleanShortName = selectedProd
@@ -4466,6 +4497,8 @@ function App() {
       price_type: priceType,
       quantity: qty,
       total_amount: total,
+      selected_colour: initialColor,
+      colour: initialColor,
       color_breakdown: initialBreakdown,
       custom_product_name: cleanShortName,
       custom_brand_name: cleanBrandName,
@@ -4541,9 +4574,12 @@ function App() {
       || (data.catalog || []).find((p) => String(p.id || p.product_id) === String(item.product_id));
     const availableColors = getProductAvailableColors(selectedProd);
 
-    // If only 1 colour, update its color breakdown quantity automatically
+    // If colour is selected or available, update its color breakdown quantity automatically
     let breakdown = item.color_breakdown || [];
-    if (availableColors.length === 1 && numericQty > 0) {
+    const activeColor = item.selected_colour || item.colour || (availableColors.length === 1 ? availableColors[0] : null);
+    if (activeColor && (!breakdown.length || breakdown.length === 1)) {
+      breakdown = numericQty > 0 ? [{ color: activeColor, qty: numericQty }] : [];
+    } else if (availableColors.length === 1 && numericQty > 0) {
       breakdown = [{ color: availableColors[0], qty: numericQty }];
     } else if (availableColors.length === 1 && (quantityVal === '' || numericQty === 0)) {
       breakdown = [];
@@ -4553,6 +4589,8 @@ function App() {
       ...item,
       quantity: quantityVal === '' ? '' : numericQty,
       total_amount: total,
+      selected_colour: activeColor || item.selected_colour || '',
+      colour: activeColor || item.colour || '',
       color_breakdown: breakdown,
     };
 
@@ -4615,8 +4653,9 @@ function App() {
     const currentItems = [...(forms.sale.items || [])];
     const item = { ...currentItems[itemIndex] };
     item.selected_colour = colorName;
+    item.colour = colorName;
     const numQty = Number(item.quantity || 0);
-    item.color_breakdown = numQty > 0 ? [{ color: colorName, qty: numQty }] : [];
+    item.color_breakdown = colorName ? [{ color: colorName, qty: numQty > 0 ? numQty : 1 }] : [];
     currentItems[itemIndex] = item;
     setForms((prev) => ({
       ...prev,
@@ -5038,15 +5077,18 @@ function App() {
           expenses: validExpenses,
           items: items.map((item) => {
             const unitPrice = Number(item.selling_price || (Number(item.total_amount) / Number(item.quantity || 1)));
+            const chosenColor = item.selected_colour || item.colour || (Array.isArray(item.color_breakdown) && item.color_breakdown[0]?.color) || undefined;
             return {
               product_id: item.product_id,
               quantity: Number(item.quantity),
               selling_price: unitPrice,
               unit_price: unitPrice,
               price_type: item.price_type || 'retail',
-              color_breakdown: Array.isArray(item.color_breakdown) 
+              colour: chosenColor,
+              selected_colour: chosenColor,
+              color_breakdown: Array.isArray(item.color_breakdown) && item.color_breakdown.length > 0
                 ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
-                : [],
+                : (chosenColor && Number(item.quantity) > 0 ? [{ color: chosenColor, qty: Number(item.quantity) }] : []),
               custom_product_name: item.custom_product_name !== undefined && item.custom_product_name !== null
                 ? String(item.custom_product_name).trim()
                 : undefined,
