@@ -1105,6 +1105,7 @@ const SaleItemRow = React.memo(function SaleItemRow({
   updateSaleItemSingleColor,
   updateSaleItemColorQuantity,
   removeSaleItem,
+  onQuantityEnter,
 }) {
   const selectedProd = (data.products || []).find((p) => String(p.id || p.product_id) === String(item.product_id)) 
     || (data.productResults || []).find((p) => String(p.id || p.product_id) === String(item.product_id))
@@ -1118,15 +1119,27 @@ const SaleItemRow = React.memo(function SaleItemRow({
   return (
     <div className="bg-slate-50/60 border border-slate-200/70 rounded-xl p-3 space-y-2.5 transition-all hover:border-slate-300">
       <div className="flex flex-wrap items-end gap-2.5">
-        {/* Product Selector with compact 40px combobox */}
-        <div className="flex-1 min-w-[220px]">
+        {/* Product Selector with wider container */}
+        <div className="flex-[3] min-w-[320px] sm:min-w-[420px] lg:min-w-[480px]">
           <label className="block text-[11px] font-semibold text-slate-600 mb-1">Product / Model</label>
           <SearchableCombobox
+            id={`sale-product-combobox-${idx}`}
+            autoOpen={Boolean(item.autoFocusProduct)}
             value={item.product_id}
-            onChange={(v) => updateSaleItemProduct(idx, v)}
+            onChange={(v) => {
+              updateSaleItemProduct(idx, v);
+              setTimeout(() => {
+                const qtyInput = document.getElementById(`sale-item-qty-${idx}`);
+                if (qtyInput) {
+                  qtyInput.focus();
+                  qtyInput.select();
+                }
+              }, 100);
+            }}
             options={salesProductOptions}
             placeholder="Search product, brand, model..."
             searchPlaceholder="Type model, OLED, battery..."
+            dropdownWidth="min-w-full sm:min-w-[560px] md:min-w-[640px] max-w-[min(760px,96vw)]"
             className="w-full"
           />
         </div>
@@ -1181,10 +1194,21 @@ const SaleItemRow = React.memo(function SaleItemRow({
         <div className="w-[105px]">
           <label className="block text-[11px] font-semibold text-slate-600 mb-1">Price (₹)</label>
           <input
+            id={`sale-item-price-${idx}`}
             type="number"
             placeholder="₹ 0"
             value={item.selling_price !== undefined ? item.selling_price : ''}
             onChange={(e) => updateSaleItemSellingPrice(idx, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const qtyInput = document.getElementById(`sale-item-qty-${idx}`);
+                if (qtyInput) {
+                  qtyInput.focus();
+                  qtyInput.select();
+                }
+              }
+            }}
             disabled={!item.product_id}
             className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-50 text-right"
           />
@@ -1194,13 +1218,20 @@ const SaleItemRow = React.memo(function SaleItemRow({
         <div className="w-[80px]">
           <label className="block text-[11px] font-semibold text-slate-600 mb-1">Qty</label>
           <input
+            id={`sale-item-qty-${idx}`}
             type="number"
             min="0"
             placeholder=""
             value={item.quantity !== undefined && item.quantity !== null && item.quantity !== '' && item.quantity !== 0 ? item.quantity : ''}
             onChange={(e) => updateSaleItemQuantity(idx, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (onQuantityEnter) onQuantityEnter(idx);
+              }
+            }}
             disabled={!item.product_id || activeBreakdown.length > 1}
-            title={activeBreakdown.length > 1 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity"}
+            title={activeBreakdown.length > 1 ? "Quantity is calculated automatically from color breakdown below" : "Enter quantity (Press Enter to add next product)"}
             className="w-full h-10 px-2 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none disabled:opacity-70 text-center"
           />
         </div>
@@ -1328,6 +1359,12 @@ const SaleItemRow = React.memo(function SaleItemRow({
                       min="1"
                       value={b.qty}
                       onChange={(e) => updateSaleItemColorQuantity(idx, b.color, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          if (onQuantityEnter) onQuantityEnter(idx);
+                        }
+                      }}
                       className="w-10 text-center text-xs font-black border border-slate-200 rounded px-1 py-0.5 focus:border-teal-500 focus:outline-none bg-white"
                     />
                     <button
@@ -1792,6 +1829,34 @@ function SalesCreationWorkspace({
                   updateSaleItemSingleColor={updateSaleItemSingleColor}
                   updateSaleItemColorQuantity={updateSaleItemColorQuantity}
                   removeSaleItem={removeSaleItem}
+                  onQuantityEnter={(currentIdx) => {
+                    const currentItem = items[currentIdx];
+                    if (currentItem && currentItem.product_id && (!currentItem.quantity || Number(currentItem.quantity) <= 0)) {
+                      updateSaleItemQuantity(currentIdx, 1);
+                    }
+
+                    if (currentIdx < items.length - 1) {
+                      const nextIdx = currentIdx + 1;
+                      const nextItem = items[nextIdx];
+                      if (!nextItem?.product_id) {
+                        setTimeout(() => {
+                          const nextTrigger = document.getElementById(`sale-product-combobox-${nextIdx}`);
+                          if (nextTrigger) nextTrigger.click();
+                        }, 60);
+                      } else {
+                        setTimeout(() => {
+                          const nextQty = document.getElementById(`sale-item-qty-${nextIdx}`);
+                          if (nextQty) {
+                            nextQty.focus();
+                            nextQty.select();
+                          }
+                        }, 60);
+                      }
+                      return;
+                    }
+
+                    addSaleItem();
+                  }}
                 />
               ))}
             </div>
@@ -4692,7 +4757,18 @@ function App() {
 
   const addSaleItem = () => {
     const currentItems = [...(forms.sale.items || [{ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' }])];
-    currentItems.push({ product_id: '', selling_price: '', price_type: 'wholesale', quantity: '', total_amount: '', color_breakdown: [], custom_product_name: '', custom_brand_name: '' });
+    currentItems.push({
+      product_id: '',
+      selling_price: '',
+      price_type: 'wholesale',
+      quantity: '',
+      total_amount: '',
+      color_breakdown: [],
+      custom_product_name: '',
+      custom_brand_name: '',
+      autoFocusProduct: true,
+      _key: 'item_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    });
     setForms((prev) => ({
       ...prev,
       sale: {

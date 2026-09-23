@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import ProductThumbnail from './ProductThumbnail';
 
 function SearchableCombobox({
+  id,
   value,
   onChange,
   options = [],
@@ -15,6 +16,8 @@ function SearchableCombobox({
   allowClear = false,
   className = '',
   compact = false,
+  autoOpen = false,
+  dropdownWidth = '',
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -147,6 +150,13 @@ function SearchableCombobox({
     };
   }, [isOpen]);
 
+  // Auto open on mount if autoOpen is true
+  useEffect(() => {
+    if (autoOpen && !disabled) {
+      setIsOpen(true);
+    }
+  }, [autoOpen, disabled]);
+
   // Focus search input on open
   useEffect(() => {
     if (isOpen) {
@@ -235,6 +245,7 @@ function SearchableCombobox({
     >
       {/* Trigger Button */}
       <button
+        id={id}
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setIsOpen(!isOpen)}
@@ -295,7 +306,9 @@ function SearchableCombobox({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -4, scale: 0.98 }}
             transition={{ duration: 0.14, ease: 'easeOut' }}
-            className="absolute z-[9999] left-0 right-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col"
+            className={`absolute z-[9999] left-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col ${
+              dropdownWidth || 'min-w-full sm:min-w-[480px] md:min-w-[560px] max-w-[min(720px,94vw)] w-max'
+            }`}
             style={{
               maxHeight: '360px',
               backgroundColor: '#ffffff',
