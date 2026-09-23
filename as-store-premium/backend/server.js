@@ -6503,15 +6503,8 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
   appendSearchFilter(where, params, req.query.search, [
     "COALESCE(c.name, '')",
     "COALESCE(c.mobile, '')",
-    "COALESCE(p.name, '')",
-    "COALESCE(p.short_name, '')",
-    "COALESCE(p.full_model_list, '')",
-    "COALESCE(p.brand, '')",
-    "COALESCE(p.category, '')",
-    "COALESCE(p.model, '')",
-    "COALESCE(p.description, '')",
-    "COALESCE(sh.name, '')",
-    "COALESCE(sa.notes, '')",
+    "COALESCE(c.address, '')",
+    "COALESCE(sa.invoice_number, '')",
   ]);
   if (hasQueryValue(req.query.date)) {
     where.push('sa.due_date = ?');

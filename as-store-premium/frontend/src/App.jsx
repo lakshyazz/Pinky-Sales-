@@ -2585,6 +2585,87 @@ function App() {
   const [ocaSearch, setOcaSearch] = useState('');
   const [otherCategorySearch, setOtherCategorySearch] = useState('');
   const [customerFilters, setCustomerFilters] = useState({ search: '', status: '' });
+  const [hideCustomers, setHideCustomers] = useState(() => {
+    try {
+      return localStorage.getItem('hide_customers_table') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleHideCustomers = () => {
+    setHideCustomers((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hide_customers_table', String(next));
+      } catch {}
+      if (!next) {
+        loadCustomersPage({ page: customerPager.page, currentShop: shopId, filters: deferredCustomerFilters });
+      }
+      return next;
+    });
+  };
+
+  const [hideSales, setHideSales] = useState(() => {
+    try {
+      return localStorage.getItem('hide_sales_table') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleHideSales = () => {
+    setHideSales((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hide_sales_table', String(next));
+      } catch {}
+      if (!next) {
+        loadSalesPage({ page: salesPager.page, currentShop: shopId, filters: deferredSalesFilters });
+      }
+      return next;
+    });
+  };
+
+  const [hidePending, setHidePending] = useState(() => {
+    try {
+      return localStorage.getItem('hide_pending_table') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleHidePending = () => {
+    setHidePending((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hide_pending_table', String(next));
+      } catch {}
+      if (!next) {
+        loadPendingPage({ page: pendingPager.page, currentShop: shopId, filters: deferredPendingFilters });
+      }
+      return next;
+    });
+  };
+
+  const [hidePendingValues, setHidePendingValues] = useState(() => {
+    try {
+      return localStorage.getItem('hide_pending_values') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleHidePendingValues = () => {
+    setHidePendingValues((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('hide_pending_values', String(next));
+      } catch {}
+      return next;
+    });
+  };
+
   const [showQuickAddCustomerModal, setShowQuickAddCustomerModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [quickCustomerForm, setQuickCustomerForm] = useState({ name: '', mobile: '', address: '', gstin: '', customer_type: 'retailer', opening_balance: '' });
@@ -3384,11 +3465,16 @@ function App() {
     if (!token || role === 'customer') return;
     setPageLoading((prev) => ({ ...prev, customers: true }));
     try {
+      const hasSearch = Boolean(filters?.search?.trim() || filters?.status);
+      if (hideCustomers && !hasSearch) {
+        setData((prev) => ({ ...prev, customers: [] }));
+        return;
+      }
       const params = scopedParams(currentShop);
       params.set('page', String(page));
       params.set('limit', String(customerPager.limit));
-      if (filters.search.trim()) params.set('search', filters.search.trim());
-      if (filters.status) params.set('status', filters.status);
+      if (filters?.search?.trim()) params.set('search', filters.search.trim());
+      if (filters?.status) params.set('status', filters.status);
       const response = await authedFetch(`/customers?${params.toString()}`);
       const rows = getPaginatedRows(response);
       setData((prev) => ({ ...prev, customers: rows }));
@@ -3404,12 +3490,18 @@ function App() {
     if (!token || role === 'customer') return;
     setPageLoading((prev) => ({ ...prev, sales: true }));
     try {
+      const hasSearch = Boolean(filters?.search?.trim() || filters?.date);
       const saleLocation = currentShop || (role === 'shopkeeper' ? session?.shop_id : '');
       const params = scopedParams(saleLocation);
       params.set('page', String(page));
       params.set('limit', String(salesPager.limit));
-      if (filters.search.trim()) params.set('search', filters.search.trim());
-      if (filters.date) params.set('date', filters.date);
+      if (filters?.search?.trim()) params.set('search', filters.search.trim());
+      if (filters?.date) params.set('date', filters.date);
+
+      if (hideSales && !hasSearch) {
+        setData((prev) => ({ ...prev, sales: [] }));
+        return;
+      }
       const dependencyParams = scopedParams(saleLocation);
       dependencyParams.set('page', '1');
       dependencyParams.set('limit', '1000');
@@ -3440,11 +3532,16 @@ function App() {
     if (!token || role === 'customer') return;
     setPageLoading((prev) => ({ ...prev, pending: true }));
     try {
+      const hasSearch = Boolean(filters?.search?.trim() || filters?.date);
+      if (hidePending && !hasSearch) {
+        setData((prev) => ({ ...prev, pending: [] }));
+        return;
+      }
       const params = scopedParams(currentShop);
       params.set('page', String(page));
       params.set('limit', String(pendingPager.limit));
-      if (filters.search.trim()) params.set('search', filters.search.trim());
-      if (filters.date) params.set('date', filters.date);
+      if (filters?.search?.trim()) params.set('search', filters.search.trim());
+      if (filters?.date) params.set('date', filters.date);
       const response = await authedFetch(`/pending-payments?${params.toString()}`);
       const rows = getPaginatedRows(response);
       setData((prev) => ({ ...prev, pending: rows }));
@@ -3636,25 +3733,21 @@ function App() {
         }));
       }
       if (tab === 'customers') {
-        const dependencyParams = scopedParams(currentShop);
-        dependencyParams.set('page', '1');
-        dependencyParams.set('limit', '1000');
-        const [stockResponse, salesResponse] = await Promise.all([
-          authedFetch(`/stock?${dependencyParams.toString()}`),
-          authedFetch(`/sales?${dependencyParams.toString()}`),
-        ]);
-        setData((prev) => ({
-          ...prev,
-          stock: getPaginatedRows(stockResponse),
-          sales: getPaginatedRows(salesResponse),
-        }));
-        await loadCustomersPage({ page: customerPager.page, currentShop, filters: customerFilters });
+        if (!hideCustomers) {
+          await loadCustomersPage({ page: customerPager.page, currentShop, filters: customerFilters });
+        }
       }
       if (tab === 'sales') {
-        await loadSalesPage({ page: salesPager.page, currentShop, filters: salesFilters });
+        if (!hideSales) {
+          await loadSalesPage({ page: salesPager.page, currentShop, filters: salesFilters });
+        }
       }
       if (tab === 'requests') set('requests', await authedFetch(`/stock-requests${scoped}`));
-      if (tab === 'payments') await loadPendingPage({ page: pendingPager.page, currentShop, filters: pendingFilters });
+      if (tab === 'payments') {
+        if (!hidePending) {
+          await loadPendingPage({ page: pendingPager.page, currentShop, filters: pendingFilters });
+        }
+      }
       if (tab === 'reports') await loadReportsPage({ currentShop });
       if (tab === 'catalog') set('catalog', await api(`/catalog?${new URLSearchParams(catalogFilters).toString()}`));
       if (tab === 'ledger') {
@@ -3926,19 +4019,22 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (!session || !authReady || role === 'customer' || active !== 'customers') return;
+    const hasSearch = Boolean(deferredCustomerFilters?.search?.trim() || deferredCustomerFilters?.status);
+    if (!session || !authReady || role === 'customer' || active !== 'customers' || (hideCustomers && !hasSearch)) return;
     loadCustomersPage({ page: customerPager.page, filters: deferredCustomerFilters });
-  }, [active, selectedShop, deferredCustomerFilters, customerPager.page, customerPager.limit, session?.token, authReady]);
+  }, [active, selectedShop, deferredCustomerFilters, customerPager.page, customerPager.limit, session?.token, authReady, hideCustomers]);
 
   useEffect(() => {
-    if (!session || !authReady || role === 'customer' || active !== 'sales') return;
+    const hasSearch = Boolean(deferredSalesFilters?.search?.trim() || deferredSalesFilters?.date);
+    if (!session || !authReady || role === 'customer' || active !== 'sales' || (hideSales && !hasSearch)) return;
     loadSalesPage({ page: salesPager.page, filters: deferredSalesFilters });
-  }, [active, selectedShop, deferredSalesFilters, salesPager.page, salesPager.limit, session?.token, authReady]);
+  }, [active, selectedShop, deferredSalesFilters, salesPager.page, salesPager.limit, session?.token, authReady, hideSales]);
 
   useEffect(() => {
-    if (!session || !authReady || role === 'customer' || active !== 'payments') return;
+    const hasSearch = Boolean(deferredPendingFilters?.search?.trim() || deferredPendingFilters?.date);
+    if (!session || !authReady || role === 'customer' || active !== 'payments' || (hidePending && !hasSearch)) return;
     loadPendingPage({ page: pendingPager.page, filters: deferredPendingFilters });
-  }, [active, selectedShop, deferredPendingFilters, pendingPager.page, pendingPager.limit, session?.token, authReady]);
+  }, [active, selectedShop, deferredPendingFilters, pendingPager.page, pendingPager.limit, session?.token, authReady, hidePending]);
 
   useEffect(() => {
     if (!session || !authReady || role === 'customer' || active !== 'reports') return;
@@ -4946,7 +5042,7 @@ function App() {
       },
     }));
 
-    setActivePage('customers');
+    setActivePage('sales');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     showToast(`Loaded invoice ${sale.invoice_number || `INV-${String(sale.id).padStart(6, '0')}`} into editor`);
   };
@@ -6849,7 +6945,40 @@ function App() {
       return matchesProductSearch(item, otherCategorySearch);
     });
   }, [allCategoryPool, otherCategorySearch]);
-  const visibleSales = data.sales;
+
+  const filteredCustomersList = useMemo(() => {
+    let list = data.customers || [];
+    const q = (customerFilters.search || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter((c) => {
+        const name = String(c.name || '').toLowerCase();
+        const mobile = String(c.mobile || '').toLowerCase();
+        const address = String(c.address || '').toLowerCase();
+        const gstin = String(c.gstin || '').toLowerCase();
+        return name.includes(q) || mobile.includes(q) || address.includes(q) || gstin.includes(q);
+      });
+    }
+    return list;
+  }, [data.customers, customerFilters.search]);
+
+  const visibleSales = useMemo(() => {
+    let list = data.sales || [];
+    const q = (salesFilters.search || '').trim().toLowerCase();
+    if (q) {
+      list = list.filter((s) => {
+        const inv = String(s.invoice_number || '').toLowerCase();
+        const cust = String(s.customer_name || '').toLowerCase();
+        const mobile = String(s.mobile || '').toLowerCase();
+        const shop = String(s.shop_name || '').toLowerCase();
+        const itemsMatch = (s.items || []).some((it) =>
+          String(it.product_name || it.name || it.short_name || '').toLowerCase().includes(q)
+        );
+        return inv.includes(q) || cust.includes(q) || mobile.includes(q) || shop.includes(q) || itemsMatch;
+      });
+    }
+    return list;
+  }, [data.sales, salesFilters.search]);
+
   const customerSalesGroups = useMemo(() => {
     const map = new Map();
     for (const sale of visibleSales) {
@@ -6932,6 +7061,19 @@ function App() {
 
   const filteredPendingCustomers = useMemo(() => {
     let list = data.pending || [];
+    const query = (pendingFilters.search || '').trim().toLowerCase();
+    if (query) {
+      list = list.filter((item) => {
+        const name = String(item.customer_name || item.name || '').toLowerCase();
+        const mobile = String(item.mobile || '').toLowerCase();
+        const address = String(item.address || '').toLowerCase();
+        const shop = String(item.shop_name || '').toLowerCase();
+        const invoices = (item.items || []).some((inv) =>
+          String(inv.invoice_number || '').toLowerCase().includes(query)
+        );
+        return name.includes(query) || mobile.includes(query) || address.includes(query) || shop.includes(query) || invoices;
+      });
+    }
     if (pendingStatusFilter === 'overdue') {
       list = list.filter((item) => getDueDateInfo(item.due_date).type === 'overdue');
     } else if (pendingStatusFilter === 'due_today') {
@@ -6940,7 +7082,7 @@ function App() {
       list = list.filter((item) => getDueDateInfo(item.due_date).type === 'upcoming');
     }
     return list;
-  }, [data.pending, pendingStatusFilter]);
+  }, [data.pending, pendingFilters.search, pendingStatusFilter]);
 
   const shopkeeperQuery = normalizedText(deferredShopkeeperSearch);
   const visibleShopkeepers = useMemo(() => {
@@ -7905,43 +8047,6 @@ function App() {
                     </div>
                   </div>
                 </FormPanel>
-                <div className="panel p-4 rounded-2xl bg-white border border-slate-200/80 shadow-xs mb-4">
-                  <h2 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Record customer purchase</h2>
-                  <SalesCreationWorkspace
-                    forms={forms}
-                    setForms={setForms}
-                    data={data}
-                    saving={saving}
-                    needsSpecificShop={needsSpecificShop}
-                    salesProductOptions={salesProductOptions}
-                    sellingPriceOptions={sellingPriceOptions}
-                    updateSaleItemProduct={updateSaleItemProduct}
-                    updateSaleItemCustomName={updateSaleItemCustomName}
-                    updateSaleItemCustomBrand={updateSaleItemCustomBrand}
-                    updateSaleItemPriceType={updateSaleItemPriceType}
-                    updateSaleItemSellingPrice={updateSaleItemSellingPrice}
-                    updateSaleItemQuantity={updateSaleItemQuantity}
-                    toggleSaleItemColor={toggleSaleItemColor}
-                    updateSaleItemSingleColor={updateSaleItemSingleColor}
-                    updateSaleItemColorQuantity={updateSaleItemColorQuantity}
-                    addSaleItem={addSaleItem}
-                    bulkAddSaleItems={bulkAddSaleItems}
-                    removeSaleItem={removeSaleItem}
-                    updateSaleInvoiceDate={updateSaleInvoiceDate}
-                    updateSalePaymentTerms={updateSalePaymentTerms}
-                    addSaleExpense={addSaleExpense}
-                    updateSaleExpense={updateSaleExpense}
-                    removeSaleExpense={removeSaleExpense}
-                    submitSale={submitSale}
-                    cancelEditSale={cancelEditSale}
-                    activeTab="customers"
-                    setShowQuickAddCustomerModal={setShowQuickAddCustomerModal}
-                    getProductAvailableColors={getProductAvailableColors}
-                    title="Record customer purchase"
-                    authedFetch={authedFetch}
-                    onOpenReturnModal={openSalesReturnModal}
-                  />
-                </div>
                 <div className="catalog-toolbar panel sales-toolbar">
                   <div className="searchbox">
                     <Search size={18} />
@@ -7957,7 +8062,22 @@ function App() {
                     <option value="paid">Paid customers</option>
                   </select>
                   {pageLoading.customers && <span className="status-badge due">Loading</span>}
-                  <span className="status-badge stock-ok">{customerPager.loaded ? customerPager.total.toLocaleString('en-IN') : data.customers.length} customers</span>
+                  {!hideCustomers && (
+                    <span className="status-badge stock-ok">{customerPager.loaded ? customerPager.total.toLocaleString('en-IN') : (data.customers || []).length} customers</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={toggleHideCustomers}
+                    className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs ${
+                      hideCustomers
+                        ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                    }`}
+                    title={hideCustomers ? 'Show customer list and load from database' : 'Hide customer list to lower database load'}
+                  >
+                    {hideCustomers ? <Eye size={15} /> : <EyeOff size={15} />}
+                    <span>{hideCustomers ? 'Show Customers' : 'Hide Customers'}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => {
@@ -7970,8 +8090,29 @@ function App() {
                     <Plus size={15} /> Add Customer
                   </button>
                 </div>
-                {/* Customer List as Rows / Table */}
-                <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+                {hideCustomers && !customerFilters.search?.trim() && !customerFilters.status ? (
+                  <div className="bg-white rounded-2xl border border-dashed border-amber-300 p-10 text-center shadow-xs flex flex-col items-center justify-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center shadow-2xs">
+                      <EyeOff size={22} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">Customer List Hidden</h3>
+                      <p className="text-xs text-slate-500 mt-1 max-w-md">
+                        Customer list and database queries are paused to lower the load on your database. Type any customer name or phone above to quickly search, or click below to load all.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleHideCustomers}
+                      className="mt-1 px-4 py-2 text-xs font-extrabold rounded-xl bg-teal-600 hover:bg-teal-700 text-white shadow-xs transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <Eye size={14} /> Show Customers
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {/* Customer List as Rows / Table */}
+                    <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
@@ -7987,15 +8128,15 @@ function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-xs">
-                        {data.customers.length === 0 ? (
+                        {filteredCustomersList.length === 0 ? (
                           <tr>
                             <td colSpan="8" className="py-8 text-center text-slate-400 font-medium">
                               No customers found.
                             </td>
                           </tr>
                         ) : (
-                          data.customers.map((customer, idx) => {
-                            const allCustomerSales = data.sales.filter((sale) => Number(sale.customer_id) === Number(customer.id));
+                          filteredCustomersList.map((customer, idx) => {
+                            const allCustomerSales = (data.sales || []).filter((sale) => Number(sale.customer_id) === Number(customer.id));
                             const isCash = customer.name?.toLowerCase().includes('cash customer') || customer.mobile === '9999999999' || customer.mobile === '0000000000';
                             const pendingVal = Number(customer.pending || 0);
                             const isWholesaler = String(customer.customer_type || '').toLowerCase() === 'wholesaler';
@@ -8153,13 +8294,15 @@ function App() {
                       </tbody>
                     </table>
                   </div>
-                </div>
-                <Pagination
-                  meta={customerPager}
-                  loading={pageLoading.customers}
-                  onPageChange={(page) => setCustomerPager((prev) => ({ ...prev, page }))}
-                  onPageSizeChange={(limit) => setCustomerPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
-                />
+                    </div>
+                    <Pagination
+                      meta={customerPager}
+                      loading={pageLoading.customers}
+                      onPageChange={(page) => setCustomerPager((prev) => ({ ...prev, page }))}
+                      onPageSizeChange={(limit) => setCustomerPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                    />
+                  </>
+                )}
               </section>
             </PageWrapper>
           )}
@@ -8224,10 +8367,46 @@ function App() {
                     </button>
                     {role === 'superadmin' && <span className="status-badge">All-location history</span>}
                     {pageLoading.sales && <span className="status-badge due">Loading</span>}
-                    <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
+                    {!hideSales && (
+                      <span className="status-badge stock-ok">{salesPager.loaded ? salesPager.total.toLocaleString('en-IN') : visibleSales.length} sales</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={toggleHideSales}
+                      className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer border shadow-2xs shrink-0 ${
+                        hideSales
+                          ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                      }`}
+                      title={hideSales ? 'Show sales history and load from database' : 'Hide sales history to lower database load'}
+                    >
+                      {hideSales ? <Eye size={14} /> : <EyeOff size={14} />}
+                      <span>{hideSales ? 'Show Sales' : 'Hide Sales'}</span>
+                    </button>
                   </div>
                 </div>
-                {customerSalesGroups.length ? (
+                {hideSales && !salesFilters.search?.trim() && !salesFilters.date ? (
+                  <div className="bg-white rounded-2xl border border-dashed border-amber-300 p-10 text-center shadow-xs flex flex-col items-center justify-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center shadow-2xs">
+                      <EyeOff size={22} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">Sales History Hidden</h3>
+                      <p className="text-xs text-slate-500 mt-1 max-w-md">
+                        Sales history and invoice queries are paused to lower the load on your database. Type invoice number, customer, or phone above to quickly search, or click below to load all.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleHideSales}
+                      className="mt-1 px-4 py-2 text-xs font-extrabold rounded-xl bg-teal-600 hover:bg-teal-700 text-white shadow-xs transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <Eye size={14} /> Show Sales History
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {customerSalesGroups.length ? (
                   <div className="flex flex-col gap-4 justify-start items-stretch w-full">
                     {customerSalesGroups.map((group) => {
                       const groupKey = String(group.customer_id || group.customer_name);
@@ -8503,12 +8682,14 @@ function App() {
                 ) : (
                   <Empty title="No sales records found" />
                 )}
-                <Pagination
-                  meta={salesPager}
-                  loading={pageLoading.sales}
-                  onPageChange={(page) => setSalesPager((prev) => ({ ...prev, page }))}
-                  onPageSizeChange={(limit) => setSalesPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
-                />
+                    <Pagination
+                      meta={salesPager}
+                      loading={pageLoading.sales}
+                      onPageChange={(page) => setSalesPager((prev) => ({ ...prev, page }))}
+                      onPageSizeChange={(limit) => setSalesPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                    />
+                  </>
+                )}
               </section>
             </PageWrapper>
           )}
@@ -8568,12 +8749,36 @@ function App() {
                   <div className="bg-gradient-to-br from-white via-teal-50/20 to-teal-50/50 p-4 rounded-2xl border border-teal-200/80 shadow-2xs">
                     <div className="flex items-center justify-between text-slate-500 mb-1.5">
                       <span className="text-[11px] font-extrabold uppercase tracking-wider text-teal-800">Pending Collections</span>
-                      <div className="w-8 h-8 rounded-xl bg-teal-100/80 text-teal-700 flex items-center justify-center font-bold">
-                        <IndianRupee size={16} />
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={toggleHidePendingValues}
+                          className="w-8 h-8 rounded-xl bg-teal-100/70 hover:bg-teal-200/90 text-teal-800 flex items-center justify-center transition-all cursor-pointer shadow-2xs border border-teal-200"
+                          title={hidePendingValues ? "Show Pending Collections value" : "Hide Pending Collections value"}
+                        >
+                          {hidePendingValues ? <EyeOff size={15} className="text-amber-700" /> : <Eye size={15} />}
+                        </button>
+                        <div className="w-8 h-8 rounded-xl bg-teal-100/80 text-teal-700 flex items-center justify-center font-bold">
+                          <IndianRupee size={16} />
+                        </div>
                       </div>
                     </div>
-                    <div className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-                      {currency(pendingMetrics.totalPendingAmount)}
+                    <div className="flex items-center gap-2">
+                      <div className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+                        {hidePendingValues ? (
+                          <span className="font-mono text-slate-400 select-none tracking-widest">₹ ••••••••</span>
+                        ) : (
+                          currency(pendingMetrics.totalPendingAmount)
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={toggleHidePendingValues}
+                        className="p-1 rounded-lg text-slate-400 hover:text-teal-700 hover:bg-teal-100/60 transition-colors cursor-pointer"
+                        title={hidePendingValues ? "Show value" : "Hide value"}
+                      >
+                        {hidePendingValues ? <EyeOff size={16} className="text-amber-600" /> : <Eye size={16} />}
+                      </button>
                     </div>
                     <p className="text-[11.5px] text-slate-500 font-medium mt-1">
                       Across {pendingMetrics.totalPendingInvoices} unpaid {pendingMetrics.totalPendingInvoices === 1 ? 'invoice' : 'invoices'}
@@ -8699,12 +8904,61 @@ function App() {
                       >
                         🟢 Upcoming ({Math.max(0, pendingMetrics.totalCustomers - pendingMetrics.overdueCustomers - pendingMetrics.dueTodayCustomers)})
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={toggleHidePending}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border shadow-2xs shrink-0 ${
+                          hidePending
+                            ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                        }`}
+                        title={hidePending ? 'Show pending collections and load from database' : 'Hide pending collections to lower database load'}
+                      >
+                        {hidePending ? <Eye size={14} /> : <EyeOff size={14} />}
+                        <span>{hidePending ? 'Show Pending' : 'Hide Pending'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={toggleHidePendingValues}
+                        className={`px-3 py-1.5 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border shadow-2xs shrink-0 ${
+                          hidePendingValues
+                            ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                        }`}
+                        title={hidePendingValues ? 'Show pending balance amounts' : 'Hide pending balance amounts (privacy mode)'}
+                      >
+                        {hidePendingValues ? <EyeOff size={14} className="text-amber-700" /> : <Eye size={14} className="text-slate-600" />}
+                        <span>{hidePendingValues ? 'Show Values' : 'Hide Values'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
 
-                {/* 3. CUSTOMER COLLECTIONS LEDGER TABLE */}
-                {filteredPendingCustomers.length > 0 ? (
+                {hidePending && !pendingFilters.search?.trim() && !pendingFilters.date ? (
+                  <div className="bg-white rounded-2xl border border-dashed border-amber-300 p-10 text-center shadow-xs flex flex-col items-center justify-center gap-3">
+                    <div className="w-12 h-12 rounded-2xl bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center shadow-2xs">
+                      <EyeOff size={22} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-800">Pending Receivables Hidden</h3>
+                      <p className="text-xs text-slate-500 mt-1 max-w-md">
+                        Pending accounts and collection queries are paused to lower the load on your database. Type any customer name or phone above to quickly search, or click below to load all.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={toggleHidePending}
+                      className="mt-1 px-4 py-2 text-xs font-extrabold rounded-xl bg-teal-600 hover:bg-teal-700 text-white shadow-xs transition-all flex items-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <Eye size={14} /> Show Pending Accounts
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    {/* 3. CUSTOMER COLLECTIONS LEDGER TABLE */}
+                    {filteredPendingCustomers.length > 0 ? (
                   <div className="bg-white rounded-2xl border border-slate-200/80 shadow-2xs overflow-hidden">
                     <div className="overflow-x-auto">
                       <table className="w-full text-left text-xs border-collapse">
@@ -8760,16 +9014,24 @@ function App() {
                                   {Number(item.pending_amount) > 0 ? (
                                     <>
                                       <strong className="text-sm font-black text-slate-900 block">
-                                        {currency(item.pending_amount)}
+                                        {hidePendingValues ? (
+                                          <span className="font-mono text-slate-400 select-none tracking-wider">₹ ••••••</span>
+                                        ) : (
+                                          currency(item.pending_amount)
+                                        )}
                                       </strong>
                                       <span className="text-[10.5px] text-slate-400">
-                                        Total: {currency(item.total_amount)}
+                                        {hidePendingValues ? 'Total: ••••••' : `Total: ${currency(item.total_amount)}`}
                                       </span>
                                     </>
                                   ) : Number(item.advance_balance || 0) > 0 ? (
                                     <div className="flex flex-col items-end">
                                       <strong className="text-sm font-black text-cyan-700 block">
-                                        +{currency(item.advance_balance)} Cr
+                                        {hidePendingValues ? (
+                                          <span className="font-mono text-slate-400 select-none tracking-wider">+•••••• Cr</span>
+                                        ) : (
+                                          `+${currency(item.advance_balance)} Cr`
+                                        )}
                                       </strong>
                                       <span className="text-[10px] font-bold text-cyan-700 bg-cyan-50 px-1.5 py-0.2 rounded border border-cyan-200">
                                         Advance Credit
@@ -8778,7 +9040,7 @@ function App() {
                                   ) : (
                                     <>
                                       <strong className="text-sm font-black text-emerald-700 block">
-                                        ₹0
+                                        {hidePendingValues ? '••••••' : '₹0'}
                                       </strong>
                                       <span className="text-[10.5px] text-slate-400">
                                         Settled
@@ -8901,12 +9163,14 @@ function App() {
                   </div>
                 )}
 
-                <Pagination
-                  meta={pendingPager}
-                  loading={pageLoading.pending}
-                  onPageChange={(page) => setPendingPager((prev) => ({ ...prev, page }))}
-                  onPageSizeChange={(limit) => setPendingPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
-                />
+                    <Pagination
+                      meta={pendingPager}
+                      loading={pageLoading.pending}
+                      onPageChange={(page) => setPendingPager((prev) => ({ ...prev, page }))}
+                      onPageSizeChange={(limit) => setPendingPager((prev) => ({ ...prev, page: 1, limit: Number(limit) }))}
+                    />
+                  </>
+                )}
               </section>
             </PageWrapper>
           )}
@@ -9621,27 +9885,29 @@ function App() {
                         ? 'text-amber-400'
                         : (Number(selectedPaymentCustomer.advance_balance || 0) > 0 ? 'text-cyan-400' : 'text-emerald-400')
                     }`}>
-                      {Number(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending || 0) > 0
-                        ? currency(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending)
-                        : (Number(selectedPaymentCustomer.advance_balance || 0) > 0
-                            ? `+${currency(selectedPaymentCustomer.advance_balance)} Cr`
-                            : '₹0 (Settled)')}
+                      {hidePendingValues
+                        ? '₹ ••••••'
+                        : Number(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending || 0) > 0
+                          ? currency(selectedPaymentCustomer.pending_amount || selectedPaymentCustomer.pending)
+                          : (Number(selectedPaymentCustomer.advance_balance || 0) > 0
+                              ? `+${currency(selectedPaymentCustomer.advance_balance)} Cr`
+                              : '₹0 (Settled)')}
                     </div>
                     <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-700/60 text-xs">
                       <div>
                         <span className="text-slate-400 block text-[10.5px]">Total Invoiced</span>
-                        <strong className="text-slate-200 font-bold">{currency(selectedPaymentCustomer.total_amount)}</strong>
+                        <strong className="text-slate-200 font-bold">{hidePendingValues ? '••••••' : currency(selectedPaymentCustomer.total_amount)}</strong>
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[10.5px]">Total Paid</span>
-                        <strong className="text-emerald-400 font-bold">{currency(selectedPaymentCustomer.paid_amount)}</strong>
+                        <strong className="text-emerald-400 font-bold">{hidePendingValues ? '••••••' : currency(selectedPaymentCustomer.paid_amount)}</strong>
                       </div>
                     </div>
                     <div className="pt-2 border-t border-slate-700/60 flex items-center justify-between text-xs">
                       <div>
                         <span className="text-slate-400 block text-[10.5px]">Carry Forward (Opening) Balance</span>
                         <strong className="text-amber-300 font-bold">
-                          {currency(selectedPaymentCustomer.opening_balance || 0)}
+                          {hidePendingValues ? '••••••' : currency(selectedPaymentCustomer.opening_balance || 0)}
                         </strong>
                       </div>
                       {!editingOpeningBalance ? (
