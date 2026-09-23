@@ -4941,7 +4941,7 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           error.status = 400;
           throw error;
         }
-        const product = await tx.getRecord('SELECT id, short_name, name, purchase_price, sale_price, wholesale_price, manufacturing_brand_id, colours, colour_stock, quality_variant FROM products WHERE id = ?', [item.product_id]);
+        const product = await tx.getRecord('SELECT id, short_name, name, purchase_price, sale_price, wholesale_price, manufacturing_brand_id, colours, quality_variant FROM products WHERE id = ?', [item.product_id]);
         let unitPrice = 0;
         if (item.selling_price !== undefined && item.selling_price !== null && item.selling_price !== '' && !isNaN(Number(item.selling_price))) {
           unitPrice = money(item.selling_price);
@@ -4956,8 +4956,17 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
           throw error;
         }
 
-        // Validate selected colour(s) strictly against Product Master available colours & variants
-        const rawColours = product?.available_colours || product?.colours || product?.colour_stock;
+        // Fetch active batches for this product
+        const batches = await tx.allRecords(
+          `SELECT id, purchase_price, quantity_remaining, colour FROM inventory_batches ib
+           WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0
+             ${item.batch_id ? 'AND id = ?' : ''}${batchAccessSql(req.user)}
+           ORDER BY received_date ASC, id ASC`,
+          item.batch_id ? [shopId, item.product_id, item.batch_id] : [shopId, item.product_id]
+        );
+
+        // Validate selected colour(s) strictly against Product Master available colours, variants & active batch colours
+        const rawColours = product?.available_colours || product?.colours;
         let productColours = [];
         if (Array.isArray(rawColours)) {
           productColours = rawColours.map(c => String(c).trim()).filter(Boolean);
@@ -4976,6 +4985,12 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
         if (product?.quality_variant && !productColours.includes(String(product.quality_variant).trim())) {
           productColours.push(String(product.quality_variant).trim());
         }
+        for (const b of batches) {
+          const bCol = String(b.colour || '').trim();
+          if (bCol && !productColours.some(pc => pc.toLowerCase() === bCol.toLowerCase())) {
+            productColours.push(bCol);
+          }
+        }
 
         const colorBreakdown = Array.isArray(item.color_breakdown) 
           ? item.color_breakdown.filter(c => c && c.color && Number(c.qty) > 0) 
@@ -4990,14 +5005,6 @@ app.post('/api/sales', authenticateToken, requireShopStaff, async (req, res) => 
             }
           }
         }
-
-        const batches = await tx.allRecords(
-          `SELECT id, purchase_price, quantity_remaining, colour FROM inventory_batches ib
-           WHERE shop_id = ? AND product_id = ? AND quantity_remaining > 0
-             ${item.batch_id ? 'AND id = ?' : ''}${batchAccessSql(req.user)}
-           ORDER BY received_date ASC, id ASC`,
-          item.batch_id ? [shopId, item.product_id, item.batch_id] : [shopId, item.product_id]
-        );
         const availableBatches = batches.map((batch) => ({
           ...batch,
           quantity_remaining: Math.max(Number(batch.quantity_remaining || 0) - Number(reservedByBatch.get(batch.id) || 0), 0),
