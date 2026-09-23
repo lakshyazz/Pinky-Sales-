@@ -310,10 +310,7 @@ function getProductAvailableColors(product) {
     } catch { /* ignore */ }
   }
 
-  // 4. From quality variant or variant properties
-  if (product.quality_variant) addColor(product.quality_variant);
-  if (product.product_variant_name) addColor(product.product_variant_name);
-  if (product.variant) addColor(product.variant);
+  // 4. Genuine color property only (never treat quality_variant or variant as color)
   if (product.color) addColor(product.color);
   if (product.colour) addColor(product.colour);
 
@@ -1134,10 +1131,10 @@ const SaleItemRow = React.memo(function SaleItemRow({
           />
         </div>
 
-        {/* Color / Variant Selector Dropdown */}
-        <div className="w-[140px]">
-          <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
-          {availableColors.length > 0 ? (
+        {/* Color / Variant Selector Dropdown - only when selected product has colors */}
+        {Boolean(item.product_id) && availableColors.length > 0 && (
+          <div className="w-[140px]">
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">Color / Variant</label>
             <select
               value={currentVariantValue}
               onChange={(e) => {
@@ -1163,21 +1160,8 @@ const SaleItemRow = React.memo(function SaleItemRow({
                 <option value="__split__">⚡ Multi-Color Split</option>
               )}
             </select>
-          ) : (
-            <input
-              type="text"
-              placeholder="e.g. OLED / Black"
-              value={item.selected_colour || item.colour || (activeBreakdown[0]?.color) || ''}
-              onChange={(e) => {
-                const val = e.target.value;
-                if (updateSaleItemSingleColor) {
-                  updateSaleItemSingleColor(idx, val);
-                }
-              }}
-              className="w-full h-10 px-2.5 text-xs font-bold text-slate-800 bg-white border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none"
-            />
-          )}
-        </div>
+          </div>
+        )}
 
         {/* Price Tier */}
         <div className="w-[115px]">

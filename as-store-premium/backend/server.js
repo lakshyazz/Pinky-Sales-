@@ -3331,32 +3331,36 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
     where.push('(c.created_by IS NULL OR c.created_by = ?)');
     params.push(req.user.id);
   }
-  const pendingSql = `(
-    GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
-      (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
-       WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
-    )))
-    + COALESCE(SUM(s.pending_amount), 0)
-    - COALESCE(c.advance_balance, 0)
+  const netBalanceSql = `(
+    COALESCE(c.opening_balance, 0)
+    + COALESCE((SELECT SUM(COALESCE(NULLIF(s2.current_invoice_total, 0), s2.total_amount)) FROM sales s2 WHERE s2.customer_id = c.id), 0)
+    - COALESCE((SELECT SUM(pm.amount) FROM payments pm WHERE pm.customer_id = c.id AND pm.reversed_at IS NULL AND COALESCE(pm.payment_mode, '') != 'credit_note'), 0)
+    - COALESCE((SELECT SUM(cn.amount) FROM credit_notes cn WHERE cn.customer_id = c.id AND cn.status != 'cancelled'), 0)
   )`;
-  const having = [];
-  if (req.query.status === 'pending') having.push(`${pendingSql} > 0`);
-  if (req.query.status === 'paid') having.push(`${pendingSql} = 0`);
+  const pendingSql = `GREATEST(0, ${netBalanceSql})`;
+  const advanceSql = `GREATEST(0, -1 * ${netBalanceSql})`;
+
+  if (req.query.status === 'pending') {
+    where.push(`${pendingSql} > 0`);
+  } else if (req.query.status === 'paid') {
+    where.push(`${pendingSql} = 0`);
+  }
   const baseSql = `
     FROM customers c
-    LEFT JOIN sales s ON s.customer_id = c.id AND s.pending_amount > 0
     LEFT JOIN shops sh ON sh.id = c.shop_id
     WHERE ${where.join(' AND ')}
-    GROUP BY c.id, sh.id
-    ${having.length ? `HAVING ${having.join(' AND ')}` : ''}
   `;
   const rows = await runPaginatedList({
     dataSql: `
-    SELECT c.*, sh.name AS shop_name, ${pendingSql} AS pending, ${pendingSql} AS pending_amount
+    SELECT c.*, sh.name AS shop_name, 
+           ${pendingSql} AS pending, 
+           ${pendingSql} AS pending_amount,
+           ${advanceSql} AS advance_balance,
+           ${netBalanceSql} AS current_balance
     ${baseSql}
     ORDER BY c.created_at DESC
   `,
-    countSql: `SELECT COUNT(*) AS total FROM (SELECT c.id ${baseSql}) counted`,
+    countSql: `SELECT COUNT(*) AS total ${baseSql}`,
     params,
     pagination,
     totalKey: 'totalCustomers',
@@ -4149,9 +4153,13 @@ app.get(['/api/sales/customers', '/sales/customers'], authenticateToken, require
           COUNT(DISTINCT sa.id) AS total_invoices,
           SUM(sa.total_amount) AS total_purchase_amount,
           SUM(sa.paid_amount) AS total_paid,
-          -- [FIX B3] Only add opening_balance for the customer's registered shop to prevent double-counting
-          -- across shops (MAX(opening_balance) was added once per shop group, inflating multi-shop totals).
-          (COALESCE(SUM(sa.pending_amount), 0) + COALESCE(MAX(CASE WHEN c.shop_id = sa.shop_id THEN c.opening_balance ELSE 0 END), 0)) AS total_pending,
+          -- Unified Dynamic Pending Balance: Opening Balance + Total Invoiced - Total Payments - Credit Notes
+          GREATEST(0, (
+            COALESCE(c.opening_balance, 0)
+            + COALESCE((SELECT SUM(COALESCE(NULLIF(s2.current_invoice_total, 0), s2.total_amount)) FROM sales s2 WHERE s2.customer_id = c.id), 0)
+            - COALESCE((SELECT SUM(pm2.amount) FROM payments pm2 WHERE pm2.customer_id = c.id AND pm2.reversed_at IS NULL AND COALESCE(pm2.payment_mode, '') != 'credit_note'), 0)
+            - COALESCE((SELECT SUM(cn2.amount) FROM credit_notes cn2 WHERE cn2.customer_id = c.id AND cn2.status != 'cancelled'), 0)
+          )) AS total_pending,
           MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) AS last_purchase_date
         ${baseSql}
         ORDER BY MAX(COALESCE(sa.invoice_date::TEXT, sa.sale_date::TEXT)) DESC, c.id DESC
@@ -4255,14 +4263,16 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
       ORDER BY sa.id DESC
     `, params);
 
+    const bal = await getCustomerTotalOutstanding(customerId, shopId);
     const openingBalance = money(customer.opening_balance || 0);
     const summary = {
       total_amount: invoices.reduce((sum, inv) => sum + money(inv.total_amount), 0),
       paid_amount: invoices.reduce((sum, inv) => sum + money(inv.paid_amount), 0),
-      pending_amount: money(
-        invoices.reduce((sum, inv) => sum + money(inv.pending_amount), 0) + openingBalance
-      ),
+      pending_amount: bal.total_outstanding,
+      current_balance: bal.current_balance,
+      advance_balance: bal.advance_balance,
       opening_balance: openingBalance,
+      remaining_opening_balance: bal.remaining_opening_balance,
     };
     res.json({ customer, invoices, sales: invoices, summary });
   } catch (error) {
@@ -6506,6 +6516,12 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     where.push('(sa.created_by IS NULL OR sa.created_by = ? OR c.created_by = ?)');
     params.push(req.user.id, req.user.id);
   }
+  const netBalanceSql = `(
+    COALESCE(c.opening_balance, 0)
+    + COALESCE((SELECT SUM(COALESCE(NULLIF(s2.current_invoice_total, 0), s2.total_amount)) FROM sales s2 WHERE s2.customer_id = c.id), 0)
+    - COALESCE((SELECT SUM(pm2.amount) FROM payments pm2 WHERE pm2.customer_id = c.id AND pm2.reversed_at IS NULL AND COALESCE(pm2.payment_mode, '') != 'credit_note'), 0)
+    - COALESCE((SELECT SUM(cn2.amount) FROM credit_notes cn2 WHERE cn2.customer_id = c.id AND cn2.status != 'cancelled'), 0)
+  )`;
   const groupOrderSql = "sa.due_date ASC NULLS LAST, sa.id ASC";
   const baseSql = `
     FROM customers c
@@ -6563,14 +6579,7 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
     ) pm ON pm.sale_id = sa.id
     WHERE ${where.join(' AND ')}
     GROUP BY c.id, c.name, c.mobile, c.address, c.shop_id, sh.id, sh.name, sh.area, sh.address, sh.phone
-    HAVING (
-      GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
-        (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
-         WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
-      )))
-      + COALESCE(SUM(sa.pending_amount), 0)
-      - COALESCE(c.advance_balance, 0)
-    ) > 0
+    HAVING (${netBalanceSql}) > 0
   `;
   const rows = await runPaginatedList({
     dataSql: `
@@ -6587,16 +6596,9 @@ app.get('/api/pending-payments', authenticateToken, requireShopStaff, async (req
       sh.phone AS shop_phone,
       COALESCE(SUM(sa.total_amount), 0) AS total_amount,
       COALESCE(SUM(sa.paid_amount), 0) AS paid_amount,
-      GREATEST(0, (
-        GREATEST(0, (COALESCE(c.opening_balance, 0) - COALESCE(
-          (SELECT SUM(pa.amount_applied) FROM payment_allocations pa 
-           WHERE pa.customer_id = c.id AND pa.allocation_type = 'opening_balance' AND pa.reversed_at IS NULL), 0
-        )))
-        + COALESCE(SUM(sa.pending_amount), 0)
-        - COALESCE(c.advance_balance, 0)
-      )) AS pending_amount,
+      GREATEST(0, ${netBalanceSql}) AS pending_amount,
       COALESCE(c.opening_balance, 0) AS opening_balance,
-      COALESCE(c.advance_balance, 0) AS advance_balance,
+      GREATEST(0, -1 * (${netBalanceSql})) AS advance_balance,
       (ARRAY_AGG(sa.due_date ORDER BY ${groupOrderSql}) FILTER (WHERE sa.id IS NOT NULL))[1] AS due_date,
       COALESCE(JSON_AGG(JSON_BUILD_OBJECT(
         'id', sa.id,
