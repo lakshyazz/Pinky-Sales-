@@ -1376,6 +1376,13 @@ export const formatWhatsAppMessage = ({
       msg += `💼 *Available Store Credit / Advance:* Rs. ${formatMoney(remainingCredit)}\n`;
     }
 
+    const publicRef = inv.public_token || inv.public_url || inv.invoice_number || inv.id;
+    const origin = typeof window !== 'undefined' && window.location ? window.location.origin : '';
+    const publicLink = publicRef && origin ? `${origin}/view/invoice/${encodeURIComponent(inv.public_token || inv.id)}` : '';
+    if (publicLink) {
+      msg += `\n🔗 *View Digital Invoice Online:*\n${publicLink}\n`;
+    }
+
     if (type === 'invoice_reminder_only' || type === 'reminder_only') {
       msg += `\nKindly arrange payment for any pending dues at your earliest convenience.\n\nThank you for your business!\n*${shopName}*\n${shopContact}`;
     } else {

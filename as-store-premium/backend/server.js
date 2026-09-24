@@ -2653,6 +2653,156 @@ app.get(['/api/products/:id', '/products/:id'], authenticateToken, async (req, r
   }
 });
 
+app.put(['/api/products/:id', '/products/:id'], authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const productId = Number(req.params.id);
+    if (!productId || isNaN(productId)) {
+      return res.status(400).json({ error: 'Valid product ID is required.' });
+    }
+
+    const existingProduct = await getRecord('SELECT * FROM products WHERE id = ?', [productId]);
+    if (!existingProduct) {
+      return res.status(404).json({ error: 'Product not found.' });
+    }
+
+    if (isShopStaffRole(req.user.role) && existingProduct.shop_id && Number(existingProduct.shop_id) !== Number(req.user.shop_id)) {
+      return res.status(403).json({ error: 'You do not have permission to edit products from another branch.' });
+    }
+
+    const {
+      name, short_name, full_model_list, brand, category, model, official_price,
+      purchase_price, sale_price, wholesale_price, retail_price, description, colours,
+      manufacturing_brand_id, supplier_id, part_category, quality_variant,
+      image_url, image_urls, stock_status, set_stock_zero
+    } = req.body;
+
+    const parsePrice = (val, fallback = null) => {
+      if (val === '' || val === null || val === undefined) return fallback;
+      const num = Number(val);
+      return isNaN(num) ? fallback : num;
+    };
+
+    let compatibilityModels = full_model_list !== undefined ? String(full_model_list).trim() : (name !== undefined ? String(name).trim() : existingProduct.full_model_list);
+    let displayName = short_name !== undefined ? String(short_name).trim() : existingProduct.short_name;
+    const cleanModel = model !== undefined
+      ? String(model).trim()
+      : (full_model_list ? String(full_model_list).split(',')[0].trim() : existingProduct.model);
+
+    const effectiveBrand = brand !== undefined ? (String(brand).trim() || 'Generic') : existingProduct.brand;
+    const effectiveCategory = (part_category || category) !== undefined ? (String(part_category || category).trim() || 'Display') : (existingProduct.part_category || existingProduct.category);
+
+    const salePriceNum = sale_price !== undefined ? parsePrice(sale_price, 0) : existingProduct.sale_price;
+    const purchasePriceNum = purchase_price !== undefined ? parsePrice(purchase_price, null) : existingProduct.purchase_price;
+    const wholesalePriceNum = wholesale_price !== undefined ? parsePrice(wholesale_price, null) : existingProduct.wholesale_price;
+    const retailPriceNum = retail_price !== undefined ? parsePrice(retail_price, salePriceNum) : salePriceNum;
+    const officialPriceNum = official_price !== undefined ? parsePrice(official_price, salePriceNum) : salePriceNum;
+
+    // References
+    const categoryRef = await ensureReference('categories', effectiveCategory);
+    const brandRef = await ensureReference('brands', effectiveBrand);
+    const partCategoryRef = await ensureReference('part_categories', effectiveCategory);
+    const productVariantRef = quality_variant !== undefined ? (quality_variant ? await ensureReference('product_variants', quality_variant) : null) : null;
+
+    const companyBrandId = brandRef ? brandRef.id : (existingProduct.company_brand_id || null);
+    const effectivePartCategoryId = partCategoryRef ? partCategoryRef.id : (existingProduct.part_category_id || null);
+    const effectiveProductVariantId = quality_variant !== undefined ? (productVariantRef ? productVariantRef.id : null) : existingProduct.product_variant_id;
+    const effectiveMfgBrandId = manufacturing_brand_id !== undefined ? (manufacturing_brand_id ? Number(manufacturing_brand_id) : null) : existingProduct.manufacturing_brand_id;
+    const effectiveSupplierId = supplier_id !== undefined ? (supplier_id ? Number(supplier_id) : null) : existingProduct.supplier_id;
+
+    const canonicalBrand = brandRef ? brandRef.name : effectiveBrand;
+    const canonicalPartCategory = partCategoryRef ? partCategoryRef.name : effectiveCategory;
+    const canonicalQualityVariant = quality_variant !== undefined ? (productVariantRef ? productVariantRef.name : (quality_variant ? String(quality_variant).trim() : null)) : existingProduct.quality_variant;
+
+    let canonicalColours = existingProduct.colours;
+    if (colours !== undefined) {
+      canonicalColours = [];
+      for (const colour of normalizeColours(colours)) {
+        const colRef = await ensureReference('colours', colour);
+        if (colRef) canonicalColours.push(colRef.name);
+      }
+    }
+
+    const targetImageUrl = image_url !== undefined ? (image_url ? String(image_url).trim() : null) : existingProduct.image_url;
+    const targetImageUrls = image_urls !== undefined
+      ? (typeof image_urls === 'string' ? image_urls : JSON.stringify(image_urls))
+      : existingProduct.image_urls;
+
+    await runTransaction(async (tx) => {
+      await tx.runQuery(
+        `UPDATE products SET
+          name = ?, short_name = ?, full_model_list = ?, brand = ?, category = ?, part_category = ?, quality_variant = ?, model = ?,
+          official_price = ?, purchase_price = ?, sale_price = ?, wholesale_price = ?, retail_price = ?,
+          description = ?, colours = ?,
+          company_brand_id = ?, manufacturing_brand_id = ?, supplier_id = ?, part_category_id = ?, product_variant_id = ?,
+          image_url = ?, image_urls = ?::jsonb, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [
+          compatibilityModels, displayName, compatibilityModels, canonicalBrand, canonicalPartCategory, canonicalPartCategory, canonicalQualityVariant, cleanModel,
+          officialPriceNum, purchasePriceNum, salePriceNum, wholesalePriceNum, retailPriceNum,
+          description !== undefined ? String(description || '') : existingProduct.description, canonicalColours,
+          companyBrandId, effectiveMfgBrandId, effectiveSupplierId, effectivePartCategoryId, effectiveProductVariantId,
+          targetImageUrl, targetImageUrls, productId
+        ]
+      );
+
+      // Synchronize retail and wholesale prices on active inventory batches
+      if (salePriceNum !== null && !isNaN(salePriceNum)) {
+        await tx.runQuery(
+          'UPDATE inventory_batches SET retail_price = ?, official_price = ? WHERE product_id = ? AND quantity_remaining > 0',
+          [salePriceNum, salePriceNum, productId]
+        );
+      }
+      if (wholesalePriceNum !== null && !isNaN(wholesalePriceNum)) {
+        await tx.runQuery(
+          'UPDATE inventory_batches SET wholesale_price = ? WHERE product_id = ? AND quantity_remaining > 0',
+          [wholesalePriceNum, productId]
+        );
+      }
+      if (purchasePriceNum !== null && !isNaN(purchasePriceNum) && req.user.role === 'superadmin') {
+        await tx.runQuery(
+          'UPDATE inventory_batches SET purchase_price = ? WHERE product_id = ? AND quantity_remaining > 0',
+          [purchasePriceNum, productId]
+        );
+      }
+
+      // Handle stock status override if set_stock_zero or stock_status is specified
+      if (set_stock_zero || stock_status === 'no_stock') {
+        const targetShopId = req.user.shop_id || (await getWarehouse())?.id;
+        if (targetShopId) {
+          await tx.runQuery('UPDATE inventory_batches SET quantity_remaining = 0 WHERE product_id = ? AND shop_id = ?', [productId, targetShopId]);
+          await tx.runQuery('UPDATE stock SET quantity = 0 WHERE product_id = ? AND shop_id = ?', [productId, targetShopId]);
+        }
+      }
+    });
+
+    invalidateCache('reference-data', 'catalog', 'products');
+
+    const updatedProduct = await getRecord(`
+      SELECT p.*, b.name AS brand_name, mb.name AS manufacturing_brand_name, s.name AS supplier_name,
+        pc.name AS part_category_name, pv.name AS product_variant_name
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.company_brand_id
+      LEFT JOIN manufacturing_brands mb ON mb.id = p.manufacturing_brand_id
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+      LEFT JOIN part_categories pc ON pc.id = p.part_category_id
+      LEFT JOIN product_variants pv ON pv.id = p.product_variant_id
+      WHERE p.id = ?
+    `, [productId]);
+
+    await audit(req, 'Updated product', 'product', productId, `${displayName} (${canonicalBrand})`);
+
+    res.json({
+      success: true,
+      message: 'Product updated successfully',
+      data: updatedProduct,
+      ...updatedProduct,
+    });
+  } catch (error) {
+    console.error('Error in PUT /api/products/:id:', error);
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update product' });
+  }
+});
+
 app.delete('/api/products/:id', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const product = await getRecord('SELECT id, name, short_name, image_url, image_urls FROM products WHERE id = ?', [req.params.id]);
