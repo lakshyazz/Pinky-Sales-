@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "deploy": "npm run migrate && npm start",
-    "dev": "node --watch server.js",
+    "dev": "node --watch-path=server.js --watch-path=database.js --watch-path=ledgerEngine.js --watch-path=accountingEngine.js server.js",
     "migrate": "node migrate.js",
     "seed:mock-stock": "node scripts/seed-mock-stock.js"
   },

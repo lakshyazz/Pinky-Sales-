@@ -7610,6 +7610,7 @@ function App() {
                 setGlobalToast={showToast}
                 suppliers={data.reference?.suppliers || []}
                 products={data.products || []}
+                reference={data.reference}
                 shopId={shopId || (role === 'shopkeeper' ? session?.shop_id : (selectedShop || data.warehouse?.id || data.shops?.[0]?.id))}
                 shops={data.shops || []}
                 warehouse={data.warehouse}
@@ -9162,10 +9163,10 @@ function App() {
               <section className="space">
                 <div className="catalog-toolbar panel">
                   <div className="searchbox"><Search size={18} /><input placeholder="Search brand, model, category, or description..." value={catalogFilters.search} onChange={(e) => setCatalogFilters({ ...catalogFilters, search: e.target.value })} /></div>
-                  <select value={catalogFilters.brand} onChange={(e) => setCatalogFilters({ ...catalogFilters, brand: e.target.value })}><option value="">All brands</option>{data.reference.brands.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select>
-                  <select value={catalogFilters.category} onChange={(e) => setCatalogFilters({ ...catalogFilters, category: e.target.value })}><option value="">All categories</option>{data.reference.categories.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select>
-                  <select value={catalogFilters.colour} onChange={(e) => setCatalogFilters({ ...catalogFilters, colour: e.target.value })}><option value="">All colours</option>{data.reference.colours.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select>
-                  <select value={catalogFilters.shopId} onChange={(e) => setCatalogFilters({ ...catalogFilters, shopId: e.target.value })}><option value="">All shops</option>{data.shops.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select>
+                  <select value={catalogFilters.brand} onChange={(e) => setCatalogFilters({ ...catalogFilters, brand: e.target.value })}><option value="">All brands</option>{data.reference.brands.map((item, idx) => <option key={`${item.id ?? ''}_${idx}`} value={item.name}>{item.name}</option>)}</select>
+                  <select value={catalogFilters.category} onChange={(e) => setCatalogFilters({ ...catalogFilters, category: e.target.value })}><option value="">All categories</option>{data.reference.categories.map((item, idx) => <option key={`${item.id ?? ''}_${idx}`} value={item.name}>{item.name}</option>)}</select>
+                  <select value={catalogFilters.colour} onChange={(e) => setCatalogFilters({ ...catalogFilters, colour: e.target.value })}><option value="">All colours</option>{data.reference.colours.map((item, idx) => <option key={`${item.id ?? ''}_${idx}`} value={item.name}>{item.name}</option>)}</select>
+                  <select value={catalogFilters.shopId} onChange={(e) => setCatalogFilters({ ...catalogFilters, shopId: e.target.value })}><option value="">All shops</option>{data.shops.map((s, idx) => <option key={`${s.id ?? ''}_${idx}`} value={s.id}>{s.name}</option>)}</select>
                   <button className="primary" onClick={() => loadTab('catalog')}><Search size={17} /> Search</button>
                 </div>
                 <CardGrid className="catalog-grid" items={visibleCatalog} render={(product) => (
@@ -10520,7 +10521,7 @@ function Select({ label, value, onChange, options = [], placeholder = 'Select', 
       <span className="field-label-text">{label}</span>
       <select {...selectProps} value={value} onChange={(e) => onChange(e.target.value)}>
         {!hasEmptyOption && placeholder && <option value="">{placeholder}</option>}
-        {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        {options.map(([id, name], idx) => <option key={`${id ?? ''}_${idx}`} value={id}>{name}</option>)}
       </select>
     </label>
   );

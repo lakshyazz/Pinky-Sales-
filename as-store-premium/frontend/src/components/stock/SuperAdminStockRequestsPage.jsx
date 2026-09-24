@@ -137,7 +137,7 @@ export default function SuperAdminStockRequestsPage({
       setIsRejecting(true);
       const res = await authedFetch(`/admin/stock-requests/${activeRequest.id}/reject`, {
         method: 'PUT',
-        body: JSON.stringify({ rejection_reason: rejectionReason }),
+        body: JSON.stringify({ rejection_reason: rejectionReason.trim() || 'Declined by Admin' }),
       });
       showToast(res.message || 'Stock requisition marked as rejected');
       setRejectionModalOpen(false);
@@ -438,7 +438,11 @@ export default function SuperAdminStockRequestsPage({
               </div>
               <button
                 type="button"
-                onClick={() => setActiveRequest(null)}
+                onClick={() => {
+                  setActiveRequest(null);
+                  setRejectionModalOpen(false);
+                  setRejectionReason('');
+                }}
                 className="w-8 h-8 rounded-full bg-slate-200/80 hover:bg-slate-300 flex items-center justify-center text-slate-700 cursor-pointer"
               >
                 <X size={16} />
@@ -578,63 +582,71 @@ export default function SuperAdminStockRequestsPage({
               </div>
 
               {['pending', 'open'].includes(activeRequest.status) && (
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setRejectionModalOpen(true)}
-                    className="px-4 py-2.5 rounded-2xl bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 font-bold text-xs cursor-pointer transition-all"
-                  >
-                    Reject Requisition
-                  </button>
+                <div className="w-full sm:w-auto">
+                  {rejectionModalOpen ? (
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 bg-rose-50/90 border border-rose-200 p-2.5 rounded-2xl w-full">
+                      <div className="flex-1 min-w-[280px]">
+                        <input
+                          type="text"
+                          placeholder="Reason for declining (optional, e.g. Reserved stock)..."
+                          value={rejectionReason}
+                          onChange={(e) => setRejectionReason(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRejectRequest();
+                            if (e.key === 'Escape') {
+                              setRejectionModalOpen(false);
+                              setRejectionReason('');
+                            }
+                          }}
+                          className="w-full px-3 py-2 text-xs rounded-xl border border-rose-300 bg-white text-slate-900 focus:outline-hidden focus:border-rose-600 font-medium"
+                          autoFocus
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRejectionModalOpen(false);
+                            setRejectionReason('');
+                          }}
+                          className="px-3.5 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-white border border-slate-200 cursor-pointer transition-colors"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isRejecting}
+                          onClick={handleRejectRequest}
+                          className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs flex items-center gap-1.5 cursor-pointer shadow-md shadow-rose-600/20 disabled:opacity-50 transition-all"
+                        >
+                          <XCircle size={15} />
+                          {isRejecting ? 'Rejecting...' : 'Confirm Reject'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2.5">
+                      <button
+                        type="button"
+                        onClick={() => setRejectionModalOpen(true)}
+                        className="px-4 py-2.5 rounded-2xl bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 font-bold text-xs cursor-pointer transition-all"
+                      >
+                        Reject Requisition
+                      </button>
 
-                  <button
-                    type="button"
-                    disabled={isApproving}
-                    onClick={() => handleApproveRequest(activeRequest)}
-                    className="px-5 py-2.5 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs flex items-center gap-2 cursor-pointer shadow-lg shadow-teal-600/20 disabled:opacity-50 transition-all"
-                  >
-                    <Check size={16} />
-                    {isApproving ? 'Transferring Stock...' : 'Approve & Dispatch Stock'}
-                  </button>
+                      <button
+                        type="button"
+                        disabled={isApproving}
+                        onClick={() => handleApproveRequest(activeRequest)}
+                        className="px-5 py-2.5 rounded-2xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs flex items-center gap-2 cursor-pointer shadow-lg shadow-teal-600/20 disabled:opacity-50 transition-all"
+                      >
+                        <Check size={16} />
+                        {isApproving ? 'Transferring Stock...' : 'Approve & Dispatch Stock'}
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Reject Reason Modal */}
-      {rejectionModalOpen && (
-        <div className="fixed inset-0 z-60 flex items-center justify-center p-4">
-          <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs" onClick={() => setRejectionModalOpen(false)} />
-          <div className="relative w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl z-10 space-y-4">
-            <h3 className="text-base font-black text-slate-900">Decline Requisition</h3>
-            <p className="text-xs text-slate-500">
-              Please enter the reason for rejecting this stock request. The branch manager will see this explanation.
-            </p>
-            <textarea
-              rows={3}
-              placeholder="e.g. Stock reserved for upcoming flagship branch opening..."
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              className="w-full p-3 rounded-xl border border-slate-200 text-xs font-medium focus:border-rose-500 focus:outline-hidden bg-slate-50"
-            />
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setRejectionModalOpen(false)}
-                className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isRejecting}
-                onClick={handleRejectRequest}
-                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-black cursor-pointer"
-              >
-                {isRejecting ? 'Rejecting...' : 'Confirm Rejection'}
-              </button>
             </div>
           </div>
         </div>

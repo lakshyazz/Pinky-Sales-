@@ -1,6 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, Search, X, Check, Filter, Package, AlertTriangle, ChevronDown } from 'lucide-react';
+import { Layers, Search, X, Check, Filter, Package, AlertTriangle, ChevronDown, Loader2 } from 'lucide-react';
 
 const money = (v) => Math.round(Number(v || 0) * 100) / 100;
 const currency = (v) => `₹${money(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -26,44 +26,128 @@ export default function BatchProductPickerModal({
   onClose,
   products = [],
   onAddSelectedLines,
+  api,
+  shopId,
+  allBrands = [],
+  allCategories = [],
 }) {
   const [search, setSearch] = useState('');
   const [selectedBrand, setSelectedBrand] = useState('all');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [catalogProducts, setCatalogProducts] = useState(products);
+  const [isLoading, setIsLoading] = useState(false);
+  const [visibleLimit, setVisibleLimit] = useState(100);
 
   // Map of selected items: productId -> { selected: boolean, colour: string, qty: number, price: number }
   const [rowStates, setRowStates] = useState({});
 
-  // Derive unique brands and categories for filtering
+  // Sync if products prop changes with a larger array
+  useEffect(() => {
+    if (Array.isArray(products) && products.length > 0) {
+      setCatalogProducts((prev) => (prev.length >= products.length ? prev : products));
+    }
+  }, [products]);
+
+  // Load full product catalog (5000 limit) so all brands and items are available
+  useEffect(() => {
+    if (!isOpen || !api) return;
+    let isMounted = true;
+    const fetchCatalog = async () => {
+      try {
+        setIsLoading(true);
+        const params = new URLSearchParams({ limit: '5000' });
+        if (shopId) params.set('shop_id', String(shopId));
+        const res = await api(`/products?${params.toString()}`);
+        const items = Array.isArray(res) ? res : (res?.data || []);
+        if (isMounted && Array.isArray(items) && items.length > 0) {
+          setCatalogProducts(items);
+        }
+      } catch (err) {
+        console.warn('[BatchProductPickerModal] Failed to load catalog products:', err);
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+    fetchCatalog();
+    return () => { isMounted = false; };
+  }, [isOpen, api, shopId]);
+
+  // Reset pagination limit when search or filters change
+  useEffect(() => {
+    setVisibleLimit(100);
+  }, [search, selectedBrand, selectedCategory]);
+
+  // Derive unique brands combining allBrands (master) + catalog products
   const brands = useMemo(() => {
-    const set = new Set();
-    products.forEach((p) => {
-      if (p.brand) set.add(p.brand.trim());
+    const map = new Map();
+    if (Array.isArray(allBrands)) {
+      allBrands.forEach((b) => {
+        const name = typeof b === 'string' ? b : (b?.name || b?.brand_name);
+        if (name && String(name).trim()) {
+          const trimmed = String(name).trim();
+          const lower = trimmed.toLowerCase();
+          if (!map.has(lower)) map.set(lower, trimmed);
+        }
+      });
+    }
+    catalogProducts.forEach((p) => {
+      if (p.brand && String(p.brand).trim()) {
+        const trimmed = String(p.brand).trim();
+        const lower = trimmed.toLowerCase();
+        if (!map.has(lower)) map.set(lower, trimmed);
+      }
     });
-    return Array.from(set).sort();
-  }, [products]);
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [allBrands, catalogProducts]);
 
+  // Derive unique categories combining allCategories (master) + catalog products
   const categories = useMemo(() => {
-    const set = new Set();
-    products.forEach((p) => {
-      if (p.category) set.add(p.category.trim());
+    const map = new Map();
+    if (Array.isArray(allCategories)) {
+      allCategories.forEach((c) => {
+        const name = typeof c === 'string' ? c : (c?.name || c?.category_name);
+        if (name && String(name).trim()) {
+          const trimmed = String(name).trim();
+          const lower = trimmed.toLowerCase();
+          if (!map.has(lower)) map.set(lower, trimmed);
+        }
+      });
+    }
+    catalogProducts.forEach((p) => {
+      if (p.category && String(p.category).trim()) {
+        const trimmed = String(p.category).trim();
+        const lower = trimmed.toLowerCase();
+        if (!map.has(lower)) map.set(lower, trimmed);
+      }
     });
-    return Array.from(set).sort();
-  }, [products]);
+    return Array.from(map.values()).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [allCategories, catalogProducts]);
 
-  // Filtered products list
+  // Filtered products list with case-insensitive comparisons
   const filteredProducts = useMemo(() => {
-    return products.filter((p) => {
-      if (selectedBrand !== 'all' && p.brand !== selectedBrand) return false;
-      if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
+    return catalogProducts.filter((p) => {
+      if (selectedBrand !== 'all') {
+        const pb = String(p.brand || '').trim().toLowerCase();
+        const sb = String(selectedBrand).trim().toLowerCase();
+        if (pb !== sb) return false;
+      }
+      if (selectedCategory !== 'all') {
+        const pc = String(p.category || '').trim().toLowerCase();
+        const sc = String(selectedCategory).trim().toLowerCase();
+        if (pc !== sc) return false;
+      }
       if (search.trim()) {
         const q = search.toLowerCase();
-        const str = `${p.short_name || ''} ${p.name || ''} ${p.brand || ''} ${p.category || ''} ${p.model || ''} ${p.full_model_list || ''}`.toLowerCase();
+        const str = `${p.short_name || ''} ${p.name || ''} ${p.brand || ''} ${p.category || ''} ${p.model || ''} ${p.full_model_list || ''} ${p.sku || ''} ${p.code || ''}`.toLowerCase();
         if (!str.includes(q)) return false;
       }
       return true;
     });
-  }, [products, selectedBrand, selectedCategory, search]);
+  }, [catalogProducts, selectedBrand, selectedCategory, search]);
+
+  const visibleProducts = useMemo(() => {
+    return filteredProducts.slice(0, visibleLimit);
+  }, [filteredProducts, visibleLimit]);
 
   const getProductColors = (product) => {
     let list = [];
@@ -129,12 +213,12 @@ export default function BatchProductPickerModal({
     });
   };
 
-  // Selected summaries - include any checked item, even if unit cost is currently 0.00
+  // Selected summaries - include any checked item across all catalog products
   const selectedItems = useMemo(() => {
     const result = [];
     for (const [productId, state] of Object.entries(rowStates)) {
       if (state.selected) {
-        const prod = products.find((p) => String(p.id) === String(productId));
+        const prod = catalogProducts.find((p) => String(p.id) === String(productId));
         if (prod) {
           const qty = Number(state.qty) > 0 ? Number(state.qty) : 1;
           const rawPrice = state.price;
@@ -154,7 +238,7 @@ export default function BatchProductPickerModal({
       }
     }
     return result;
-  }, [rowStates, products]);
+  }, [rowStates, catalogProducts]);
 
   const totalSelectedCount = selectedItems.length;
   const totalSelectedQty = selectedItems.reduce((sum, item) => sum + item.qty, 0);
@@ -197,8 +281,18 @@ export default function BatchProductPickerModal({
                 <Layers size={18} />
               </div>
               <div>
-                <h3 className="text-sm font-bold text-zinc-900 dark:text-white">Browse &amp; Multi-Add Catalog</h3>
-                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal">Batch select multiple products &amp; variants into your purchase bill</p>
+                <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                  <span>Browse &amp; Multi-Add Catalog</span>
+                  {isLoading && (
+                    <span className="inline-flex items-center gap-1 text-[11px] font-normal text-violet-600 dark:text-violet-400">
+                      <Loader2 size={12} className="animate-spin" />
+                      <span>Loading all brands...</span>
+                    </span>
+                  )}
+                </h3>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal">
+                  Batch select multiple products &amp; variants into your purchase bill ({catalogProducts.length} items available)
+                </p>
               </div>
             </div>
             <button
@@ -219,8 +313,11 @@ export default function BatchProductPickerModal({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search products by model, brand, category, or code..."
-                className="w-full pl-9 pr-3 py-2 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs font-medium text-zinc-900 dark:text-zinc-100 bg-zinc-50/50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-900 focus:border-violet-500 outline-hidden"
+                className="w-full pl-9 pr-8 py-2 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs font-medium text-zinc-900 dark:text-zinc-100 bg-zinc-50/50 dark:bg-zinc-900 focus:bg-white dark:focus:bg-zinc-900 focus:border-violet-500 outline-hidden"
               />
+              {isLoading && (
+                <Loader2 size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-violet-500 animate-spin" />
+              )}
             </div>
 
             <div className="sm:col-span-3 relative">
@@ -287,7 +384,7 @@ export default function BatchProductPickerModal({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 dark:divide-zinc-850">
-                    {filteredProducts.map((p) => {
+                    {visibleProducts.map((p) => {
                       const row = getRowState(p);
                       const colors = getProductColors(p);
                       const sellingPrice = Number(p.sale_price || 0);
@@ -430,6 +527,28 @@ export default function BatchProductPickerModal({
                     })}
                   </tbody>
                 </table>
+
+                {filteredProducts.length > visibleProducts.length && (
+                  <div className="p-3 text-center bg-zinc-50 dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 flex flex-wrap items-center justify-center gap-3 text-xs">
+                    <span className="text-zinc-500 font-medium">
+                      Showing {visibleProducts.length} of {filteredProducts.length} products
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setVisibleLimit((v) => v + 100)}
+                      className="px-3 py-1 font-semibold text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-950/60 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Load More (+100)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setVisibleLimit(filteredProducts.length)}
+                      className="px-3 py-1 font-semibold text-zinc-700 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Show All ({filteredProducts.length})
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

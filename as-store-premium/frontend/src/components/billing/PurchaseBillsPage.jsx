@@ -108,6 +108,7 @@ export default function PurchaseBillsPage({
   setGlobalToast,
   suppliers = [],
   products = [],
+  reference = null,
   shopId: propShopId,
   shops = [],
   warehouse = null,
@@ -356,6 +357,9 @@ export default function PurchaseBillsPage({
             billToEdit={editingBill}
             suppliers={suppliers}
             products={products}
+            reference={reference}
+            brands={reference?.brands || []}
+            categories={reference?.categories || []}
             shopId={editingBill?.shop_id || effectiveShopId}
             shops={shops}
             warehouse={warehouse}

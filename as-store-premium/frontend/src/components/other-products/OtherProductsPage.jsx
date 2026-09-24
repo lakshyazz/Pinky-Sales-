@@ -18,7 +18,7 @@ function Select({ label, value, onChange, options, placeholder = 'Select', class
       <span className="field-label-text">{label}</span>
       <select {...selectProps} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">{placeholder}</option>
-        {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+        {options.map(([id, name], idx) => <option key={`${id ?? ''}_${idx}`} value={id}>{name}</option>)}
       </select>
     </label>
   );

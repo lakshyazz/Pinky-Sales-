@@ -401,7 +401,7 @@ function SearchableCombobox({
 
                     return (
                       <div
-                        key={option.id}
+                        key={`${option.id}_${idx}`}
                         onClick={() => handleSelect(option.id)}
                         onMouseEnter={() => setHighlightedIndex(idx)}
                         className={`px-3 py-2 text-xs rounded-xl mx-1 transition-colors flex items-center justify-between gap-2.5 cursor-pointer ${

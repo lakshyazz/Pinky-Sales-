@@ -61,6 +61,9 @@ export default function NewPurchaseBillModal({
   onSaved,
   suppliers: initialSuppliers = [],
   products: initialProducts = [],
+  reference = null,
+  brands = [],
+  categories = [],
   shopId: initialShopId,
   shops = [],
   warehouse = null,
@@ -104,6 +107,27 @@ export default function NewPurchaseBillModal({
   useEffect(() => {
     setProductsList(initialProducts);
   }, [initialProducts]);
+
+  // Load full product catalog (5000 limit) so all brands and models are accessible
+  useEffect(() => {
+    if (!isOpen || !api) return;
+    let isMounted = true;
+    (async () => {
+      try {
+        const queryParams = new URLSearchParams({ limit: '5000' });
+        const targetShopId = selectedShopId || initialShopId;
+        if (targetShopId) queryParams.set('shop_id', String(targetShopId));
+        const res = await api(`/products?${queryParams.toString()}`);
+        const items = Array.isArray(res) ? res : (res?.data || []);
+        if (isMounted && Array.isArray(items) && items.length > 0) {
+          setProductsList(items);
+        }
+      } catch (err) {
+        console.warn('[NewPurchaseBillModal] Failed to load full products catalog:', err);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, [isOpen, api, selectedShopId, initialShopId]);
 
   // Form fields
   const [supplierId, setSupplierId] = useState('');
@@ -1215,8 +1239,8 @@ export default function NewPurchaseBillModal({
           onClose={() => setShowProductModal(false)}
           onProductCreated={handleProductCreated}
           api={api}
-          categories={Array.from(new Set(productsList.map((p) => p.category).filter(Boolean))).map((c) => ({ name: c }))}
-          brands={Array.from(new Set(productsList.map((p) => p.brand).filter(Boolean))).map((b) => ({ name: b }))}
+          categories={categories?.length ? categories : (reference?.categories || Array.from(new Set(productsList.map((p) => p.category).filter(Boolean))).map((c) => ({ name: c })))}
+          brands={brands?.length ? brands : (reference?.brands || Array.from(new Set(productsList.map((p) => p.brand).filter(Boolean))).map((b) => ({ name: b })))}
           setGlobalToast={setGlobalToast}
         />
       )}
@@ -1226,6 +1250,10 @@ export default function NewPurchaseBillModal({
           isOpen={showBatchPickerModal}
           onClose={() => setShowBatchPickerModal(false)}
           products={productsList}
+          api={api}
+          shopId={selectedShopId || initialShopId}
+          allBrands={brands?.length ? brands : (reference?.brands || [])}
+          allCategories={categories?.length ? categories : (reference?.categories || [])}
           onAddSelectedLines={handleAddBatchLines}
         />
       )}

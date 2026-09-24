@@ -6496,7 +6496,16 @@ app.post(['/api/stock-requests', '/api/requisitions', '/api/stock-orders'], auth
   }
 });
 
-app.put(['/api/admin/stock-requests/:id/approve', '/api/admin/requisitions/:id/approve'], authenticateToken, requireSuperAdmin, async (req, res) => {
+app.put([
+  '/api/admin/stock-requests/:id/approve',
+  '/api/admin/requisitions/:id/approve',
+  '/admin/stock-requests/:id/approve',
+  '/admin/requisitions/:id/approve',
+  '/api/stock-requests/:id/approve',
+  '/api/requisitions/:id/approve',
+  '/stock-requests/:id/approve',
+  '/requisitions/:id/approve'
+], authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const requestId = Number(req.params.id);
     const warehouse = await getWarehouse();
@@ -6633,7 +6642,16 @@ app.put(['/api/admin/stock-requests/:id/approve', '/api/admin/requisitions/:id/a
   }
 });
 
-app.put(['/api/admin/stock-requests/:id/reject', '/api/admin/requisitions/:id/reject'], authenticateToken, requireSuperAdmin, async (req, res) => {
+app.put([
+  '/api/admin/stock-requests/:id/reject',
+  '/api/admin/requisitions/:id/reject',
+  '/admin/stock-requests/:id/reject',
+  '/admin/requisitions/:id/reject',
+  '/api/stock-requests/:id/reject',
+  '/api/requisitions/:id/reject',
+  '/stock-requests/:id/reject',
+  '/requisitions/:id/reject'
+], authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const requestId = Number(req.params.id);
     const { rejection_reason = '' } = req.body;
