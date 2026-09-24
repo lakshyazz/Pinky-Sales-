@@ -5,6 +5,7 @@ import ProductThumbnail from './ProductThumbnail';
 
 function SearchableCombobox({
   id,
+  label,
   value,
   onChange,
   options = [],
@@ -18,6 +19,7 @@ function SearchableCombobox({
   compact = false,
   autoOpen = false,
   dropdownWidth = '',
+  onSearch,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -249,12 +251,35 @@ function SearchableCombobox({
         type="button"
         disabled={disabled}
         onClick={() => !disabled && setIsOpen(!isOpen)}
-        className={`w-full min-h-[40px] h-10 px-3 py-1.5 bg-white dark:bg-slate-850 border rounded-xl flex items-center justify-between gap-2 text-left transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+        className={`w-full relative text-left transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+          label
+            ? 'min-h-[50px] h-[50px] pt-4 pb-1 px-3.5 bg-white dark:bg-slate-850 border rounded-[10px] flex items-center justify-between gap-2 shadow-2xs hover:border-slate-400 dark:hover:border-slate-600'
+            : 'min-h-[40px] h-10 px-3 py-1.5 bg-white dark:bg-slate-850 border rounded-xl flex items-center justify-between gap-2 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600'
+        } ${
           isOpen
             ? 'border-teal-500 ring-2 ring-teal-500/20 shadow-xs'
-            : 'border-slate-200 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600 shadow-2xs'
+            : 'border-slate-200 dark:border-slate-700'
         }`}
       >
+        {label && (
+          <span
+            className="field-label-text"
+            style={{
+              position: 'absolute',
+              top: '5px',
+              left: '13px',
+              fontSize: '10px',
+              fontWeight: 850,
+              color: isOpen ? '#0d9488' : '#64748b',
+              textTransform: 'uppercase',
+              pointerEvents: 'none',
+              lineHeight: 1,
+              zIndex: 2,
+            }}
+          >
+            {label}
+          </span>
+        )}
         <div className="flex-1 truncate flex items-center gap-2">
           {selectedOption ? (
             <>
@@ -332,8 +357,10 @@ function SearchableCombobox({
                   type="text"
                   value={search}
                   onChange={(e) => {
-                    setSearch(e.target.value);
+                    const val = e.target.value;
+                    setSearch(val);
                     setHighlightedIndex(0);
+                    if (onSearch) onSearch(val);
                   }}
                   placeholder={searchPlaceholder}
                   style={{ paddingLeft: '34px', paddingRight: search ? '32px' : '10px', height: '34px' }}
@@ -344,6 +371,7 @@ function SearchableCombobox({
                     type="button"
                     onClick={() => {
                       setSearch('');
+                      if (onSearch) onSearch('');
                       if (searchInputRef.current) searchInputRef.current.focus();
                     }}
                     className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 cursor-pointer z-10"

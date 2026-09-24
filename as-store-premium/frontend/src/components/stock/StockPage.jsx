@@ -452,6 +452,158 @@ export default function StockPage({
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [modelPickerSearch, setModelPickerSearch] = useState('');
 
+  // Full catalog products pool for stock adjustment and model picker (overcomes per-page pagination limit)
+  const [catalogProducts, setCatalogProducts] = useState([]);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
+  const searchTimeoutRef = useRef(null);
+  const hasLoadedCatalogRef = useRef(false);
+
+  // Load all catalog products from server so that all models (700+ SKUs) are immediately selectable
+  useEffect(() => {
+    if (hasLoadedCatalogRef.current || !api) return;
+    hasLoadedCatalogRef.current = true;
+    let isMounted = true;
+    const loadFullCatalog = async () => {
+      try {
+        setIsCatalogLoading(true);
+        const res = await api('/products?limit=5000');
+        const items = Array.isArray(res) ? res : (res?.data || []);
+        if (isMounted && Array.isArray(items) && items.length > 0) {
+          setCatalogProducts(items);
+        }
+      } catch (err) {
+        console.warn('[StockPage] Failed to fetch full catalog products:', err);
+      } finally {
+        if (isMounted) setIsCatalogLoading(false);
+      }
+    };
+    loadFullCatalog();
+    return () => { isMounted = false; };
+  }, [api]);
+
+  // Dynamic server-side debounced search when user types in the product search combobox
+  const handleSearchProducts = useCallback((query) => {
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    const q = (query || '').trim();
+    if (!q || q.length < 2 || !api) return;
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const res = await api(`/products?search=${encodeURIComponent(q)}&limit=100`);
+        const items = Array.isArray(res) ? res : (res?.data || []);
+        if (Array.isArray(items) && items.length > 0) {
+          setCatalogProducts((prev) => {
+            const map = new Map(prev.map((p) => [String(p.id || p.product_id), p]));
+            items.forEach((item) => {
+              const id = String(item.id || item.product_id);
+              if (id && !map.has(id)) map.set(id, item);
+            });
+            return Array.from(map.values());
+          });
+        }
+      } catch (err) {
+        console.warn('[StockPage] Search products error:', err);
+      }
+    }, 250);
+  }, [api]);
+
+  // Combined and deduplicated catalog list of all products across sources
+  const allCatalogList = useMemo(() => {
+    const map = new Map();
+    (catalogProducts || []).forEach((p) => {
+      const id = String(p.id || p.product_id || '');
+      if (id && !map.has(id)) map.set(id, p);
+    });
+    (data.catalog || []).forEach((p) => {
+      const id = String(p.id || p.product_id || '');
+      if (id && !map.has(id)) map.set(id, p);
+    });
+    (data.products || []).forEach((p) => {
+      const id = String(p.id || p.product_id || '');
+      if (id && !map.has(id)) map.set(id, p);
+    });
+    (stockWithOwnership || []).forEach((p) => {
+      const id = String(p.product_id || p.id || '');
+      if (id && !map.has(id)) map.set(id, p);
+    });
+    return Array.from(map.values());
+  }, [catalogProducts, data.catalog, data.products, stockWithOwnership]);
+
+  // Formatted options for SearchableCombobox
+  const adjustProductOptions = useMemo(() => {
+    return allCatalogList.map((p) => {
+      const pId = String(p.id || p.product_id);
+      const name = `${productName(p, { hideSupplier: role !== 'superadmin' })} · [${p.brand || 'Generic'}] · ${priceLabel(p.sale_price || p.retail_price)}`;
+      const models = p.full_model_list || p.compatible_models || p.model || '';
+      const cat = p.category || p.part_category || '';
+      const variant = p.quality_variant || p.quality || '';
+      const brand = p.brand || '';
+      const stock = p.quantity !== undefined && p.quantity !== null 
+        ? Number(p.quantity) 
+        : (p.warehouse_stock !== undefined ? Number(p.warehouse_stock) : undefined);
+      const coloursCount = Array.isArray(p.colours) ? p.colours.length : (p.colours ? String(p.colours).split(',').length : 0);
+
+      const keywords = [
+        p.name,
+        p.short_name,
+        brand,
+        cat,
+        variant,
+        models,
+        Array.isArray(p.colours) ? p.colours.join(' ') : p.colours,
+        priceLabel(p.sale_price || p.retail_price),
+      ].filter(Boolean).join(' ').toLowerCase();
+
+      return {
+        id: pId,
+        name,
+        keywords,
+        brand,
+        category: cat,
+        quality: variant,
+        model: models,
+        image_url: p.image_url || p.imageUrl || '',
+        stock,
+        coloursCount,
+      };
+    });
+  }, [allCatalogList, productName, priceLabel, role]);
+
+  // Unified product selection handler for adjusting stock
+  const handleSelectAdjustProduct = useCallback((v) => {
+    if (!v) {
+      setForms((prev) => ({
+        ...prev,
+        stock: {
+          ...prev.stock,
+          product_id: '',
+          colour: '',
+          quantity: '',
+          purchase_price: '',
+          sale_price: '',
+          retail_price: '',
+        }
+      }));
+      setColorSplitQuantities({});
+      return;
+    }
+    const prod = allCatalogList.find((p) => String(p.id || p.product_id) === String(v))
+      || (data.products || []).find((p) => String(p.id) === String(v));
+    setForms((prev) => ({
+      ...prev,
+      stock: { 
+        ...prev.stock, 
+        product_id: String(v), 
+        colour: '', 
+        quantity: '',
+        purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
+        sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
+        retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
+        supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (prev.stock?.supplier_id || ''),
+      }
+    }));
+    setColorSplitQuantities({});
+  }, [allCatalogList, data.products, setForms, setColorSplitQuantities]);
+
   // Quick Category Filter Definitions
   const quickCategories = [
     { id: '', label: 'All Items', icon: Boxes },
@@ -718,13 +870,15 @@ export default function StockPage({
   const getSelectedProductColours = () => {
     const prodId = forms.stock.product_id;
     if (!prodId) return [];
-    const prod = data.products.find(p => String(p.id) === String(prodId));
+    const prod = (allCatalogList || []).find((p) => String(p.id || p.product_id) === String(prodId))
+      || (data.products || []).find((p) => String(p.id) === String(prodId));
     if (!prod) return [];
-    return Array.isArray(prod.colours) ? prod.colours : String(prod.colours || '').split(',').map(c => c.trim()).filter(Boolean);
+    return Array.isArray(prod.colours) ? prod.colours : String(prod.colours || '').split(',').map((c) => c.trim()).filter(Boolean);
   };
 
   const selectedProductColours = getSelectedProductColours();
-  const selectedProductDetails = data.products.find(p => String(p.id) === String(forms.stock.product_id));
+  const selectedProductDetails = (allCatalogList || []).find((p) => String(p.id || p.product_id) === String(forms.stock.product_id))
+    || (data.products || []).find((p) => String(p.id) === String(forms.stock.product_id));
   const selectedLocation = data.shops.find((location) => String(location.id) === String(shopId));
   const isWarehouseScope = role === 'superadmin' && selectedLocation?.location_type === 'warehouse';
   const stockFormTitle = role === 'shopkeeper'
@@ -752,9 +906,10 @@ export default function StockPage({
       }), { quantity: 0, owner_quantity: 0, my_quantity: 0, shopkeeper_quantity: 0 });
     }
 
-    // Fallback to data.products / data.catalog when product is not in the currently loaded paginated stock page
-    const productRecord = (data.products || []).find(p => String(p.id) === String(forms.stock.product_id))
-      || (data.catalog || []).find(p => String(p.id) === String(forms.stock.product_id));
+    // Fallback to allCatalogList / data.products / data.catalog when product is not in the currently loaded paginated stock page
+    const productRecord = (allCatalogList || []).find((p) => String(p.id || p.product_id) === String(forms.stock.product_id))
+      || (data.products || []).find((p) => String(p.id) === String(forms.stock.product_id))
+      || (data.catalog || []).find((p) => String(p.id) === String(forms.stock.product_id));
 
     if (productRecord) {
       const qty = Number(
@@ -777,7 +932,7 @@ export default function StockPage({
 
   // Filtered products list for model picker modal
   const filteredModelPickerProducts = useMemo(() => {
-    const list = data.products || [];
+    const list = allCatalogList.length > 0 ? allCatalogList : (data.products || []);
     if (!modelPickerSearch.trim()) return list;
     const term = modelPickerSearch.toLowerCase().trim();
     return list.filter((p) => {
@@ -787,7 +942,7 @@ export default function StockPage({
       const modelMatch = String(p.full_model_list || p.model || '').toLowerCase().includes(term);
       return nameMatch || brandMatch || catMatch || modelMatch;
     });
-  }, [data.products, modelPickerSearch]);
+  }, [allCatalogList, data.products, modelPickerSearch]);
 
   return (
     <section className="space">
@@ -1054,7 +1209,7 @@ export default function StockPage({
 
       {/* Grid of Main Actions: Set Stock Form (Collapsible via isSetStockOpen) */}
       {isSetStockOpen && (
-        <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px', marginBottom: '24px' }}>
+        <section style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '24px', marginBottom: '24px', position: 'relative', zIndex: 30 }}>
           <div className="flex items-center justify-between px-2">
             <span className="text-xs font-black uppercase tracking-wider text-teal-700 flex items-center gap-1.5">
               <Zap size={14} /> Quick Stock Level Adjustment
@@ -1069,6 +1224,7 @@ export default function StockPage({
           </div>
         
         {/* Set/Add Stock Level Card */}
+        <div style={{ position: 'relative', zIndex: 40 }}>
         <FormPanel 
           title={stockFormTitle}
           action={
@@ -1105,28 +1261,18 @@ export default function StockPage({
         >
           <div style={{ gridColumn: '1 / -1', display: 'grid', gridTemplateColumns: '1fr', gap: '16px' }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'flex-end', justifyContent: 'space-between' }}>
-            <div style={{ flex: 1, minWidth: '260px' }}>
-              <Select 
-                label="Select Product to Update" 
-                value={forms.stock.product_id} 
-                onChange={(v) => {
-                  const prod = (data.products || []).find(p => String(p.id) === String(v));
-                  setForms((prev) => ({
-                    ...prev,
-                    stock: { 
-                      ...prev.stock, 
-                      product_id: v, 
-                      colour: '', 
-                      quantity: '',
-                      purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
-                      sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
-                      retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
-                      supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (prev.stock?.supplier_id || ''),
-                    }
-                  }));
-                  setColorSplitQuantities({});
-                }} 
-                options={data.products.map((p) => [p.id, `${productName(p, { hideSupplier: role !== 'superadmin' })} · [${p.brand}] · ${priceLabel(p.sale_price)}`])} 
+            <div style={{ flex: 1, minWidth: '280px' }}>
+              <SearchableCombobox
+                id="adjust-stock-product-select"
+                label="Select Product to Update *"
+                value={forms.stock.product_id}
+                onChange={handleSelectAdjustProduct}
+                options={adjustProductOptions}
+                placeholder="Choose or search model..."
+                searchPlaceholder="Search all 700+ catalog models (e.g. IP 13, 1+12R, OLED)..."
+                onSearch={handleSearchProducts}
+                dropdownWidth="w-full"
+                allowClear={true}
               />
             </div>
             {role === 'superadmin' && (
@@ -1146,8 +1292,8 @@ export default function StockPage({
               type="button"
               onClick={() => setIsModelPickerOpen(true)}
               style={{
-                padding: '10px 16px',
-                borderRadius: '12px',
+                padding: '0 16px',
+                borderRadius: '10px',
                 background: 'linear-gradient(135deg, #0d9488 0%, #0284c7 100%)',
                 color: '#ffffff',
                 fontWeight: 700,
@@ -1157,10 +1303,12 @@ export default function StockPage({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '6px',
-                boxShadow: '0 4px 12px rgba(13, 148, 136, 0.25)'
+                boxShadow: '0 4px 12px rgba(13, 148, 136, 0.25)',
+                minHeight: '50px',
+                height: '50px',
               }}
             >
-              <PackagePlus size={15} /> Pick from Models Catalog
+              <PackagePlus size={16} /> Pick from Models Catalog
             </button>
           </div>
 
@@ -1413,10 +1561,11 @@ export default function StockPage({
             )}
           </div>
         </FormPanel>
+        </div>
 
         {/* Superadmin branch transfer shortcut */}
         {role === 'superadmin' && (
-          <section className="panel transfer-launch" style={{ background: 'linear-gradient(135deg, rgba(20,184,166,0.05) 0%, rgba(99,102,241,0.05) 100%)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px', borderRadius: '16px' }}>
+          <section className="panel transfer-launch" style={{ position: 'relative', zIndex: 1, background: 'linear-gradient(135deg, rgba(20,184,166,0.05) 0%, rgba(99,102,241,0.05) 100%)', border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '20px', borderRadius: '16px' }}>
             <div>
               <h2 style={{ fontSize: '18px', fontWeight: 600 }}>Branch Stock Transfer</h2>
               <p style={{ opacity: 0.7, fontSize: '13px', marginTop: '4px' }}>Move available stock between shops or from main warehouse instantly.</p>
@@ -2535,19 +2684,7 @@ export default function StockPage({
                   key={prod.id}
                   type="button"
                   onClick={() => {
-                    setForms((prev) => ({
-                      ...prev,
-                      stock: {
-                        ...prev.stock,
-                        product_id: String(prod.id),
-                        colour: '',
-                        quantity: '',
-                        purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
-                        sale_price: prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : (prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : ''),
-                        retail_price: prod?.retail_price !== undefined && prod?.retail_price !== null ? String(prod.retail_price) : (prod?.sale_price !== undefined && prod?.sale_price !== null ? String(prod.sale_price) : ''),
-                        supplier_id: prod?.supplier_id ? String(prod.supplier_id) : (prev.stock?.supplier_id || ''),
-                      }
-                    }));
+                    handleSelectAdjustProduct(prod.id);
                     setIsModelPickerOpen(false);
                     window.scrollTo({ top: 120, behavior: 'smooth' });
                   }}
