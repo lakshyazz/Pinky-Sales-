@@ -2324,7 +2324,7 @@ app.get('/api/low-stock', authenticateToken, requireShopStaff, async (req, res) 
   }
 });
 
-app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) => {
+app.post(['/api/products', '/products'], authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const {
       name, short_name, full_model_list, brand, category, model, official_price,
@@ -2334,7 +2334,13 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
     } = req.body;
     let compatibilityModels = String(full_model_list || name || '').trim();
     let displayName = String(short_name || '').trim();
-    const cleanModel = String(model || (full_model_list && !full_model_list.includes(',') ? full_model_list : '') || '').trim();
+    const cleanModel = String(
+      model ||
+      (full_model_list ? full_model_list.split(',')[0] : '') ||
+      displayName ||
+      compatibilityModels ||
+      'Standard'
+    ).trim();
 
     const parsePrice = (val, fallback = null) => {
       if (val === '' || val === null || val === undefined) return fallback;
@@ -2434,7 +2440,10 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
       );
       if (duplicateCombination) {
         const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
-        const targetShopId = creatorShopId || scopeShopId(req) || (await allRecords('SELECT id FROM shops'))[0]?.id;
+        const shops = await allRecords('SELECT id, location_type FROM shops ORDER BY id ASC');
+        const warehouseShop = shops.find(s => s.location_type === 'warehouse');
+        const defaultShopId = warehouseShop ? Number(warehouseShop.id) : (shops[0]?.id ? Number(shops[0].id) : null);
+        const targetShopId = creatorShopId || scopeShopId(req) || defaultShopId;
 
         if (openingStockNum > 0 && targetShopId) {
           const effectiveAssignedUserId = isShopStaffRole(req.user.role) ? req.user.id : null;
@@ -2515,11 +2524,26 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
         );
 
         const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
-        const shops = await allRecords('SELECT id FROM shops');
-        const targetShopId = creatorShopId || scopeShopId(req) || shops[0]?.id;
+        const shops = await allRecords('SELECT id, location_type FROM shops ORDER BY id ASC');
+        const warehouseShop = shops.find(s => s.location_type === 'warehouse');
+        const defaultShopId = warehouseShop ? Number(warehouseShop.id) : (shops[0]?.id ? Number(shops[0].id) : null);
+        const targetShopId = creatorShopId || scopeShopId(req) || defaultShopId;
         for (const shop of shops) {
           const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
           await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, inactiveProduct.id, qty]);
+        }
+        if (targetShopId && openingStockNum > 0) {
+          await runQuery(`
+            INSERT INTO inventory_batches (
+              shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
+              quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id, supplier_id
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, CURRENT_DATE, 'Restored product entry', ?, ?, ?)
+          `, [
+            targetShopId, inactiveProduct.id,
+            purchasePriceNum, wholesalePriceNum, officialPriceNum, retailPriceNum,
+            openingStockNum, openingStockNum, req.user?.id || 1,
+            effectiveMfgBrandId, effectiveSupplierId
+          ]);
         }
         await audit(req, 'Restored soft-deleted product and updated details', 'product', inactiveProduct.id, `${displayName} at ${officialPriceNum}`);
         return res.status(200).json({ id: inactiveProduct.id, name: compatibilityModels, short_name: displayName, full_model_list: compatibilityModels, restored: true });
@@ -2544,13 +2568,15 @@ app.post('/api/products', authenticateToken, requireShopStaff, async (req, res) 
 
     const productId = result.id;
     const openingStockNum = req.body.opening_stock !== undefined && req.body.opening_stock !== '' && req.body.opening_stock !== null ? Number(req.body.opening_stock) : 0;
-    const shops = await allRecords('SELECT id FROM shops');
-    const targetShopId = creatorShopId || scopeShopId(req) || shops[0]?.id;
+    const shops = await allRecords('SELECT id, location_type FROM shops ORDER BY id ASC');
+    const warehouseShop = shops.find(s => s.location_type === 'warehouse');
+    const defaultShopId = warehouseShop ? Number(warehouseShop.id) : (shops[0]?.id ? Number(shops[0].id) : null);
+    const targetShopId = creatorShopId || scopeShopId(req) || defaultShopId;
     for (const shop of shops) {
       const qty = (shop.id === targetShopId || String(shop.id) === String(targetShopId)) ? openingStockNum : 0;
       await runQuery('INSERT INTO stock (shop_id, product_id, quantity) VALUES (?, ?, ?) ON CONFLICT(shop_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity', [shop.id, productId, qty]);
     }
-    if (targetShopId) {
+    if (targetShopId && openingStockNum > 0) {
       await runQuery(`
         INSERT INTO inventory_batches (
           shop_id, product_id, assigned_user_id, purchase_price, wholesale_price, official_price, retail_price,
@@ -2938,9 +2964,14 @@ app.get('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   }
 });
 
-app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
+const handleStockAdjustment = async (req, res) => {
   try {
-    const shopId = requireScopedShopId(req, req.body.shop_id);
+    let rawShopId = req.body?.shop_id || req.query?.shopId;
+    if (req.user.role === 'superadmin' && (!rawShopId || rawShopId === 'all')) {
+      const wh = await getWarehouse();
+      rawShopId = wh ? wh.id : (await allRecords('SELECT id FROM shops ORDER BY id ASC'))[0]?.id;
+    }
+    const shopId = requireScopedShopId(req, rawShopId);
     const {
       product_id,
       quantity,
@@ -3146,7 +3177,7 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
           [effectivePurchasePrice, product_id]
         );
         // Also synchronize accessible active batches for this shop/product
-        if (req.user.role === 'superadmin' && !shop_id) {
+        if (req.user.role === 'superadmin' && !req.body.shop_id) {
           await tx.runQuery(
             'UPDATE inventory_batches SET purchase_price = ? WHERE product_id = ? AND quantity_remaining > 0',
             [effectivePurchasePrice, product_id]
@@ -3181,7 +3212,10 @@ app.put('/api/stock', authenticateToken, requireShopStaff, async (req, res) => {
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Unable to update stock.' });
   }
-});
+};
+
+app.put(['/api/stock', '/stock'], authenticateToken, requireShopStaff, handleStockAdjustment);
+app.post(['/api/stock', '/stock'], authenticateToken, requireShopStaff, handleStockAdjustment);
 
 app.get('/api/inventory-batches', authenticateToken, requireShopStaff, async (req, res) => {
   try {

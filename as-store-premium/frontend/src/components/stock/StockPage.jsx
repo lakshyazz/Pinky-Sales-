@@ -300,10 +300,12 @@ const StockTableRow = React.memo(function StockTableRow({
             title="Set Stock Level"
             onClick={() => {
               const prod = (data.products || []).find(p => String(p.id) === String(item.product_id)) || item;
+              const targetShopId = item.shop_id ? String(item.shop_id) : (shopId ? String(shopId) : (data?.warehouse?.id ? String(data.warehouse.id) : (data?.shops?.[0]?.id ? String(data.shops[0].id) : '')));
               setForms((prev) => ({
                 ...prev,
                 stock: { 
                   product_id: String(item.product_id), 
+                  shop_id: targetShopId,
                   quantity: '',
                   colour: '',
                   purchase_price: prod?.purchase_price !== undefined && prod?.purchase_price !== null ? String(prod.purchase_price) : (prod?.avg_cost_price !== undefined && prod?.avg_cost_price !== null ? String(prod.avg_cost_price) : ''),
@@ -1078,9 +1080,10 @@ export default function StockPage({
           } 
           onSubmit={(e) => {
             if (e && typeof e.preventDefault === 'function') e.preventDefault();
+            const targetShopId = forms.stock?.shop_id || shopId || data.warehouse?.id || data.shops?.[0]?.id;
             const payload = {
               ...forms.stock,
-              shop_id: shopId,
+              shop_id: targetShopId,
               adjustment_mode: adjustmentMode,
               color_quantities: (isColorSplitMode && selectedProductColours.length > 0) ? colorSplitQuantities : undefined,
             };
@@ -1090,6 +1093,7 @@ export default function StockPage({
                 ...prev,
                 stock: {
                   ...prev.stock,
+                  shop_id: targetShopId,
                   adjustment_mode: adjustmentMode,
                   color_quantities: (isColorSplitMode && selectedProductColours.length > 0) ? colorSplitQuantities : undefined,
                 }
@@ -1125,6 +1129,19 @@ export default function StockPage({
                 options={data.products.map((p) => [p.id, `${productName(p, { hideSupplier: role !== 'superadmin' })} · [${p.brand}] · ${priceLabel(p.sale_price)}`])} 
               />
             </div>
+            {role === 'superadmin' && (
+              <div style={{ minWidth: '220px' }}>
+                <Select
+                  label="Target Inventory Location"
+                  value={forms.stock.shop_id || shopId || (data.warehouse?.id ? String(data.warehouse.id) : (data.shops?.[0]?.id ? String(data.shops[0].id) : ''))}
+                  onChange={(v) => setForms((prev) => ({ ...prev, stock: { ...prev.stock, shop_id: v } }))}
+                  options={[
+                    ...(data.warehouse ? [[String(data.warehouse.id), `🏢 Warehouse (${data.warehouse.name || 'Central'})`]] : []),
+                    ...(data.shops || []).map(s => [String(s.id), `🏪 Shop: ${s.name}`])
+                  ]}
+                />
+              </div>
+            )}
             <button
               type="button"
               onClick={() => setIsModelPickerOpen(true)}

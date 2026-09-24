@@ -316,7 +316,7 @@ export default function LowStockPage({
         });
       } else if (api) {
         await api('/stock', {
-          method: 'POST',
+          method: 'PUT',
           body: JSON.stringify({
             product_id: restockProduct.product_id || restockProduct.id,
             shop_id: restockShopId || defaultShop?.id,

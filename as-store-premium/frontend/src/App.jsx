@@ -4223,19 +4223,20 @@ function App() {
   };
 
   const updateStock = async (customPayload) => {
-    if (!requireShopSelection('Select a shop before updating stock')) return;
+    const targetShopId = customPayload?.shop_id || shopId || (role === 'shopkeeper' ? session?.shop_id : (data.warehouse?.id || data.shops?.[0]?.id));
+    if (!targetShopId && !requireShopSelection('Select a shop before updating stock')) return;
     try {
       setSaving(true);
       const payload = customPayload && typeof customPayload === 'object' && customPayload.product_id
-        ? { ...customPayload, shop_id: customPayload.shop_id || shopId }
-        : { ...forms.stock, shop_id: shopId };
+        ? { ...customPayload, shop_id: targetShopId }
+        : { ...forms.stock, shop_id: targetShopId };
       await authedFetch('/stock', { method: 'PUT', body: JSON.stringify(payload) });
       setForms((prev) => ({ ...prev, stock: initialForms.stock }));
       showToast(role === 'shopkeeper' ? 'Your stock quantity was updated' : 'Stock updated');
       await Promise.all([
         loadCore(),
         loadProductPage({ tab: active === 'models' || active === 'prices' ? active : 'models', page: 1 }),
-        active === 'stock' ? loadTab('stock', shopId) : Promise.resolve(),
+        active === 'stock' ? loadTab('stock', targetShopId) : Promise.resolve(),
       ]);
     } catch (error) {
       showToast(error.message || 'Unable to update stock right now');
@@ -5405,7 +5406,8 @@ function App() {
       colours: (forms.product.colours || '').split(',').map((colour) => colour.trim()).filter(Boolean),
       manufacturing_brand_id: forms.product.manufacturing_brand_id ? Number(forms.product.manufacturing_brand_id) : null,
       supplier_id: forms.product.supplier_id ? Number(forms.product.supplier_id) : null,
-      shop_id: shopId || null,
+      shop_id: openingStockLocationId || null,
+      opening_stock: openingStock,
       image_url: forms.product.image_url || null,
       image_urls: forms.product.image_urls || [],
     };
@@ -5428,64 +5430,6 @@ function App() {
     if (!Number.isInteger(openingStock) || openingStock < 0) {
       return showToast('Opening stock must be 0 or more');
     }
-    if (openingStock > 0 && !openingStockLocationId) return showToast('Warehouse is not configured yet');
-
-    // Client-side Deduplication / Existing Product Check
-    if (!editingProductId && data.products && Array.isArray(data.products)) {
-      const targetPayloadModel = (payload.model || payload.short_name || payload.full_model_list || '').toLowerCase().trim();
-
-      const existingProduct = data.products.find((existing) => {
-        const isInactiveOrDeleted = existing.is_active === 0 || existing.is_active === false || existing.is_deleted === true || (existing.deleted_at !== null && existing.deleted_at !== undefined);
-        if (isInactiveOrDeleted) return false;
-
-        const existingModel = (existing.model || existing.short_name || existing.full_model_list || '').toLowerCase().trim();
-        if (!targetPayloadModel || !existingModel) return false;
-
-        const brandMatch = (existing.brand || '').toLowerCase().trim() === (payload.brand || '').toLowerCase().trim();
-        const modelMatch = existingModel === targetPayloadModel;
-        const catMatch = (existing.part_category || existing.category || '').toLowerCase().trim() === (payload.part_category || '').toLowerCase().trim();
-        const variantMatch = (existing.quality_variant || '').toLowerCase().trim() === (payload.quality_variant || '').toLowerCase().trim();
-
-        const targetMfg = (payload.manufacturing_brand_id ? String(payload.manufacturing_brand_id) : '').toLowerCase().trim();
-        const existingMfg = (existing.manufacturing_brand_id ? String(existing.manufacturing_brand_id) : (existing.manufacturing_brand_name || existing.manufacturing_brand || '')).toLowerCase().trim();
-        const mfgMatch = !targetMfg || !existingMfg ? true : (existingMfg === targetMfg);
-
-        const targetSupplier = (payload.supplier_id ? String(payload.supplier_id) : '').toLowerCase().trim();
-        const existingSupplier = (existing.supplier_id ? String(existing.supplier_id) : (existing.supplier_name || existing.supplier || '')).toLowerCase().trim();
-        const supplierMatch = !targetSupplier || !existingSupplier ? true : (existingSupplier === targetSupplier);
-
-        return brandMatch && modelMatch && catMatch && variantMatch && mfgMatch && supplierMatch;
-      });
-
-      if (existingProduct) {
-        if (openingStock > 0 && openingStockLocationId) {
-          try {
-            setSaving(true);
-            await authedFetch('/stock', {
-              method: 'PUT',
-              body: JSON.stringify({ shop_id: openingStockLocationId, product_id: existingProduct.id, quantity: openingStock }),
-            });
-            setForms((prev) => ({ ...prev, product: initialForms.product }));
-            setEditingProductId('');
-            showToast(`Product exists in catalog. Added ${openingStock} pcs to your branch stock.`);
-            await loadCore();
-            if (active === 'stock') await loadTab('stock', shopId);
-            return;
-          } catch (err) {
-            showToast(err.message || 'Unable to update branch stock');
-            return;
-          } finally {
-            setSaving(false);
-          }
-        } else {
-          setForms((prev) => ({
-            ...prev,
-            stock: { ...prev.stock, product_id: existingProduct.id }
-          }));
-          return showToast('Product already exists in catalog. Selected in "Set My Stock Quantity" above to update your branch.');
-        }
-      }
-    }
 
     try {
       setSaving(true);
@@ -5499,19 +5443,6 @@ function App() {
       const created = editingProductId
         ? await authedFetch(`/products/${editingProductId}`, { method: 'PUT', body: JSON.stringify(payload) })
         : await authedFetch('/products', { method: 'POST', body: JSON.stringify(payload) });
-
-      const newProductId = created?.id || created?.data?.id || editingProductId;
-      if (!editingProductId && openingStock > 0 && newProductId) {
-        await authedFetch('/stock', {
-          method: 'PUT',
-          body: JSON.stringify({
-            shop_id: openingStockLocationId,
-            product_id: newProductId,
-            quantity: openingStock,
-            color_quantities: forms.product.color_opening_stock || undefined,
-          }),
-        });
-      }
 
       const returnedRecord = created?.data || (created?.name ? created : null);
       if (returnedRecord) {
@@ -5533,7 +5464,11 @@ function App() {
 
       setForms((prev) => ({ ...prev, product: initialForms.product }));
       setEditingProductId('');
-      showToast(editingProductId ? 'Product prices and details updated' : openingStock > 0 ? 'Product added with opening stock' : 'Product added successfully');
+      if (created?.already_exists) {
+        showToast(created.message || 'Product already exists in catalog. Stock updated.');
+      } else {
+        showToast(editingProductId ? 'Product prices and details updated' : openingStock > 0 ? 'Product added with opening stock' : 'Product added successfully');
+      }
       
       const refData = await api('/reference-data');
       setData((prev) => ({ ...prev, reference: cleanReferenceData(refData) }));
@@ -7750,6 +7685,7 @@ function App() {
               <ModelsPage
                 items={modelItems}
                 search={modelSearch}
+                shopId={shopId || (role === 'shopkeeper' ? session?.shop_id : (data.warehouse?.id || data.shops?.[0]?.id))}
                 onSearchChange={(value) => { setProductPager((prev) => ({ ...prev, page: 1 })); setModelSearch(value); }}
                 role={role}
                 session={session}
