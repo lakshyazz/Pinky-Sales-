@@ -8546,7 +8546,7 @@ app.get('/api/debit-notes', authenticateToken, requireShopStaff, async (req, res
       pagination,
       totalKey: 'totalDebitNotes',
     });
-    res.json(rows);
+    res.json({ ...rows, debitNotes: rows.data, rows: rows.data });
   } catch (error) {
     res.status(500).json({ error: error.message || 'Failed to fetch debit notes.' });
   }
@@ -8575,7 +8575,15 @@ app.get('/api/debit-notes/:id', authenticateToken, requireShopStaff, async (req,
 
 app.post('/api/debit-notes', authenticateToken, requireShopStaff, async (req, res) => {
   try {
-    const shopId = requireScopedShopId(req, req.body.shop_id);
+    let targetShopId = req.body.shop_id;
+    if (!targetShopId && req.user.shop_id) {
+      targetShopId = req.user.shop_id;
+    }
+    if (!targetShopId) {
+      const wh = await getWarehouse();
+      targetShopId = wh?.id || (await getRecord("SELECT id FROM shops ORDER BY id ASC LIMIT 1"))?.id;
+    }
+    const shopId = requireScopedShopId(req, targetShopId);
     const { supplier_id, purchase_bill_id, reason = '', return_date, items = [] } = req.body;
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'At least one returned item is required.' });
@@ -8681,6 +8689,237 @@ app.post('/api/debit-notes', authenticateToken, requireShopStaff, async (req, re
     res.status(201).json({ success: true, ...result });
   } catch (error) {
     res.status(error.status || 500).json({ error: error.message || 'Failed to create debit note.' });
+  }
+});
+
+app.put('/api/debit-notes/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const dnId = Number(req.params.id);
+    if (!Number.isInteger(dnId) || dnId <= 0) return res.status(400).json({ error: 'Valid debit note ID required.' });
+
+    const { supplier_id, purchase_bill_id, reason = '', return_date, items = [] } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'At least one returned item is required.' });
+    }
+    const returnDateStr = /^\d{4}-\d{2}-\d{2}$/.test(String(return_date || '')) ? String(return_date) : today();
+
+    const result = await runTransaction(async (tx) => {
+      const dn = await tx.getRecord('SELECT * FROM debit_notes WHERE id = ? FOR UPDATE', [dnId]);
+      if (!dn) {
+        const err = new Error('Debit note not found.');
+        err.status = 404;
+        throw err;
+      }
+      requireScopedShopId(req, dn.shop_id);
+
+      const oldItems = await tx.allRecords('SELECT * FROM debit_note_items WHERE debit_note_id = ?', [dnId]);
+
+      // 1. Revert previous stock deduction if it was deducted
+      if (dn.stock_deducted) {
+        for (const oi of oldItems) {
+          if (oi.product_id && oi.quantity > 0) {
+            const colourCond = oi.colour ? 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))' : '';
+            const batchParams = oi.colour ? [dn.shop_id, oi.product_id, oi.colour] : [dn.shop_id, oi.product_id];
+            const batch = await tx.getRecord(
+              `SELECT id FROM inventory_batches
+               WHERE shop_id = ? AND product_id = ? ${colourCond}
+               ORDER BY received_date DESC, id DESC LIMIT 1`,
+              batchParams
+            );
+            if (batch) {
+              await tx.runQuery(
+                'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+                [oi.quantity, batch.id]
+              );
+            } else {
+              await tx.runQuery(
+                `INSERT INTO inventory_batches (shop_id, product_id, purchase_price, wholesale_price, official_price, retail_price, colour, quantity_received, quantity_remaining, received_date, notes, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_DATE, ?, ?)`,
+                [dn.shop_id, oi.product_id, oi.unit_price, oi.unit_price, oi.unit_price, oi.unit_price, oi.colour || null, oi.quantity, oi.quantity, `Stock restored on edit of Debit Note ${dn.debit_note_number}`, req.user.id]
+              );
+            }
+            await syncStockFromBatches(tx, dn.shop_id, oi.product_id);
+          }
+        }
+      }
+
+      // 2. Revert previous purchase bill reduction if linked
+      if (dn.purchase_bill_id) {
+        const oldBill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [dn.purchase_bill_id]);
+        if (oldBill) {
+          const newPending = money(money(oldBill.pending_amount) + Number(dn.amount));
+          const newStatus  = newPending <= 0 ? 'paid' : (money(oldBill.paid_amount) > 0 ? 'partially_paid' : 'open');
+          await tx.runQuery(
+            'UPDATE purchase_bills SET pending_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [newPending, newStatus, dn.purchase_bill_id]
+          );
+        }
+      }
+
+      // 3. Reverse old journal
+      await reverseJournal(tx, 'debit_note', dnId, dn.shop_id, today(), req.user.id);
+
+      // 4. Validate and calculate new items
+      const validItems = [];
+      let totalAmount = 0;
+      for (const item of items) {
+        const qty = Number(item.quantity);
+        const unitPrice = money(item.unit_price);
+        if (!Number.isInteger(qty) || qty <= 0 || unitPrice < 0) {
+          const e = new Error('Each item needs a valid quantity and unit price.'); e.status = 400; throw e;
+        }
+        const lineTotal = money(qty * unitPrice);
+        totalAmount += lineTotal;
+        validItems.push({
+          product_id: item.product_id || null,
+          custom_product_name: item.custom_product_name || null,
+          quantity: qty,
+          unit_price: unitPrice,
+          total_price: lineTotal,
+          colour: item.colour || null,
+          restock_supplier: item.restock_supplier !== false,
+        });
+      }
+      totalAmount = money(totalAmount);
+      if (totalAmount <= 0) {
+        const e = new Error('Total debit note amount must be greater than zero.'); e.status = 400; throw e;
+      }
+
+      // 5. Update debit note header
+      await tx.runQuery(
+        `UPDATE debit_notes SET
+          supplier_id = ?, purchase_bill_id = ?, amount = ?, reason = ?, return_date = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [supplier_id || null, purchase_bill_id || null, totalAmount, reason || 'Purchase return', returnDateStr, dnId]
+      );
+
+      // 6. Replace items
+      await tx.runQuery('DELETE FROM debit_note_items WHERE debit_note_id = ?', [dnId]);
+      for (const vi of validItems) {
+        await tx.runQuery(
+          `INSERT INTO debit_note_items (debit_note_id, product_id, custom_product_name, quantity, unit_price, total_price, colour, restock_supplier)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [dnId, vi.product_id, vi.custom_product_name, vi.quantity, vi.unit_price, vi.total_price, vi.colour, vi.restock_supplier]
+        );
+
+        // Deduct new items stock
+        if (vi.product_id && vi.quantity > 0) {
+          const colourCond = vi.colour ? 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))' : '';
+          const batchParams = vi.colour ? [dn.shop_id, vi.product_id, vi.colour] : [dn.shop_id, vi.product_id];
+          const batch = await tx.getRecord(
+            `SELECT id, quantity_remaining FROM inventory_batches
+             WHERE shop_id = ? AND product_id = ? ${colourCond}
+             ORDER BY received_date DESC, id DESC LIMIT 1`,
+            batchParams
+          );
+          if (batch && batch.quantity_remaining >= vi.quantity) {
+            await tx.runQuery(
+              'UPDATE inventory_batches SET quantity_remaining = quantity_remaining - ? WHERE id = ?',
+              [vi.quantity, batch.id]
+            );
+            await syncStockFromBatches(tx, dn.shop_id, vi.product_id);
+          }
+        }
+      }
+
+      // 7. Apply new purchase bill reduction if linked
+      if (purchase_bill_id) {
+        const bill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [purchase_bill_id]);
+        if (bill) {
+          const newPending = Math.max(0, money(money(bill.pending_amount) - totalAmount));
+          const newStatus  = newPending <= 0 ? 'paid' : (money(bill.paid_amount) > 0 ? 'partially_paid' : 'open');
+          await tx.runQuery(
+            'UPDATE purchase_bills SET pending_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [newPending, newStatus, purchase_bill_id]
+          );
+        }
+      }
+
+      // 8. Post new double-entry journal
+      await postDebitNoteJournal(tx, dnId, dn.shop_id, supplier_id, totalAmount, returnDateStr, req.user.id);
+
+      return { id: dnId, debit_note_number: dn.debit_note_number, amount: totalAmount };
+    });
+
+    await audit(req, 'Updated debit note', 'debit_note', result.id, `${result.debit_note_number}, updated amount ${result.amount}`);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update debit note.' });
+  }
+});
+
+app.delete('/api/debit-notes/:id', authenticateToken, requireShopStaff, async (req, res) => {
+  try {
+    const dnId = Number(req.params.id);
+    if (!Number.isInteger(dnId) || dnId <= 0) return res.status(400).json({ error: 'Valid debit note ID required.' });
+
+    const result = await runTransaction(async (tx) => {
+      const dn = await tx.getRecord('SELECT * FROM debit_notes WHERE id = ? FOR UPDATE', [dnId]);
+      if (!dn) {
+        const err = new Error('Debit note not found.');
+        err.status = 404;
+        throw err;
+      }
+      requireScopedShopId(req, dn.shop_id);
+
+      const items = await tx.allRecords('SELECT * FROM debit_note_items WHERE debit_note_id = ?', [dnId]);
+
+      // 1. Restore stock if deducted
+      if (dn.stock_deducted) {
+        for (const item of items) {
+          if (item.product_id && item.quantity > 0) {
+            const colourCond = item.colour ? 'AND LOWER(TRIM(colour)) = LOWER(TRIM(?))' : '';
+            const batchParams = item.colour ? [dn.shop_id, item.product_id, item.colour] : [dn.shop_id, item.product_id];
+            const batch = await tx.getRecord(
+              `SELECT id FROM inventory_batches
+               WHERE shop_id = ? AND product_id = ? ${colourCond}
+               ORDER BY received_date DESC, id DESC LIMIT 1`,
+              batchParams
+            );
+            if (batch) {
+              await tx.runQuery(
+                'UPDATE inventory_batches SET quantity_remaining = quantity_remaining + ? WHERE id = ?',
+                [item.quantity, batch.id]
+              );
+            } else {
+              await tx.runQuery(
+                `INSERT INTO inventory_batches (shop_id, product_id, purchase_price, wholesale_price, official_price, retail_price, colour, quantity_received, quantity_remaining, received_date, notes, created_by)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_DATE, ?, ?)`,
+                [dn.shop_id, item.product_id, item.unit_price, item.unit_price, item.unit_price, item.unit_price, item.colour || null, item.quantity, item.quantity, `Stock restored on deletion of Debit Note ${dn.debit_note_number}`, req.user.id]
+              );
+            }
+            await syncStockFromBatches(tx, dn.shop_id, item.product_id);
+          }
+        }
+      }
+
+      // 2. Restore purchase bill pending amount if linked
+      if (dn.purchase_bill_id) {
+        const bill = await tx.getRecord('SELECT * FROM purchase_bills WHERE id = ? FOR UPDATE', [dn.purchase_bill_id]);
+        if (bill) {
+          const newPending = money(money(bill.pending_amount) + Number(dn.amount));
+          const newStatus  = newPending <= 0 ? 'paid' : (money(bill.paid_amount) > 0 ? 'partially_paid' : 'open');
+          await tx.runQuery(
+            'UPDATE purchase_bills SET pending_amount = ?, status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+            [newPending, newStatus, dn.purchase_bill_id]
+          );
+        }
+      }
+
+      // 3. Reverse journal
+      await reverseJournal(tx, 'debit_note', dnId, dn.shop_id, today(), req.user.id);
+
+      // 4. Delete items and debit note
+      await tx.runQuery('DELETE FROM debit_note_items WHERE debit_note_id = ?', [dnId]);
+      await tx.runQuery('DELETE FROM debit_notes WHERE id = ?', [dnId]);
+
+      return { id: dnId, debit_note_number: dn.debit_note_number };
+    });
+
+    await audit(req, 'Deleted debit note', 'debit_note', result.id, `Deleted ${result.debit_note_number}`);
+    res.json({ success: true, message: `Debit note ${result.debit_note_number} deleted successfully.` });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message || 'Failed to delete debit note.' });
   }
 });
 

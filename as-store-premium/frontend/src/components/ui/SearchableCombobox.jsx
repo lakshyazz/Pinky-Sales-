@@ -20,6 +20,7 @@ function SearchableCombobox({
   autoOpen = false,
   dropdownWidth = '',
   onSearch,
+  loading = false,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -132,8 +133,8 @@ function SearchableCombobox({
     return matches;
   }, [normalizedOptions, deferredSearch, isOpen]);
 
-  // Render top 50 items to keep DOM small and fast
-  const visibleOptions = useMemo(() => filteredOptions.slice(0, 50), [filteredOptions]);
+  // Render top 100 items to keep DOM responsive
+  const visibleOptions = useMemo(() => filteredOptions.slice(0, 100), [filteredOptions]);
 
   // Click outside listener
   useEffect(() => {
@@ -252,7 +253,9 @@ function SearchableCombobox({
         disabled={disabled}
         onClick={() => !disabled && setIsOpen(!isOpen)}
         className={`w-full relative text-left transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-          label
+          compact
+            ? 'min-h-[34px] h-[34px] px-2.5 py-1 bg-white dark:bg-slate-850 border rounded-lg flex items-center justify-between gap-1.5 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600'
+            : label
             ? 'min-h-[50px] h-[50px] pt-4 pb-1 px-3.5 bg-white dark:bg-slate-850 border rounded-[10px] flex items-center justify-between gap-2 shadow-2xs hover:border-slate-400 dark:hover:border-slate-600'
             : 'min-h-[40px] h-10 px-3 py-1.5 bg-white dark:bg-slate-850 border rounded-xl flex items-center justify-between gap-2 shadow-2xs hover:border-slate-300 dark:hover:border-slate-600'
         } ${
@@ -287,7 +290,7 @@ function SearchableCombobox({
                 <ProductThumbnail 
                   src={selectedOption.image_url} 
                   category={selectedOption.category} 
-                  size={24} 
+                  size={compact ? 20 : 24} 
                   showZoom={false} 
                   rounded="6px"
                 />
@@ -363,10 +366,15 @@ function SearchableCombobox({
                     if (onSearch) onSearch(val);
                   }}
                   placeholder={searchPlaceholder}
-                  style={{ paddingLeft: '34px', paddingRight: search ? '32px' : '10px', height: '34px' }}
+                  style={{ paddingLeft: '34px', paddingRight: (search || loading) ? '32px' : '10px', height: '34px' }}
                   className="w-full text-xs font-medium bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500/20 transition-all"
                 />
-                {search && (
+                {loading && (
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center">
+                    <div className="w-3.5 h-3.5 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                )}
+                {!loading && search && (
                   <button
                     type="button"
                     onClick={() => {
@@ -466,15 +474,15 @@ function SearchableCombobox({
                       </div>
                     );
                   })}
-                  {filteredOptions.length > 50 && (
+                  {filteredOptions.length > 100 && (
                     <div className="px-3 py-1.5 text-[10.5px] text-center font-bold text-slate-500 bg-slate-50 border-t border-slate-100 dark:bg-slate-800 dark:border-slate-700">
-                      Showing top 50 of {filteredOptions.length} results · Type to refine
+                      Showing top 100 of {filteredOptions.length} results · Type to refine
                     </div>
                   )}
                 </>
               ) : (
                 <div className="px-4 py-4 text-center text-xs font-medium text-slate-400 dark:text-slate-500">
-                  No matches for "{search}"
+                  {loading ? 'Searching products...' : (search ? `No matches for "${search}"` : 'No items found')}
                 </div>
               )}
             </div>

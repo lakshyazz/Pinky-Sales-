@@ -7626,7 +7626,11 @@ function App() {
                 api={authedFetch}
                 setGlobalToast={showToast}
                 suppliers={data.reference?.suppliers || []}
-                products={data.products || []}
+                products={data.catalog?.length ? data.catalog : (data.products || [])}
+                shopId={shopId || (role === 'shopkeeper' ? session?.shop_id : (selectedShop || data.warehouse?.id || data.shops?.[0]?.id))}
+                shops={data.shops || []}
+                warehouse={data.warehouse}
+                role={role}
               />
             </PageWrapper>
           )}
