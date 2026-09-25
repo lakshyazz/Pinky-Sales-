@@ -3475,10 +3475,44 @@ function App() {
       params.set('limit', String(customerPager.limit));
       if (filters?.search?.trim()) params.set('search', filters.search.trim());
       if (filters?.status) params.set('status', filters.status);
-      const response = await authedFetch(`/customers?${params.toString()}`);
+
+      const salesCustParams = scopedParams(currentShop);
+      salesCustParams.set('limit', '1000');
+
+      const [response, salesCustResponse] = await Promise.all([
+        authedFetch(`/customers?${params.toString()}`),
+        authedFetch(`/sales/customers?${salesCustParams.toString()}`).catch(() => null)
+      ]);
       const rows = getPaginatedRows(response);
-      setData((prev) => ({ ...prev, customers: rows }));
-      updatePagerFromResponse(setCustomerPager, response, page, rows, ['totalCustomers']);
+      const salesCustRows = salesCustResponse ? getPaginatedRows(salesCustResponse) : [];
+      const salesCustMap = new Map();
+      salesCustRows.forEach((sc) => {
+        if (sc.customer_id) {
+          salesCustMap.set(Number(sc.customer_id), sc);
+        }
+      });
+
+      const enrichedRows = rows.map((c) => {
+        const sc = salesCustMap.get(Number(c.id));
+        const pCount = Number(
+          c.purchases_count !== undefined && c.purchases_count !== null
+            ? c.purchases_count
+            : (sc?.total_invoices ?? 0)
+        );
+        const pAmount = Number(
+          c.total_purchases_amount !== undefined && c.total_purchases_amount !== null
+            ? c.total_purchases_amount
+            : (sc?.total_purchase_amount ?? 0)
+        );
+        return {
+          ...c,
+          purchases_count: pCount,
+          total_purchases_amount: pAmount,
+        };
+      });
+
+      setData((prev) => ({ ...prev, customers: enrichedRows }));
+      updatePagerFromResponse(setCustomerPager, response, page, enrichedRows, ['totalCustomers']);
     } catch (error) {
       handleLoadError(error, 'Unable to load customers right now.');
     } finally {
@@ -8081,6 +8115,15 @@ function App() {
                             const isCash = customer.name?.toLowerCase().includes('cash customer') || customer.mobile === '9999999999' || customer.mobile === '0000000000';
                             const pendingVal = Number(customer.pending || 0);
                             const isWholesaler = String(customer.customer_type || '').toLowerCase() === 'wholesaler';
+                            const purchasesCount = Number(
+                              customer.purchases_count !== undefined && customer.purchases_count !== null
+                                ? customer.purchases_count
+                                : (customer.sales_count !== undefined && customer.sales_count !== null
+                                  ? customer.sales_count
+                                  : allCustomerSales.length)
+                            );
+                            const purchasesAmount = Number(customer.total_purchases_amount || 0);
+                            const obVal = Number(customer.opening_balance || 0);
 
                             return (
                               <tr key={customer.id} className="hover:bg-slate-50/80 transition-colors group">
@@ -8135,9 +8178,26 @@ function App() {
                                   )}
                                 </td>
                                 <td className="py-3.5 px-4 text-center">
-                                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                                    {allCustomerSales.length} {allCustomerSales.length === 1 ? 'purchase' : 'purchases'}
-                                  </span>
+                                  <div className="inline-flex flex-col items-center justify-center gap-1">
+                                    <span 
+                                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                                        purchasesCount > 0 
+                                          ? 'bg-blue-50 text-blue-700 border-blue-200' 
+                                          : 'bg-slate-100 text-slate-600 border-slate-200'
+                                      }`}
+                                      title={purchasesAmount > 0 ? `Total Purchases: ₹${purchasesAmount.toLocaleString('en-IN')}` : undefined}
+                                    >
+                                      {purchasesCount} {purchasesCount === 1 ? 'purchase' : 'purchases'}
+                                    </span>
+                                    {purchasesCount === 0 && obVal > 0 && (
+                                      <span 
+                                        className="inline-flex items-center px-1.5 py-0.2 rounded text-[9.5px] font-semibold bg-amber-50 text-amber-700 border border-amber-200"
+                                        title={`Opening Balance: ₹${obVal.toLocaleString('en-IN')}`}
+                                      >
+                                        Opening Bal
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="py-3.5 px-4 text-right">
                                   {pendingVal > 0 ? (
@@ -9732,6 +9792,8 @@ function App() {
             initialCategory={addToolSpareCategory}
             suppliers={data.reference?.suppliers || []}
             brands={data.reference?.brands || []}
+            categories={data.reference?.categories || []}
+            partCategories={data.reference?.partCategories || []}
             shopId={shopId}
             onSuccess={handleToolSpareSuccess}
             showToast={showToast}

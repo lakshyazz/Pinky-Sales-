@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDown, Search, Check, Plus, X, Layers, Box, Tag } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ProductThumbnail from './ProductThumbnail';
@@ -21,14 +22,57 @@ function SearchableCombobox({
   dropdownWidth = '',
   onSearch,
   loading = false,
+  usePortal = false,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const containerRef = useRef(null);
+  const dropdownRef = useRef(null);
   const searchInputRef = useRef(null);
   const listRef = useRef(null);
   const deferredSearch = useDeferredValue(search);
+
+  // Viewport-aware Floating Portal calculation
+  const [portalCoords, setPortalCoords] = useState({ top: 0, left: 0, width: 0, maxHeight: 360, flipUp: false });
+
+  const updatePortalPosition = () => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const desiredWidth = Math.min(Math.max(rect.width, 480), window.innerWidth - 24);
+    let left = rect.left;
+    if (left + desiredWidth > window.innerWidth - 16) {
+      left = Math.max(12, window.innerWidth - desiredWidth - 16);
+    }
+    const estimatedHeight = 320;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    const flipUp = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+    const top = flipUp ? Math.max(8, rect.top - 6) : rect.bottom + 6;
+
+    setPortalCoords({
+      top,
+      left,
+      width: desiredWidth,
+      flipUp,
+      maxHeight: Math.min(360, Math.max(180, flipUp ? spaceAbove - 16 : spaceBelow - 16)),
+    });
+  };
+
+  useEffect(() => {
+    if (!isOpen || !usePortal) return;
+    updatePortalPosition();
+    const handleReposition = (e) => {
+      if (dropdownRef.current && dropdownRef.current.contains(e.target)) return;
+      updatePortalPosition();
+    };
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('scroll', handleReposition, true);
+    return () => {
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [isOpen, usePortal]);
 
   // Normalize options array and pre-compute search tokens once per options change
   const normalizedOptions = useMemo(() => {
@@ -139,7 +183,11 @@ function SearchableCombobox({
   // Click outside listener
   useEffect(() => {
     const handleClickOutside = (e) => {
-      if (containerRef.current && !containerRef.current.contains(e.target)) {
+      if (
+        containerRef.current &&
+        !containerRef.current.contains(e.target) &&
+        (!dropdownRef.current || !dropdownRef.current.contains(e.target))
+      ) {
         setIsOpen(false);
       }
     };
@@ -328,21 +376,26 @@ function SearchableCombobox({
 
       {/* Popover Dropdown Menu */}
       <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.98 }}
-            transition={{ duration: 0.14, ease: 'easeOut' }}
-            className={`absolute z-[9999] left-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col ${
-              dropdownWidth || 'min-w-full sm:min-w-[480px] md:min-w-[560px] max-w-[min(720px,94vw)] w-max'
-            }`}
-            style={{
-              maxHeight: '360px',
-              backgroundColor: '#ffffff',
-              boxShadow: '0 20px 40px -12px rgba(15, 23, 42, 0.2), 0 8px 16px -4px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05)',
-            }}
-          >
+        {isOpen && (() => {
+          const dropdownContent = (
+            <motion.div
+              ref={dropdownRef}
+              initial={{ opacity: 0, y: -4, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -4, scale: 0.98 }}
+              transition={{ duration: 0.14, ease: 'easeOut' }}
+              className={`${usePortal ? 'fixed' : 'absolute'} z-[99999] left-0 mt-1.5 bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col ${
+                dropdownWidth || 'min-w-full sm:min-w-[480px] md:min-w-[560px] max-w-[min(720px,94vw)] w-max'
+              }`}
+              style={{
+                top: usePortal ? portalCoords.top : undefined,
+                left: usePortal ? portalCoords.left : undefined,
+                width: usePortal ? portalCoords.width : undefined,
+                maxHeight: usePortal ? `${portalCoords.maxHeight}px` : '360px',
+                backgroundColor: '#ffffff',
+                boxShadow: '0 20px 40px -12px rgba(15, 23, 42, 0.2), 0 8px 16px -4px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.05)',
+              }}
+            >
             {/* Sticky Search Header */}
             <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-850 shrink-0">
               <div className="relative flex items-center w-full">
@@ -505,8 +558,10 @@ function SearchableCombobox({
                 </button>
               </div>
             )}
-          </motion.div>
-        )}
+            </motion.div>
+          );
+          return usePortal ? createPortal(dropdownContent, document.body) : dropdownContent;
+        })()}
       </AnimatePresence>
     </div>
   );

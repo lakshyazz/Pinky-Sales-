@@ -25,9 +25,7 @@ import {
   CornerDownRight,
   ChevronDown,
 } from 'lucide-react';
-import SearchableCombobox from './SearchableCombobox';
-import ProductTableCell from './ProductTableCell';
-import ProductSearchDialog from './ProductSearchDialog';
+import SearchableCombobox from '../ui/SearchableCombobox';
 import QuickAddVendorModal from './QuickAddVendorModal';
 import QuickAddProductModal from './QuickAddProductModal';
 import BatchProductPickerModal from './BatchProductPickerModal';
@@ -52,6 +50,78 @@ const getColorDot = (colourName) => {
   if (c.includes('silver') || c.includes('grey') || c.includes('gray')) return 'bg-slate-400';
   if (c.includes('orange') || c.includes('bronze')) return 'bg-orange-500';
   return 'bg-violet-400';
+};
+
+const extractProductColors = (product) => {
+  if (!product) return [];
+  const colorSet = new Set();
+
+  const addColor = (c) => {
+    if (!c) return;
+    const str = String(c).replace(/[{}"']/g, '').trim();
+    if (
+      !str ||
+      str.toLowerCase() === 'undefined' ||
+      str.toLowerCase() === 'null' ||
+      str.toLowerCase() === 'standard' ||
+      str.toLowerCase() === 'default'
+    )
+      return;
+    colorSet.add(str);
+  };
+
+  // 1. From available_colours or available_colors
+  const rawAvail = product.available_colours || product.available_colors;
+  if (Array.isArray(rawAvail)) {
+    rawAvail.forEach(addColor);
+  } else if (typeof rawAvail === 'string' && rawAvail.trim()) {
+    try {
+      const parsed = JSON.parse(rawAvail);
+      if (Array.isArray(parsed)) parsed.forEach(addColor);
+      else rawAvail.replace(/[{}]/g, '').split(',').forEach(addColor);
+    } catch {
+      rawAvail.replace(/[{}]/g, '').split(',').forEach(addColor);
+    }
+  }
+
+  // 2. From colours or colors
+  const rawColours = product.colours || product.colors;
+  if (Array.isArray(rawColours)) {
+    rawColours.forEach(addColor);
+  } else if (typeof rawColours === 'string' && rawColours.trim()) {
+    try {
+      const parsed = JSON.parse(rawColours);
+      if (Array.isArray(parsed)) parsed.forEach(addColor);
+      else rawColours.replace(/[{}]/g, '').split(',').forEach(addColor);
+    } catch {
+      rawColours.replace(/[{}]/g, '').split(',').forEach(addColor);
+    }
+  }
+
+  // 3. From colour_stock keys
+  if (product.colour_stock && typeof product.colour_stock === 'object') {
+    Object.keys(product.colour_stock).forEach(addColor);
+  } else if (typeof product.colour_stock === 'string' && product.colour_stock.trim()) {
+    try {
+      const parsed = JSON.parse(product.colour_stock);
+      if (typeof parsed === 'object' && parsed !== null) {
+        Object.keys(parsed).forEach(addColor);
+      }
+    } catch { /* ignore */ }
+  }
+
+  // 4. From supplier_batches
+  if (Array.isArray(product.supplier_batches)) {
+    product.supplier_batches.forEach((b) => {
+      if (b?.colour) addColor(b.colour);
+    });
+  }
+
+  // 5. Genuine color properties
+  if (product.color) addColor(product.color);
+  if (product.colour) addColor(product.colour);
+
+  return Array.from(colorSet);
 };
 
 export default function NewPurchaseBillModal({
@@ -249,45 +319,37 @@ export default function NewPurchaseBillModal({
 
   // Format supplier options for combobox
   const supplierOptions = useMemo(() => {
-    return suppliersList.map((s) => ({
-      id: s.id,
-      label: s.name,
-      mobile: s.mobile,
-      gstin: s.gstin,
-      sublabel: [s.mobile, s.gstin, s.address].filter(Boolean).join(' • '),
-    }));
+    return suppliersList.map((s) => [
+      s.id,
+      `${s.name}${s.mobile ? ` (${s.mobile})` : ''}`,
+      { brand: s.gstin ? `GST: ${s.gstin}` : '', category: s.address || '' },
+    ]);
   }, [suppliersList]);
 
   // Format product options for combobox
   const productOptions = useMemo(() => {
     return productsList.map((p) => {
-      let colorsList = [];
-      const raw = p.colours || p.available_colours;
-      if (Array.isArray(raw)) colorsList = raw;
-      else if (typeof raw === 'string' && raw.trim()) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) colorsList = parsed;
-          else colorsList = raw.split(',');
-        } catch {
-          colorsList = raw.split(',');
-        }
-      }
-
-      const cleanColors = colorsList.map((c) => String(c).trim()).filter(Boolean);
+      const cleanColors = extractProductColors(p);
+      const title = p.short_name || p.name || 'Product';
+      const brand = p.brand || '';
+      const cat = p.category || p.part_category || '';
+      const model = p.model || p.full_model_list || '';
+      const stock = p.stock ?? p.stock_qty ?? p.stockQty;
 
       return {
         id: p.id,
-        label: p.short_name || p.name,
-        brand: p.brand || '',
-        category: p.category || '',
-        model: p.model || p.full_model_list || '',
-        sku: p.sku || p.code || p.part_number || '',
+        name: title,
+        label: title,
+        brand,
+        category: cat,
+        model,
+        stock,
+        coloursCount: cleanColors.length,
         colors: cleanColors,
-        stock: p.stock ?? p.stock_qty ?? p.stockQty,
+        image_url: p.image_url || p.imageUrl || '',
         purchase_price: p.purchase_price || 0,
         sale_price: p.sale_price || 0,
-        sublabel: `Cost: ₹${p.purchase_price || 0} • Sell: ₹${p.sale_price || 0}`,
+        keywords: [title, brand, cat, model, p.sku, p.code, p.part_number].filter(Boolean).join(' '),
       };
     });
   }, [productsList]);
@@ -304,6 +366,14 @@ export default function NewPurchaseBillModal({
   };
 
   const focusField = (rowIdx, fieldName) => {
+    if (fieldName === 'product') {
+      const btn = document.getElementById(`bill-product-combobox-${rowIdx}`);
+      if (btn) {
+        btn.focus();
+        btn.click();
+        return;
+      }
+    }
     const target = rowRefs.current[rowIdx]?.[fieldName];
     if (!target) return;
     if (typeof target.focus === 'function') {
@@ -334,50 +404,13 @@ export default function NewPurchaseBillModal({
     }
   }, [items.length, pendingFocusRowIdx]);
 
-  // Product Finder Dialog (Command Palette Cmd+K) State
-  const [finderState, setFinderState] = useState({
-    isOpen: false,
-    rowIndex: 0,
-  });
-
-  const openProductFinder = (rowIndex) => {
-    setFinderState({
-      isOpen: true,
-      rowIndex,
-    });
-  };
-
-  const closeProductFinder = () => {
-    setFinderState((prev) => ({ ...prev, isOpen: false }));
-  };
-
-  const handleFinderSelect = (product, isBatch = false) => {
-    const currentRowIdx = finderState.rowIndex;
-    handleProductSelect(currentRowIdx, product.id, product);
-
-    if (isBatch) {
-      // Batch mode: append new row and advance finder to next row immediately
-      addItem();
-      setFinderState({
-        isOpen: true,
-        rowIndex: currentRowIdx + 1,
-      });
-    } else {
-      // Single select: close dialog and focus QTY input on current row
-      closeProductFinder();
-      setTimeout(() => {
-        focusField(currentRowIdx, 'qty');
-      }, 60);
-    }
-  };
-
   // Global Cmd+K / Ctrl+K listener
   useEffect(() => {
     const handleGlobalFinderKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         const emptyIdx = items.findIndex((it) => !it.product_id);
-        openProductFinder(emptyIdx !== -1 ? emptyIdx : Math.max(0, items.length - 1));
+        focusField(emptyIdx !== -1 ? emptyIdx : Math.max(0, items.length - 1), 'product');
       }
     };
     window.addEventListener('keydown', handleGlobalFinderKey);
@@ -405,7 +438,7 @@ export default function NewPurchaseBillModal({
     const nextIdx = items.length;
     addItem();
     setTimeout(() => {
-      openProductFinder(nextIdx);
+      focusField(nextIdx, 'product');
     }, 60);
   };
 
@@ -423,16 +456,19 @@ export default function NewPurchaseBillModal({
   };
 
   // Product selection handler
-  const handleProductSelect = (index, productId, productOpt) => {
-    if (!productId || !productOpt) {
+  const handleProductSelect = (index, productId, productOpt = null, chosenColor = null) => {
+    if (!productId) {
       updateItem(index, 'product_id', '');
       return;
     }
 
+    const opt = productOpt || productOptions.find((p) => String(p.id) === String(productId));
     const prodRecord = productsList.find((p) => String(p.id) === String(productId));
-    const cost = prodRecord?.purchase_price ?? productOpt.purchase_price ?? '';
-    const sell = prodRecord?.sale_price ?? productOpt.sale_price ?? 0;
-    const defaultColor = productOpt.colors && productOpt.colors.length === 1 ? productOpt.colors[0] : '';
+    const cost = prodRecord?.purchase_price ?? opt?.purchase_price ?? '';
+    const sell = prodRecord?.sale_price ?? opt?.sale_price ?? 0;
+    const colors = opt?.colors || extractProductColors(prodRecord) || [];
+    const hasColors = colors.length > 0;
+    const defaultColor = chosenColor || (colors.length === 1 ? colors[0] : '');
 
     setItems((prev) =>
       prev.map((it, idx) => {
@@ -442,16 +478,20 @@ export default function NewPurchaseBillModal({
           product_id: productId,
           custom_product_name: '',
           showCustomInput: false,
-          colour: defaultColor || it.colour,
+          colour: hasColors ? (defaultColor || it.colour) : '',
           unit_price: cost !== null && cost !== undefined && cost !== 0 ? cost : it.unit_price,
           default_selling_price: sell,
         };
       })
     );
 
-    // Requirement 4: Selecting a product automatically advances focus to Color / Variant
+    // If product has no colors OR a color was already chosen -> advance straight to qty!
     setTimeout(() => {
-      focusField(index, 'color');
+      if (!hasColors || chosenColor) {
+        focusField(index, 'qty');
+      } else {
+        focusField(index, 'color');
+      }
     }, 60);
   };
 
@@ -535,6 +575,10 @@ export default function NewPurchaseBillModal({
     }, 0);
   }, [items]);
 
+  const totalUnits = useMemo(() => {
+    return items.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  }, [items]);
+
   const productsTotal = money(lineSubtotal - totalDiscounts);
   const totalAmount = money(productsTotal + money(extraCharges || 0));
 
@@ -607,38 +651,38 @@ export default function NewPurchaseBillModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-zinc-950/60 backdrop-blur-md">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-zinc-950/65 backdrop-blur-md">
       <motion.div
-        initial={{ scale: 0.98, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        exit={{ scale: 0.98, opacity: 0 }}
-        transition={{ duration: 0.15 }}
-        className="bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 shadow-2xl rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col overflow-hidden text-xs"
+        initial={{ scale: 0.98, opacity: 0, y: 6 }}
+        animate={{ scale: 1, opacity: 1, y: 0 }}
+        exit={{ scale: 0.98, opacity: 0, y: 6 }}
+        transition={{ duration: 0.16, ease: 'easeOut' }}
+        className="bg-white dark:bg-zinc-950 border border-zinc-200/90 dark:border-zinc-800/90 shadow-2xl rounded-2xl w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden text-xs"
       >
         {/* Header: flex-none */}
-        <div className="flex-none px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between bg-zinc-50/50 dark:bg-zinc-900/40">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-violet-600 to-indigo-500 text-white flex items-center justify-center shadow-md shadow-violet-500/20 shrink-0">
-              <ShoppingBag className="w-5 h-5 shrink-0 stroke-[1.75]" />
+        <div className="flex-none px-6 py-4 border-b border-zinc-100 dark:border-zinc-800/80 flex items-center justify-between bg-zinc-50/60 dark:bg-zinc-900/40">
+          <div className="flex items-center gap-3.5">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-violet-600 via-indigo-600 to-purple-600 text-white flex items-center justify-center shadow-md shadow-violet-500/25 shrink-0">
+              <ShoppingBag className="w-5 h-5 shrink-0 stroke-[2]" />
             </div>
             <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-sm font-bold tracking-tight text-zinc-900 dark:text-white">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-base font-bold tracking-tight text-zinc-900 dark:text-white">
                   {billToEdit ? `Edit Purchase Bill #${billToEdit.bill_number}` : 'Record Purchase Bill'}
                 </h2>
-                <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 dark:bg-violet-950/50 dark:text-violet-300 border border-violet-200/60 dark:border-violet-800/50 font-semibold">
+                <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-950/70 dark:text-violet-300 border border-violet-200 dark:border-violet-800 font-bold">
                   ERP Inward
                 </span>
 
                 {/* Destination Location / Shop Selector Badge */}
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700 text-[10.5px]">
-                  <Building2 className="w-3 h-3 text-violet-600 dark:text-violet-400 shrink-0" />
-                  <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-normal">Inward To:</span>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800/90 text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 text-xs shadow-2xs">
+                  <Building2 className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 shrink-0" />
+                  <span className="text-[10.5px] text-zinc-400 dark:text-zinc-500 font-medium">Inward To:</span>
                   {shops && shops.length > 1 && (role === 'superadmin' || !session?.shop_id) ? (
                     <select
                       value={selectedShopId}
                       onChange={(e) => setSelectedShopId(e.target.value)}
-                      className="bg-transparent font-bold text-zinc-900 dark:text-zinc-100 text-[10.5px] outline-hidden cursor-pointer border-none p-0 pr-1"
+                      className="bg-transparent font-bold text-zinc-900 dark:text-zinc-100 text-xs outline-hidden cursor-pointer border-none p-0 pr-1"
                     >
                       {warehouse && (
                         <option value={warehouse.id} className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-semibold">
@@ -663,22 +707,23 @@ export default function NewPurchaseBillModal({
                   )}
                 </div>
               </div>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 font-normal mt-0.5">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 font-normal mt-0.5">
                 Record inward inventory shipments, batch purchases, and vendor payables
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono font-medium rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
+            <kbd className="hidden sm:inline-flex items-center px-2 py-0.5 text-[10px] font-mono font-medium rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 border border-zinc-200 dark:border-zinc-700/80">
               ESC
-            </span>
+            </kbd>
             <button
               type="button"
               onClick={onClose}
-              className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 rounded-lg p-1.5 transition-colors cursor-pointer"
+              className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl p-2 transition-colors cursor-pointer"
+              title="Close (Esc)"
             >
-              <X className="w-4 h-4 shrink-0 stroke-[1.75]" />
+              <X className="w-4 h-4 stroke-[2]" />
             </button>
           </div>
         </div>
@@ -687,23 +732,23 @@ export default function NewPurchaseBillModal({
         <form
           id="purchase-bill-form"
           onSubmit={handleSubmit}
-          className="flex-1 overflow-y-auto px-6 py-5 space-y-6 flex flex-col"
+          className="flex-1 overflow-y-auto px-6 py-5 space-y-6 flex flex-col scrollbar-thin"
         >
           {/* Error Alert */}
           {error && (
-            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 font-medium flex items-center gap-2 shrink-0">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400 stroke-[1.75]" />
+            <div className="p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-300 font-medium flex items-center gap-2.5 shrink-0 shadow-2xs">
+              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400 stroke-[2]" />
               <span>{error}</span>
             </div>
           )}
 
           {/* Top Metadata Card Group */}
-          <div className="bg-zinc-50/70 dark:bg-zinc-900/50 border border-zinc-200/80 dark:border-zinc-800/80 rounded-xl p-4 shrink-0">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
+          <div className="bg-gradient-to-b from-zinc-50/80 to-white dark:from-zinc-900/60 dark:to-zinc-900/40 border border-zinc-200/90 dark:border-zinc-800/90 rounded-2xl p-4.5 shadow-2xs shrink-0">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4.5 items-start">
               {/* Vendor / Supplier */}
               <div>
-                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                  <Building2 className="w-4 h-4 shrink-0 text-zinc-400 stroke-[1.75]" />
+                <label className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 shrink-0 text-violet-500 stroke-[2]" />
                   <span>Vendor / Supplier</span>
                 </label>
                 <SearchableCombobox
@@ -712,34 +757,38 @@ export default function NewPurchaseBillModal({
                   onChange={(val) => setSupplierId(val)}
                   placeholder="Select or search vendor..."
                   searchPlaceholder="Search vendor by name, phone, GST..."
-                  actionText="+ Add New Vendor"
-                  onAction={() => setShowVendorModal(true)}
-                  size="md"
+                  onAddNew={() => setShowVendorModal(true)}
+                  addNewLabel="+ Add New Vendor"
+                  usePortal={true}
+                  className="w-full"
                 />
               </div>
 
               {/* Bill Date */}
               <div>
-                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                  <Calendar className="w-4 h-4 shrink-0 text-zinc-400 stroke-[1.75]" />
+                <label className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 shrink-0 text-violet-500 stroke-[2]" />
                   <span>Bill Date</span>
                 </label>
-                <div className="relative flex items-center">
-                  <input
-                    type="date"
-                    value={billDate}
-                    onChange={(e) => setBillDate(e.target.value)}
-                    className="w-full h-10 px-3 border border-zinc-200 dark:border-zinc-800 rounded-lg font-medium text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden transition-all shadow-2xs text-xs"
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={billDate}
+                  onChange={(e) => setBillDate(e.target.value)}
+                  className="w-full h-10 px-3 border border-zinc-200 dark:border-zinc-800 rounded-xl font-medium text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 outline-hidden transition-all shadow-2xs text-xs"
+                />
               </div>
 
               {/* Payment Terms */}
               <div>
-                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                  <Clock className="w-4 h-4 shrink-0 text-zinc-400 stroke-[1.75]" />
-                  <span>Terms (Days)</span>
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5 shrink-0 text-violet-500 stroke-[2]" />
+                    <span>Terms (Days)</span>
+                  </label>
+                  <span className="text-[10.5px] font-mono text-zinc-400 dark:text-zinc-500">
+                    Due: <strong className="text-zinc-700 dark:text-zinc-300 font-semibold">{dueDateFormatted}</strong>
+                  </span>
+                </div>
                 <div className="relative flex items-center">
                   <input
                     type="number"
@@ -747,18 +796,18 @@ export default function NewPurchaseBillModal({
                     max={365}
                     value={paymentTerms}
                     onChange={(e) => setPaymentTerms(e.target.value)}
-                    className="w-full h-10 pl-3 pr-24 border border-zinc-200 dark:border-zinc-800 rounded-lg font-mono text-xs font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden transition-all shadow-2xs"
+                    className="w-full h-10 pl-3 pr-24 border border-zinc-200 dark:border-zinc-800 rounded-xl font-mono text-xs font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 outline-hidden transition-all shadow-2xs"
                   />
-                  <div className="absolute right-2 flex items-center gap-1">
+                  <div className="absolute right-1.5 flex items-center gap-1">
                     {[15, 30, 45].map((preset) => (
                       <button
                         key={preset}
                         type="button"
                         onClick={() => setPaymentTerms(preset)}
-                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded cursor-pointer transition-colors ${
+                        className={`text-[10.5px] font-mono px-1.5 py-0.5 rounded-lg cursor-pointer transition-all font-semibold ${
                           Number(paymentTerms) === preset
-                            ? 'bg-violet-100 dark:bg-violet-950/70 text-violet-700 dark:text-violet-300 font-bold'
-                            : 'text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800'
+                            ? 'bg-violet-600 text-white shadow-2xs'
+                            : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-200 dark:hover:bg-zinc-700'
                         }`}
                       >
                         {preset}d
@@ -766,15 +815,12 @@ export default function NewPurchaseBillModal({
                     ))}
                   </div>
                 </div>
-                <p className="mt-1 text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
-                  Due: <span className="font-semibold text-zinc-700 dark:text-zinc-300">{dueDateFormatted}</span>
-                </p>
               </div>
 
               {/* Payment Mode */}
               <div>
-                <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                  <CreditCard className="w-4 h-4 shrink-0 text-zinc-400 stroke-[1.75]" />
+                <label className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                  <CreditCard className="w-3.5 h-3.5 shrink-0 text-violet-500 stroke-[2]" />
                   <span>Payment Mode</span>
                 </label>
                 <div className="relative flex items-center">
@@ -782,9 +828,9 @@ export default function NewPurchaseBillModal({
                     value={paymentMode}
                     onChange={(e) => setPaymentMode(e.target.value)}
                     style={{ backgroundImage: 'none' }}
-                    className="w-full h-10 pl-3 pr-8 border border-zinc-200 dark:border-zinc-800 rounded-lg text-xs font-medium text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden transition-all shadow-2xs appearance-none cursor-pointer"
+                    className="w-full h-10 pl-3 pr-8 border border-zinc-200 dark:border-zinc-800 rounded-xl text-xs font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 outline-hidden transition-all shadow-2xs appearance-none cursor-pointer"
                   >
-                    <option value="credit">Credit (Payable On Account)</option>
+                    <option value="credit">Credit (On Account Payable)</option>
                     <option value="cash">Cash In Hand</option>
                     <option value="upi">UPI / Online</option>
                     <option value="bank">Bank Transfer (NEFT/RTGS)</option>
@@ -792,171 +838,157 @@ export default function NewPurchaseBillModal({
                   </select>
                   <ChevronDown className="w-4 h-4 shrink-0 stroke-[1.75] text-zinc-400 pointer-events-none absolute right-2.5" />
                 </div>
-                <p className="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500 truncate">
-                  {paymentMode === 'credit' ? 'Posts to Accounts Payable' : 'Direct disbursement'}
-                </p>
               </div>
             </div>
           </div>
 
           {/* Line Items Section */}
           <div className="space-y-3 shrink-0">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-xs text-zinc-900 dark:text-white flex items-center gap-1.5">
-                  <Tag className="w-4 h-4 shrink-0 text-violet-600 dark:text-violet-400 stroke-[1.75]" />
-                  <span>Line Items &amp; Stock Inward</span>
-                </span>
-                <span className="text-[10px] font-mono font-medium px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-700">
-                  {items.length} {items.length === 1 ? 'item' : 'items'}
-                </span>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-violet-100 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400 flex items-center justify-center border border-violet-200/80 dark:border-violet-800/60 shadow-2xs">
+                  <Tag className="w-3.5 h-3.5 stroke-[2]" />
+                </div>
+                <div>
+                  <div className="font-bold text-xs text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
+                    <span>Line Items &amp; Stock Inward</span>
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200/90 dark:border-zinc-700">
+                      {items.length} {items.length === 1 ? 'item' : 'items'} • {totalUnits} {totalUnits === 1 ? 'unit' : 'units'}
+                    </span>
+                  </div>
+                </div>
               </div>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setShowBatchPickerModal(true)}
-                  className="px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-850 hover:bg-zinc-200 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700/80 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                  className="px-3.5 py-1.5 text-xs font-semibold text-zinc-700 dark:text-zinc-200 bg-white dark:bg-zinc-850 hover:bg-zinc-50 dark:hover:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl transition-all flex items-center gap-2 cursor-pointer shadow-2xs hover:shadow-xs active:scale-[0.98]"
                   title="Open catalog picker to multi-select products"
                 >
-                  <Layers className="w-3.5 h-3.5 shrink-0 text-zinc-500 dark:text-zinc-400 stroke-[1.75]" />
-                  <span>Browse / Multi-Add</span>
+                  <Layers className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400 stroke-[2]" />
+                  <span>Catalog Multi-Add</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={handleAddNewLine}
-                  className="px-3 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 dark:bg-violet-600 dark:hover:bg-violet-500 rounded-lg transition-all flex items-center gap-1 cursor-pointer shadow-xs"
+                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 dark:bg-violet-600 dark:hover:bg-violet-500 rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-xs active:scale-[0.98]"
                 >
-                  <Plus className="w-3.5 h-3.5 shrink-0 stroke-[2]" />
-                  <span>Add Line</span>
+                  <Plus className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Add Row</span>
                 </button>
               </div>
             </div>
 
-            {/* Table Container with Horizontal Scroll */}
-            <div className="border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-x-auto bg-white dark:bg-zinc-900 shadow-2xs">
-              <table className="w-full min-w-[880px] text-left text-xs border-collapse">
-                <thead className="bg-zinc-50/80 dark:bg-zinc-900/90 border-b border-zinc-200 dark:border-zinc-800 text-[11px] font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
-                  <tr>
-                    <th className="py-2.5 px-2 w-8 text-center">#</th>
-                    <th className="py-2.5 px-3 min-w-[280px]">Product / Model</th>
-                    <th className="py-2.5 px-3 w-36">Color / Variant</th>
-                    <th className="py-2.5 px-2 w-20 text-right">Qty</th>
-                    <th className="py-2.5 px-2 w-28 text-right">Unit Cost</th>
-                    <th className="py-2.5 px-2 w-20 text-right">Discount</th>
-                    <th className="py-2.5 px-3 w-28 text-right">Total</th>
-                    <th className="py-2.5 px-2 w-10 text-center"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-100 dark:divide-zinc-850">
-                  {items.map((item, idx) => {
-                    const lineQty = Number(item.quantity || 0);
-                    const linePrice = Number(item.unit_price || 0);
-                    const lineDisc = Number(item.discount_amount || 0);
-                    const lineTotal = money(lineQty * linePrice - lineDisc);
+            {/* Table Container - responsive and fits max-w-6xl cleanly without scrollbar */}
+            <div className="border border-zinc-200/90 dark:border-zinc-800 rounded-2xl overflow-hidden bg-white dark:bg-zinc-900 shadow-2xs">
+              <div className="overflow-x-auto scrollbar-thin">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="bg-zinc-50/90 dark:bg-zinc-850/80 border-b border-zinc-200/90 dark:border-zinc-800 text-[10.5px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+                    <tr>
+                      <th className="py-2.5 px-3 w-10 text-center">#</th>
+                      <th className="py-2.5 px-3 min-w-[260px]">Product / Model</th>
+                      <th className="py-2.5 px-3 w-40">Color / Variant</th>
+                      <th className="py-2.5 px-2 w-20 text-center">Qty</th>
+                      <th className="py-2.5 px-2 w-32 text-right">Unit Cost</th>
+                      <th className="py-2.5 px-2 w-24 text-right">Discount</th>
+                      <th className="py-2.5 px-3 w-28 text-right">Total</th>
+                      <th className="py-2.5 px-2 w-10 text-center"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-100 dark:divide-zinc-850">
+                    {items.map((item, idx) => {
+                      const lineQty = Number(item.quantity || 0);
+                      const linePrice = Number(item.unit_price || 0);
+                      const lineDisc = Number(item.discount_amount || 0);
+                      const lineTotal = money(lineQty * linePrice - lineDisc);
 
-                    const productObj = productsList.find((p) => String(p.id) === String(item.product_id));
-                    const productOpt = productOptions.find((p) => String(p.id) === String(item.product_id));
-                    const hasMultipleColors = productOpt?.colors && productOpt.colors.length > 1;
+                      const productObj = productsList.find((p) => String(p.id) === String(item.product_id));
+                      const productOpt = productOptions.find((p) => String(p.id) === String(item.product_id));
+                      const hasMultipleColors = productOpt?.colors && productOpt.colors.length > 1;
 
-                    const sellPrice = Number(item.default_selling_price || productObj?.sale_price || 0);
-                    const isCostInflated = linePrice > 0 && sellPrice > 0 && linePrice > sellPrice;
+                      const sellPrice = Number(item.default_selling_price || productObj?.sale_price || 0);
+                      const isCostInflated = linePrice > 0 && sellPrice > 0 && linePrice > sellPrice;
 
-                    return (
-                      <tr key={idx} className="group hover:bg-zinc-50/70 dark:hover:bg-zinc-850/50 transition-colors">
-                        {/* Row # */}
-                        <td className="py-2.5 px-2 w-8 text-center text-zinc-400 dark:text-zinc-500 font-mono text-[11px]">
-                          {idx + 1}
-                        </td>
+                      return (
+                        <tr key={idx} className="group hover:bg-zinc-50/60 dark:hover:bg-zinc-850/40 transition-colors">
+                          {/* Row # */}
+                          <td className="py-3 px-3 w-10 text-center">
+                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-[11px] font-mono font-bold text-zinc-500 dark:text-zinc-400 select-none">
+                              {idx + 1}
+                            </span>
+                          </td>
 
-                        {/* Product / Model Cell (Passive trigger with Command Palette Finder) */}
-                        <td className="py-2.5 px-3 min-w-[280px]">
-                          <ProductTableCell
-                            ref={(el) => setFieldRef(idx, 'product', el)}
-                            product={productOpt}
-                            onClick={() => openProductFinder(idx)}
-                            onClear={() => handleProductSelect(idx, '', null)}
-                            placeholder="Search model, brand, or SKU..."
-                          />
+                          {/* Product / Model Cell */}
+                          <td className="py-2.5 px-3 min-w-[280px]">
+                            <SearchableCombobox
+                              id={`bill-product-combobox-${idx}`}
+                              value={item.product_id}
+                              onChange={(val) => {
+                                const prodOpt = productOptions.find((p) => String(p.id) === String(val));
+                                handleProductSelect(idx, val, prodOpt);
+                              }}
+                              options={productOptions}
+                              placeholder="Search model, brand, or SKU..."
+                              searchPlaceholder="Type model, OLED, battery, brand..."
+                              dropdownWidth="min-w-full sm:min-w-[540px] md:min-w-[620px] max-w-[min(720px,94vw)]"
+                              className="w-full"
+                              allowClear
+                              usePortal={true}
+                              onAddNew={() => setShowProductModal(true)}
+                              addNewLabel="+ Create New Product"
+                            />
 
-                          {/* Secondary Custom Name toggle/display */}
-                          {!item.product_id && (
-                            <div className="mt-1.5">
-                              <input
-                                type="text"
-                                value={item.custom_product_name}
-                                onChange={(e) => updateItem(idx, 'custom_product_name', e.target.value)}
-                                placeholder="Type custom item description or model..."
-                                className="w-full h-8 px-2.5 border border-zinc-200 dark:border-zinc-700 rounded-lg text-xs font-medium text-zinc-800 dark:text-zinc-200 bg-zinc-50/50 dark:bg-zinc-800/40 focus:bg-white dark:focus:bg-zinc-900 focus:border-violet-500 outline-hidden"
-                              />
-                            </div>
-                          )}
+                            {/* Secondary Custom Name toggle/display */}
+                            {!item.product_id && (
+                              <div className="mt-1.5">
+                                <input
+                                  type="text"
+                                  value={item.custom_product_name}
+                                  onChange={(e) => updateItem(idx, 'custom_product_name', e.target.value)}
+                                  placeholder="Type custom item description or model..."
+                                  className="w-full h-8 px-2.5 border border-zinc-200 dark:border-zinc-700 rounded-lg text-xs font-medium text-zinc-800 dark:text-zinc-200 bg-zinc-50/50 dark:bg-zinc-800/40 focus:bg-white dark:focus:bg-zinc-900 focus:border-violet-500 outline-hidden"
+                                />
+                              </div>
+                            )}
 
-                          {item.product_id && (
-                            <div className="mt-1 flex items-center justify-between text-[10px]">
-                              {item.showCustomInput ? (
-                                <div className="w-full flex items-center gap-1.5">
-                                  <CornerDownRight className="w-3 h-3 text-zinc-400 shrink-0 stroke-[1.75]" />
-                                  <input
-                                    type="text"
-                                    value={item.custom_product_name}
-                                    onChange={(e) => updateItem(idx, 'custom_product_name', e.target.value)}
-                                    placeholder="Add specific line note or IMEI / batch..."
-                                    className="w-full h-7 px-2 border border-zinc-200 dark:border-zinc-700 rounded-md text-[11px] text-zinc-700 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800/40 focus:bg-white dark:focus:bg-zinc-900 outline-hidden"
-                                  />
+                            {item.product_id && (
+                              <div className="mt-1 flex items-center justify-between text-[10px]">
+                                {item.showCustomInput ? (
+                                  <div className="w-full flex items-center gap-1.5">
+                                    <CornerDownRight className="w-3 h-3 text-zinc-400 shrink-0 stroke-[1.75]" />
+                                    <input
+                                      type="text"
+                                      value={item.custom_product_name}
+                                      onChange={(e) => updateItem(idx, 'custom_product_name', e.target.value)}
+                                      placeholder="Add specific line note or IMEI / batch..."
+                                      className="w-full h-7 px-2 border border-zinc-200 dark:border-zinc-700 rounded-md text-[11px] text-zinc-700 dark:text-zinc-300 bg-zinc-50 dark:bg-zinc-800/40 focus:bg-white dark:focus:bg-zinc-900 outline-hidden"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => updateItem(idx, 'showCustomInput', false)}
+                                      className="text-zinc-400 hover:text-zinc-600 p-0.5 cursor-pointer"
+                                    >
+                                      <X className="w-3 h-3 shrink-0 stroke-[1.75]" />
+                                    </button>
+                                  </div>
+                                ) : (
                                   <button
                                     type="button"
-                                    onClick={() => updateItem(idx, 'showCustomInput', false)}
-                                    className="text-zinc-400 hover:text-zinc-600 p-0.5 cursor-pointer"
+                                    onClick={() => updateItem(idx, 'showCustomInput', true)}
+                                    className="text-[10.5px] text-zinc-400 hover:text-violet-600 dark:hover:text-violet-400 font-medium transition-colors cursor-pointer"
                                   >
-                                    <X className="w-3 h-3 shrink-0 stroke-[1.75]" />
+                                    + Add line note / batch memo
                                   </button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => updateItem(idx, 'showCustomInput', true)}
-                                  className="text-[10.5px] text-zinc-400 hover:text-violet-600 dark:hover:text-violet-400 font-medium transition-colors cursor-pointer"
-                                >
-                                  + Add line note / batch memo
-                                </button>
-                              )}
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Color / Variant */}
-                        <td className="py-2.5 px-3 w-36">
-                          <div className="flex items-center gap-1.5">
-                            {productOpt?.colors && productOpt.colors.length > 0 ? (
-                              <div className="relative w-full">
-                                <div className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center">
-                                  <span className={`w-2 h-2 rounded-full shrink-0 ${getColorDot(item.colour)}`} />
-                                </div>
-                                <select
-                                  ref={(el) => setFieldRef(idx, 'color', el)}
-                                  value={item.colour || ''}
-                                  onChange={(e) => updateItem(idx, 'colour', e.target.value)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      focusField(idx, 'qty');
-                                    }
-                                  }}
-                                  style={{ backgroundImage: 'none' }}
-                                  className="w-full h-9 pl-6 pr-6 border border-zinc-200 dark:border-zinc-800 rounded-lg font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden text-xs appearance-none transition-all cursor-pointer shadow-2xs"
-                                >
-                                  <option value="" className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-medium">Universal</option>
-                                  {productOpt.colors.map((c) => (
-                                    <option key={c} value={c} className="bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 font-semibold">
-                                      {c}
-                                    </option>
-                                  ))}
-                                </select>
-                                <ChevronDown className="w-3.5 h-3.5 shrink-0 stroke-[1.75] text-zinc-400 pointer-events-none absolute right-2 top-1/2 -translate-y-1/2" />
+                                )}
                               </div>
-                            ) : (
+                            )}
+                          </td>
+
+                          {/* Color / Variant */}
+                          <td className="py-3 px-3 w-40">
+                            <div className="flex items-center gap-1.5">
                               <div className="relative w-full">
                                 {item.colour && (
                                   <div className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none flex items-center">
@@ -966,6 +998,7 @@ export default function NewPurchaseBillModal({
                                 <input
                                   ref={(el) => setFieldRef(idx, 'color', el)}
                                   type="text"
+                                  list={`color-options-${idx}`}
                                   value={item.colour || ''}
                                   onChange={(e) => updateItem(idx, 'colour', e.target.value)}
                                   onKeyDown={(e) => {
@@ -974,55 +1007,98 @@ export default function NewPurchaseBillModal({
                                       focusField(idx, 'qty');
                                     }
                                   }}
-                                  placeholder="Universal"
-                                  className={`w-full h-9 ${item.colour ? 'pl-6' : 'pl-2.5'} pr-2 border border-zinc-200 dark:border-zinc-800 rounded-lg font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden text-xs shadow-2xs`}
+                                  placeholder="Color (Optional)"
+                                  className={`w-full h-9 ${item.colour ? 'pl-6' : 'pl-2.5'} pr-2 border border-zinc-200 dark:border-zinc-800 rounded-xl font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 outline-hidden text-xs transition-all shadow-2xs`}
                                 />
+                                <datalist id={`color-options-${idx}`}>
+                                  {(productOpt?.colors || []).map((c) => (
+                                    <option key={c} value={c} />
+                                  ))}
+                                  {['Black', 'White', 'Blue', 'Gold', 'Silver', 'Green', 'Purple', 'Red', 'Grey', 'Orange'].map((c) => (
+                                    <option key={c} value={c} />
+                                  ))}
+                                </datalist>
                               </div>
-                            )}
 
-                            {/* Multi-Color Breakdown Icon */}
-                            {hasMultipleColors && (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setBreakdownProduct(productObj);
-                                  setBreakdownLineIndex(idx);
+                              {/* Multi-Color Breakdown Icon */}
+                              {productObj && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setBreakdownProduct(productObj);
+                                    setBreakdownLineIndex(idx);
+                                  }}
+                                  className="w-9 h-9 flex items-center justify-center rounded-xl bg-pink-50 hover:bg-pink-100 dark:bg-pink-950/40 dark:hover:bg-pink-950/70 text-pink-700 dark:text-pink-300 border border-pink-200/80 dark:border-pink-800/60 transition-colors cursor-pointer shrink-0 shadow-2xs"
+                                  title="Enter quantities for each color variant at once"
+                                >
+                                  <Palette className="w-4 h-4 shrink-0 stroke-[1.75]" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Quantity */}
+                          <td className="py-3 px-2 w-20 text-center">
+                            <input
+                              ref={(el) => setFieldRef(idx, 'qty', el)}
+                              type="number"
+                              min={1}
+                              value={item.quantity}
+                              onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  focusField(idx, 'cost');
+                                }
+                              }}
+                              className="w-full h-9 px-2 text-center border border-zinc-200 dark:border-zinc-800 rounded-xl font-mono font-bold text-xs text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 outline-hidden transition-all shadow-2xs"
+                            />
+                          </td>
+
+                          {/* Unit Cost with CurrencyInput */}
+                          <td className="py-3 px-2 w-32 text-right">
+                            <div>
+                              <CurrencyInput
+                                ref={(el) => setFieldRef(idx, 'cost', el)}
+                                size="sm"
+                                value={item.unit_price}
+                                onChange={(e) => updateItem(idx, 'unit_price', e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleLastFieldEnter(idx);
+                                  }
                                 }}
-                                className="w-9 h-9 flex items-center justify-center rounded-lg bg-pink-50 hover:bg-pink-100 dark:bg-pink-950/40 dark:hover:bg-pink-950/70 text-pink-700 dark:text-pink-300 border border-pink-200/80 dark:border-pink-800/60 transition-colors cursor-pointer shrink-0"
-                                title="Enter quantities for each color variant at once"
-                              >
-                                <Palette className="w-4 h-4 shrink-0 stroke-[1.75]" />
-                              </button>
-                            )}
-                          </div>
-                        </td>
+                                placeholder="0.00"
+                                isWarning={isCostInflated}
+                                warningMessage={`> Sell ₹${sellPrice}`}
+                                className="w-full"
+                              />
+                              {!isCostInflated && sellPrice > 0 && linePrice > 0 && (
+                                <div className="mt-1 flex items-center justify-end">
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-mono text-[9px] font-bold border border-emerald-200/60 dark:border-emerald-800/50">
+                                    +{Math.round(((sellPrice - linePrice) / sellPrice) * 100)}% (Sell ₹{sellPrice})
+                                  </span>
+                                </div>
+                              )}
+                              {isCostInflated && (
+                                <div className="mt-1 flex items-center justify-end">
+                                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 font-mono text-[9px] font-bold border border-rose-200/60 dark:border-rose-800/50">
+                                    <AlertTriangle className="w-2.5 h-2.5 shrink-0" />
+                                    &gt; Sell ₹{sellPrice}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </td>
 
-                        {/* Quantity */}
-                        <td className="py-2.5 px-2 w-20 text-right">
-                          <input
-                            ref={(el) => setFieldRef(idx, 'qty', el)}
-                            type="number"
-                            min={1}
-                            value={item.quantity}
-                            onChange={(e) => updateItem(idx, 'quantity', e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                focusField(idx, 'cost');
-                              }
-                            }}
-                            className="w-full h-9 px-2 border border-zinc-200 dark:border-zinc-800 rounded-lg font-mono font-semibold text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden text-right text-xs shadow-2xs"
-                          />
-                        </td>
-
-                        {/* Unit Cost with CurrencyInput */}
-                        <td className="py-2.5 px-2 w-28 text-right">
-                          <div className="space-y-1">
+                          {/* Discount with CurrencyInput */}
+                          <td className="py-3 px-2 w-24 text-right">
                             <CurrencyInput
-                              ref={(el) => setFieldRef(idx, 'cost', el)}
+                              ref={(el) => setFieldRef(idx, 'discount', el)}
                               size="sm"
-                              value={item.unit_price}
-                              onChange={(e) => updateItem(idx, 'unit_price', e.target.value)}
+                              value={item.discount_amount}
+                              onChange={(e) => updateItem(idx, 'discount_amount', e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
                                   e.preventDefault();
@@ -1030,70 +1106,45 @@ export default function NewPurchaseBillModal({
                                 }
                               }}
                               placeholder="0.00"
-                              isWarning={isCostInflated}
-                              warningMessage={`> Sell ₹${sellPrice}`}
                               className="w-full"
                             />
-                            {!isCostInflated && sellPrice > 0 && linePrice > 0 && (
-                              <div className="text-[9.5px] font-mono text-emerald-600 dark:text-emerald-400 text-right truncate">
-                                +{Math.round(((sellPrice - linePrice) / sellPrice) * 100)}% (Sell ₹{sellPrice})
-                              </div>
+                          </td>
+
+                          {/* Line Total */}
+                          <td className="py-3 px-3 w-28 text-right font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap text-sm tracking-tight">
+                            {currency(lineTotal)}
+                          </td>
+
+                          {/* Trash / Delete Row */}
+                          <td className="py-3 px-2 w-10 text-center">
+                            {items.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() => removeItem(idx)}
+                                className="w-8 h-8 mx-auto flex items-center justify-center text-zinc-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-xl transition-all cursor-pointer opacity-70 group-hover:opacity-100"
+                                title="Remove line item"
+                              >
+                                <Trash2 className="w-4 h-4 shrink-0 stroke-[1.75]" />
+                              </button>
                             )}
-                          </div>
-                        </td>
-
-                        {/* Discount with CurrencyInput */}
-                        <td className="py-2.5 px-2 w-20 text-right">
-                          <CurrencyInput
-                            ref={(el) => setFieldRef(idx, 'discount', el)}
-                            size="sm"
-                            value={item.discount_amount}
-                            onChange={(e) => updateItem(idx, 'discount_amount', e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                e.preventDefault();
-                                handleLastFieldEnter(idx);
-                              }
-                            }}
-                            placeholder="0.00"
-                            className="w-full"
-                          />
-                        </td>
-
-                        {/* Line Total */}
-                        <td className="py-2.5 px-3 w-28 text-right font-mono font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap">
-                          {currency(lineTotal)}
-                        </td>
-
-                        {/* Trash / Delete Row */}
-                        <td className="py-2.5 px-2 w-10 text-center">
-                          {items.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeItem(idx)}
-                              className="w-8 h-8 mx-auto flex items-center justify-center opacity-0 group-hover:opacity-100 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-all cursor-pointer"
-                              title="Remove line item"
-                            >
-                              <Trash2 className="w-4 h-4 shrink-0 stroke-[1.75]" />
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 
           {/* Bottom Financial & Notes Summary Section */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-6 pt-2 border-t border-zinc-200/80 dark:border-zinc-800/80 items-start shrink-0">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 pt-3 border-t border-zinc-200/80 dark:border-zinc-800/80 items-start shrink-0">
             {/* Left Zone: Freight & Memo */}
-            <div className="md:col-span-7 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="lg:col-span-7 space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                    <Percent className="w-4 h-4 shrink-0 text-zinc-400 stroke-[1.75]" />
+                  <label className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                    <Percent className="w-3.5 h-3.5 shrink-0 text-violet-500 stroke-[2]" />
                     <span>Freight / Extra Charges</span>
                   </label>
                   <CurrencyInput
@@ -1106,8 +1157,8 @@ export default function NewPurchaseBillModal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-medium text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-                    <FileText className="w-4 h-4 shrink-0 text-zinc-400 stroke-[1.75]" />
+                  <label className="block text-[11px] font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                    <FileText className="w-3.5 h-3.5 shrink-0 text-violet-500 stroke-[2]" />
                     <span>Inward Tracking / Memo</span>
                   </label>
                   <input
@@ -1115,52 +1166,68 @@ export default function NewPurchaseBillModal({
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="e.g. Courier LR #4829, Carton 3 of 4"
-                    className="w-full h-10 px-3 border border-zinc-200 dark:border-zinc-800 rounded-lg font-medium text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 outline-hidden transition-all shadow-2xs text-xs"
+                    className="w-full h-10 px-3.5 border border-zinc-200 dark:border-zinc-800 rounded-xl font-medium text-xs text-zinc-900 dark:text-zinc-100 bg-white dark:bg-zinc-900 focus:border-violet-500 focus:ring-2 focus:ring-violet-500/20 outline-hidden transition-all shadow-2xs"
                   />
                 </div>
               </div>
 
-              <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-200/60 dark:border-zinc-800/60 text-[11px] text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
-                <Info className="w-4 h-4 text-violet-600 dark:text-violet-400 shrink-0 stroke-[1.75]" />
-                <span>
-                  All inward lines will automatically increment warehouse inventory and credit the vendor ledger.
-                </span>
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-violet-50/70 to-indigo-50/40 dark:from-violet-950/20 dark:to-indigo-950/10 border border-violet-100/90 dark:border-violet-900/40 text-[11.5px] text-zinc-600 dark:text-zinc-300 flex items-start gap-2.5">
+                <Info className="w-4 h-4 text-violet-600 dark:text-violet-400 shrink-0 stroke-[2] mt-0.5" />
+                <div className="leading-relaxed">
+                  <strong className="font-semibold text-zinc-900 dark:text-zinc-100">Automated Ledger &amp; Inventory Sync: </strong>
+                  <span>All received items immediately increment stock at the destination facility and register on the vendor&apos;s payable ledger.</span>
+                </div>
               </div>
             </div>
 
             {/* Right Zone: Stacked Financial Receipt Summary */}
-            <div className="md:col-span-5 flex justify-end">
-              <div className="w-full sm:w-80 bg-zinc-50/80 dark:bg-zinc-900/60 border border-zinc-200/80 dark:border-zinc-800/80 rounded-xl p-4 space-y-2.5 shadow-2xs">
-                <div className="flex justify-between text-zinc-500 dark:text-zinc-400 text-xs">
+            <div className="lg:col-span-5 flex justify-end">
+              <div className="w-full sm:w-88 bg-gradient-to-b from-zinc-50/90 to-zinc-100/50 dark:from-zinc-900/90 dark:to-zinc-850/50 border border-zinc-200/90 dark:border-zinc-800/90 rounded-2xl p-4.5 space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between pb-2 border-b border-zinc-200/80 dark:border-zinc-800/80">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                    Bill Breakdown
+                  </span>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md bg-white dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-200/80 dark:border-zinc-700">
+                    {items.length} {items.length === 1 ? 'line' : 'lines'} • {totalUnits} {totalUnits === 1 ? 'unit' : 'units'}
+                  </span>
+                </div>
+
+                <div className="flex justify-between text-zinc-600 dark:text-zinc-400 text-xs">
                   <span>Line Items Subtotal</span>
-                  <span className="font-mono text-zinc-800 dark:text-zinc-200 font-medium">
+                  <span className="font-mono text-zinc-900 dark:text-zinc-100 font-semibold">
                     {currency(lineSubtotal)}
                   </span>
                 </div>
 
                 {totalDiscounts > 0 && (
-                  <div className="flex justify-between text-emerald-600 dark:text-emerald-400 text-xs font-medium">
-                    <span>Total Discount</span>
+                  <div className="flex justify-between text-emerald-600 dark:text-emerald-400 text-xs font-semibold">
+                    <span>Total Discounts</span>
                     <span className="font-mono">-{currency(totalDiscounts)}</span>
                   </div>
                 )}
 
                 {Number(extraCharges || 0) > 0 && (
                   <div className="flex justify-between text-zinc-600 dark:text-zinc-400 text-xs">
-                    <span>Freight / Extra Charges</span>
-                    <span className="font-mono text-zinc-800 dark:text-zinc-200 font-medium">
+                    <span>Freight &amp; Charges</span>
+                    <span className="font-mono text-zinc-900 dark:text-zinc-100 font-semibold">
                       +{currency(extraCharges)}
                     </span>
                   </div>
                 )}
 
-                <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800 flex justify-between items-baseline">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-zinc-700 dark:text-zinc-300">
-                    Grand Bill Total
-                  </span>
-                  <span className="text-xl font-bold tracking-tight text-zinc-900 dark:text-white font-mono">
-                    {currency(totalAmount)}
-                  </span>
+                <div className="pt-2.5 border-t border-zinc-200 dark:border-zinc-800">
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-900 dark:text-zinc-100">
+                      Grand Total
+                    </span>
+                    <span className="text-2xl font-black font-mono tracking-tight text-violet-700 dark:text-violet-400">
+                      {currency(totalAmount)}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between text-[10px] text-zinc-400 dark:text-zinc-500 font-mono">
+                    <span>MODE: <strong className="text-zinc-600 dark:text-zinc-300 uppercase">{paymentMode}</strong></span>
+                    <span>DUE: <strong className="text-zinc-600 dark:text-zinc-300">{dueDateFormatted}</strong></span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1168,24 +1235,29 @@ export default function NewPurchaseBillModal({
         </form>
 
         {/* Footer: flex-none pinned at the bottom */}
-        <div className="flex-none px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/50 flex items-center justify-between">
+        <div className="flex-none px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900/60 flex items-center justify-between">
           <div className="hidden sm:flex items-center gap-1.5 text-zinc-400 dark:text-zinc-500 text-[11px] font-mono">
             <span>Press</span>
-            <kbd className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 font-semibold shadow-2xs">
+            <kbd className="px-1.5 py-0.5 rounded-md bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 font-semibold shadow-2xs">
               Ctrl
             </kbd>
             <span>+</span>
-            <kbd className="px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 font-semibold shadow-2xs">
+            <kbd className="px-1.5 py-0.5 rounded-md bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 font-semibold shadow-2xs">
               Enter
             </kbd>
-            <span>to record bill</span>
+            <span>to record</span>
+            <span className="text-zinc-300 dark:text-zinc-600">•</span>
+            <kbd className="px-1.5 py-0.5 rounded-md bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 font-semibold shadow-2xs">
+              Esc
+            </kbd>
+            <span>to cancel</span>
           </div>
 
           <div className="flex items-center gap-2.5 ml-auto">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800/80 transition-colors cursor-pointer"
+              className="px-4 py-2 text-xs font-semibold text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
             >
               Cancel
             </button>
@@ -1195,7 +1267,7 @@ export default function NewPurchaseBillModal({
               type="submit"
               form="purchase-bill-form"
               disabled={saving}
-              className="px-5 py-2.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 dark:bg-violet-600 dark:hover:bg-violet-500 rounded-lg shadow-sm shadow-violet-500/20 active:scale-[0.99] transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              className="px-6 py-2.5 text-xs font-bold text-white bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-700 hover:to-indigo-700 active:scale-[0.98] rounded-xl shadow-md shadow-violet-500/25 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
             >
               {saving ? (
                 <>
@@ -1204,7 +1276,7 @@ export default function NewPurchaseBillModal({
                 </>
               ) : (
                 <>
-                  <Check className="w-4 h-4 shrink-0 stroke-[2]" />
+                  <Check className="w-4 h-4 shrink-0 stroke-[2.5]" />
                   <span>{billToEdit ? `Update Bill (${currency(totalAmount)})` : `Record Purchase Bill (${currency(totalAmount)})`}</span>
                 </>
               )}
@@ -1214,14 +1286,6 @@ export default function NewPurchaseBillModal({
       </motion.div>
 
       {/* Submodals */}
-      <ProductSearchDialog
-        isOpen={finderState.isOpen}
-        onClose={closeProductFinder}
-        products={productOptions}
-        onSelect={handleFinderSelect}
-        activeRowIndex={finderState.rowIndex}
-        onCreateNewProduct={() => setShowProductModal(true)}
-      />
 
       {showVendorModal && (
         <QuickAddVendorModal

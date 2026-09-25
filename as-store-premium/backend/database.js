@@ -342,11 +342,16 @@ export const initDatabase = async () => {
         ADD COLUMN IF NOT EXISTS mobile TEXT,
         ADD COLUMN IF NOT EXISTS gstin TEXT,
         ADD COLUMN IF NOT EXISTS address TEXT,
-        ADD COLUMN IF NOT EXISTS opening_balance NUMERIC(12, 2) DEFAULT 0.00;
+        ADD COLUMN IF NOT EXISTS opening_balance NUMERIC(12, 2) DEFAULT 0.00,
+        ADD COLUMN IF NOT EXISTS opening_balance_date DATE DEFAULT CURRENT_DATE;
 
       ALTER TABLE purchase_bill_items
         ADD COLUMN IF NOT EXISTS colour TEXT;
 
+      ALTER TABLE inventory_batches
+        ADD COLUMN IF NOT EXISTS purchase_bill_id INTEGER REFERENCES purchase_bills(id) ON DELETE CASCADE;
+
+      CREATE INDEX IF NOT EXISTS idx_inventory_batches_purchase_bill_id ON inventory_batches(purchase_bill_id);
       CREATE INDEX IF NOT EXISTS idx_credit_notes_customer_status ON credit_notes(customer_id, status);
       CREATE INDEX IF NOT EXISTS idx_sales_returns_sale ON sales_returns(sale_id);
       CREATE INDEX IF NOT EXISTS idx_redemptions_sale ON credit_note_redemptions(sale_id);

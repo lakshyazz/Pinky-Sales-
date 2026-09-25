@@ -151,7 +151,14 @@ const ensureDatabaseInit = async () => {
   if (dbInitialized) return;
   if (!dbInitPromise) {
     dbInitPromise = initDatabase()
-      .then(() => { dbInitialized = true; })
+      .then(async () => {
+        dbInitialized = true;
+        try {
+          await backfillPurchaseBillsStock();
+        } catch (bErr) {
+          console.warn('[Server] Non-fatal purchase bills backfill notice:', bErr?.message || bErr);
+        }
+      })
       .catch((err) => {
         dbInitPromise = null;
         console.error('[Server] Non-fatal database initialization notice:', err?.message || err);
@@ -160,6 +167,7 @@ const ensureDatabaseInit = async () => {
   }
   return dbInitPromise;
 };
+
 
 app.use(async (req, _res, next) => {
   if (req.path === '/api/health') return next();
@@ -492,13 +500,13 @@ const getReferenceData = (user = null) => {
     let supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
     let supplierParams = [];
 
-    if (role === 'superadmin') {
-      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
+    if (role === 'superadmin' || role === 'owner') {
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance, opening_balance_date FROM suppliers ORDER BY LOWER(TRIM(name)), id';
     } else if (shopId) {
-      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance FROM suppliers WHERE shop_id = ? ORDER BY LOWER(TRIM(name)), id';
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance, opening_balance_date FROM suppliers WHERE shop_id = ? OR shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
       supplierParams = [shopId];
     } else {
-      supplierSql = 'SELECT id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance FROM suppliers WHERE 1=0';
+      supplierSql = 'SELECT DISTINCT ON (LOWER(TRIM(name))) id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance, opening_balance_date FROM suppliers WHERE shop_id IS NULL ORDER BY LOWER(TRIM(name)), id';
     }
 
     const [categories, colours, brands, manufacturingBrands, suppliers, partCategories, productVariants] = await Promise.all([
@@ -1364,37 +1372,57 @@ app.post('/api/reference-data/:type', authenticateToken, requireShopStaff, async
   if (!table || !name) return res.status(400).json({ error: 'Choose a valid reference type and enter a name.' });
   
   // Non-superadmins (shopkeepers) can add colours and suppliers. Brands and categories are superadmin-only.
-  if (req.user.role !== 'superadmin' && req.params.type !== 'colours' && req.params.type !== 'suppliers') {
+  const isSuperAdmin = req.user.role === 'superadmin' || req.user.role === 'owner';
+  if (!isSuperAdmin && req.params.type !== 'colours' && req.params.type !== 'suppliers') {
     return res.status(403).json({ error: 'Only the Super Admin can add categories or brands.' });
   }
   
   let reference;
   if (table === 'suppliers') {
-    const isSuperAdmin = req.user.role === 'superadmin';
     const shopId = isSuperAdmin ? null : Number(req.user.shop_id);
     const mobile = String(req.body.mobile || '').trim() || null;
     const gstin = String(req.body.gstin || '').trim() || null;
     const address = String(req.body.address || '').trim() || null;
-    const openingBalance = Number(req.body.opening_balance || 0) || 0;
+    const openingBalance = parseFloat(req.body.opening_balance || 0) || 0;
+    const obDate = String(req.body.opening_balance_date || '').trim() || null;
 
     const existing = await getRecord(
       shopId 
-        ? 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id = ?' 
-        : 'SELECT id, name, is_active, shop_id, branch_id FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id IS NULL',
+        ? 'SELECT id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance, opening_balance_date FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id = ?' 
+        : 'SELECT id, name, is_active, shop_id, branch_id, mobile, gstin, address, opening_balance, opening_balance_date FROM suppliers WHERE LOWER(TRIM(name)) = LOWER(TRIM(?)) AND shop_id IS NULL',
       shopId ? [name, shopId] : [name]
     );
     if (existing) {
-      await runQuery(
-        'UPDATE suppliers SET is_active = TRUE, mobile = COALESCE(?, mobile), gstin = COALESCE(?, gstin), address = COALESCE(?, address) WHERE id = ?',
-        [mobile, gstin, address, existing.id]
-      );
-      reference = { ...existing, is_active: true, mobile: mobile || existing.mobile, gstin: gstin || existing.gstin, address: address || existing.address };
+      const updateFields = ['is_active = TRUE'];
+      const updateParams = [];
+      if (mobile !== null) { updateFields.push('mobile = ?'); updateParams.push(mobile); }
+      if (gstin !== null) { updateFields.push('gstin = ?'); updateParams.push(gstin); }
+      if (address !== null) { updateFields.push('address = ?'); updateParams.push(address); }
+      if (req.body.opening_balance !== undefined) {
+        updateFields.push('opening_balance = ?');
+        updateParams.push(openingBalance);
+      }
+      if (obDate) {
+        updateFields.push('opening_balance_date = ?');
+        updateParams.push(obDate);
+      }
+      updateParams.push(existing.id);
+      await runQuery(`UPDATE suppliers SET ${updateFields.join(', ')} WHERE id = ?`, updateParams);
+      reference = {
+        ...existing,
+        is_active: true,
+        mobile: mobile !== null ? mobile : existing.mobile,
+        gstin: gstin !== null ? gstin : existing.gstin,
+        address: address !== null ? address : existing.address,
+        opening_balance: req.body.opening_balance !== undefined ? openingBalance : Number(existing.opening_balance || 0),
+        opening_balance_date: obDate || existing.opening_balance_date
+      };
     } else {
       const result = await runQuery(
-        'INSERT INTO suppliers (name, shop_id, branch_id, created_by, is_active, mobile, gstin, address, opening_balance) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?)',
-        [name, shopId, shopId, req.user.id, mobile, gstin, address, openingBalance]
+        'INSERT INTO suppliers (name, shop_id, branch_id, created_by, is_active, mobile, gstin, address, opening_balance, opening_balance_date) VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?, COALESCE(?::date, CURRENT_DATE))',
+        [name, shopId, shopId, req.user.id, mobile, gstin, address, openingBalance, obDate]
       );
-      reference = { id: result.id, name, shop_id: shopId, branch_id: shopId, is_active: true, mobile, gstin, address, opening_balance: openingBalance };
+      reference = { id: result.id, name, shop_id: shopId, branch_id: shopId, is_active: true, mobile, gstin, address, opening_balance: openingBalance, opening_balance_date: obDate };
     }
   } else {
     reference = await ensureReference(table, name);
@@ -1413,15 +1441,16 @@ app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, as
   const id = Number(req.params.id);
   if (!table || !name || isNaN(id)) return res.status(400).json({ error: 'Invalid reference update request.' });
 
+  const isSuperAdmin = req.user.role === 'superadmin' || req.user.role === 'owner';
   // Only Super Admin can rename brands, categories. Colours and suppliers can be modified by shop staff.
-  if (req.user.role !== 'superadmin' && table !== 'colours' && table !== 'suppliers') {
+  if (!isSuperAdmin && table !== 'colours' && table !== 'suppliers') {
     return res.status(403).json({ error: 'Only the Super Admin can modify categories or brands.' });
   }
 
   const oldItem = await getRecord(`SELECT id, name, ${table === 'suppliers' ? 'shop_id' : 'NULL'} AS shop_id FROM ${table} WHERE id = ?`, [id]);
   if (!oldItem) return res.status(404).json({ error: 'Reference item not found.' });
 
-  if (table === 'suppliers' && req.user.role !== 'superadmin') {
+  if (table === 'suppliers' && !isSuperAdmin) {
     const ownShopId = Number(req.user.shop_id);
     if (!oldItem.shop_id || Number(oldItem.shop_id) !== ownShopId) {
       return res.status(403).json({ error: 'You can only modify suppliers belonging to your branch.' });
@@ -1445,24 +1474,57 @@ app.put('/api/reference-data/:type/:id', authenticateToken, requireShopStaff, as
 
   const is_active = req.body.is_active !== undefined ? Boolean(req.body.is_active) : null;
   await runTransaction(async (tx) => {
-    if (name) {
-      await tx.runQuery(`UPDATE ${table} SET name = ? WHERE id = ?`, [name, id]);
-    }
-    if (is_active !== null) {
-      await tx.runQuery(`UPDATE ${table} SET is_active = ? WHERE id = ?`, [is_active, id]);
-    }
-    if (table === 'brands') {
-      await tx.runQuery('UPDATE products SET brand = ? WHERE brand = ?', [name, oldItem.name]);
-    } else if (table === 'categories') {
-      await tx.runQuery('UPDATE products SET category = ? WHERE category = ?', [name, oldItem.name]);
-    } else if (table === 'colours') {
-      await tx.runQuery('UPDATE products SET colours = array_replace(colours, ?, ?) WHERE ? = ANY(colours)', [oldItem.name, name, oldItem.name]);
-      await tx.runQuery('UPDATE inventory_batches SET colour = ? WHERE colour = ?', [name, oldItem.name]);
+    if (table === 'suppliers') {
+      const updates = [];
+      const params = [];
+      if (name) { updates.push('name = ?'); params.push(name); }
+      if (is_active !== null) { updates.push('is_active = ?'); params.push(is_active); }
+      if (req.body.mobile !== undefined) {
+        updates.push('mobile = ?');
+        params.push(String(req.body.mobile || '').trim() || null);
+      }
+      if (req.body.gstin !== undefined) {
+        updates.push('gstin = ?');
+        params.push(String(req.body.gstin || '').trim() || null);
+      }
+      if (req.body.address !== undefined) {
+        updates.push('address = ?');
+        params.push(String(req.body.address || '').trim() || null);
+      }
+      if (req.body.opening_balance !== undefined) {
+        const ob = parseFloat(req.body.opening_balance || 0);
+        updates.push('opening_balance = ?');
+        params.push(isNaN(ob) ? 0.00 : ob);
+      }
+      if (req.body.opening_balance_date !== undefined) {
+        const obDate = String(req.body.opening_balance_date || '').trim();
+        updates.push('opening_balance_date = ?');
+        params.push(obDate || null);
+      }
+      if (updates.length > 0) {
+        params.push(id);
+        await tx.runQuery(`UPDATE suppliers SET ${updates.join(', ')} WHERE id = ?`, params);
+      }
+    } else {
+      if (name) {
+        await tx.runQuery(`UPDATE ${table} SET name = ? WHERE id = ?`, [name, id]);
+      }
+      if (is_active !== null) {
+        await tx.runQuery(`UPDATE ${table} SET is_active = ? WHERE id = ?`, [is_active, id]);
+      }
+      if (table === 'brands') {
+        await tx.runQuery('UPDATE products SET brand = ? WHERE brand = ?', [name, oldItem.name]);
+      } else if (table === 'categories') {
+        await tx.runQuery('UPDATE products SET category = ? WHERE category = ?', [name, oldItem.name]);
+      } else if (table === 'colours') {
+        await tx.runQuery('UPDATE products SET colours = array_replace(colours, ?, ?) WHERE ? = ANY(colours)', [oldItem.name, name, oldItem.name]);
+        await tx.runQuery('UPDATE inventory_batches SET colour = ? WHERE colour = ?', [name, oldItem.name]);
+      }
     }
   });
 
   invalidateCache('reference-data');
-  await audit(req, `Renamed ${req.params.type.slice(0, -1)}`, req.params.type.slice(0, -1), id, `${oldItem.name} -> ${name}`);
+  await audit(req, `Updated ${req.params.type.slice(0, -1)}`, req.params.type.slice(0, -1), id, `${oldItem.name} -> ${name}`);
   res.json({ success: true, id, name });
 });
 
@@ -3540,7 +3602,9 @@ app.get('/api/customers', authenticateToken, requireShopStaff, async (req, res) 
            ${pendingSql} AS pending, 
            ${pendingSql} AS pending_amount,
            ${advanceSql} AS advance_balance,
-           ${netBalanceSql} AS current_balance
+           ${netBalanceSql} AS current_balance,
+           (SELECT COUNT(*) FROM sales s WHERE s.customer_id = c.id) AS purchases_count,
+           (SELECT COALESCE(SUM(COALESCE(NULLIF(s.current_invoice_total, 0), s.total_amount)), 0) FROM sales s WHERE s.customer_id = c.id) AS total_purchases_amount
     ${baseSql}
     ORDER BY c.created_at DESC
   `,
@@ -7956,9 +8020,17 @@ app.get('/api/reports/sales-profit', authenticateToken, requireShopStaff, async 
         LOWER(c.name) LIKE ? OR
         LOWER(COALESCE(c.mobile, '')) LIKE ? OR
         LOWER(COALESCE(sa.invoice_number, '')) LIKE ? OR
-        LOWER(COALESCE(c.address, '')) LIKE ?
+        LOWER(COALESCE(c.address, '')) LIKE ? OR
+        EXISTS (
+          SELECT 1 FROM sale_items si_srch
+          LEFT JOIN products p_srch ON p_srch.id = si_srch.product_id
+          WHERE si_srch.sale_id = sa.id AND (
+            LOWER(COALESCE(si_srch.custom_product_name, p_srch.name, '')) LIKE ? OR
+            LOWER(COALESCE(p_srch.model, '')) LIKE ?
+          )
+        )
       )`);
-      params.push(s, s, s, s);
+      params.push(s, s, s, s, s, s);
     }
 
     if (req.query.status && req.query.status !== 'all') {
@@ -8183,7 +8255,146 @@ app.get('/api/journal-entries', authenticateToken, requireShopStaff, async (req,
   }
 });
 
-// ─── Purchase Bills ───────────────────────────────────────────────────────────
+// ─── Purchase Bills & Automated Stock Inward ────────────────────────────────
+
+const applyPurchaseBillStock = async (tx, bill, items, reqUser) => {
+  const shopId = bill.shop_id;
+  const billDateStr = bill.bill_date instanceof Date
+    ? bill.bill_date.toISOString().slice(0, 10)
+    : (/^\d{4}-\d{2}-\d{2}/.test(String(bill.bill_date || ''))
+      ? String(bill.bill_date).slice(0, 10)
+      : today());
+  const userId = reqUser?.id || bill.created_by || 1;
+
+  for (const item of items) {
+    const qty = Number(item.quantity);
+    const unitPrice = money(item.unit_price);
+    if (!Number.isInteger(qty) || qty <= 0) continue;
+
+    let productId = item.product_id ? Number(item.product_id) : null;
+    const customName = item.custom_product_name ? String(item.custom_product_name).trim() : '';
+
+    if (!productId && customName) {
+      const existingProd = await tx.getRecord(
+        `SELECT id FROM products 
+         WHERE (LOWER(TRIM(name)) = LOWER(?) OR LOWER(TRIM(short_name)) = LOWER(?) OR LOWER(TRIM(model)) = LOWER(?)) 
+           AND is_active = 1 
+         LIMIT 1`,
+        [customName, customName, customName]
+      );
+      if (existingProd) {
+        productId = existingProd.id;
+      } else {
+        const ins = await tx.runQuery(
+          `INSERT INTO products (
+            name, short_name, full_model_list, model, purchase_price, sale_price, retail_price, official_price, wholesale_price,
+            colours, is_active, shop_id, supplier_id, scope
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, 'GLOBAL')`,
+          [
+            customName,
+            customName.length > 60 ? customName.substring(0, 57) + '...' : customName,
+            customName,
+            customName,
+            unitPrice,
+            unitPrice,
+            unitPrice,
+            unitPrice,
+            unitPrice,
+            item.colour ? [String(item.colour).trim()] : [],
+            shopId,
+            bill.supplier_id || null,
+          ]
+        );
+        productId = ins.id;
+      }
+    }
+
+    if (!productId) continue;
+
+    const prod = await tx.getRecord(
+      'SELECT id, name, colours, wholesale_price, official_price, retail_price, sale_price, manufacturing_brand_id, supplier_id FROM products WHERE id = ?',
+      [productId]
+    );
+
+    const cleanColour = item.colour ? String(item.colour).trim() : null;
+    if (cleanColour) {
+      await tx.runQuery(
+        `UPDATE products
+         SET colours = array_append(COALESCE(colours, '{}'), ?)
+         WHERE id = ? AND NOT (? = ANY(COALESCE(colours, '{}')))`,
+        [cleanColour, productId, cleanColour]
+      );
+    }
+
+    if (unitPrice > 0) {
+      await tx.runQuery(
+        'UPDATE products SET purchase_price = ? WHERE id = ?',
+        [unitPrice, productId]
+      );
+    }
+
+    const note = `Purchase Bill #${bill.bill_number}${customName ? ` - ${customName}` : ''}`;
+    await tx.runQuery(
+      `INSERT INTO inventory_batches (
+        shop_id, product_id, purchase_bill_id, supplier_id, assigned_user_id,
+        purchase_price, wholesale_price, official_price, retail_price,
+        colour, quantity_received, quantity_remaining, received_date, notes, created_by, manufacturing_brand_id
+      ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        shopId,
+        productId,
+        bill.id,
+        bill.supplier_id || prod?.supplier_id || null,
+        unitPrice,
+        prod?.wholesale_price || null,
+        prod?.official_price || null,
+        prod?.retail_price || prod?.sale_price || null,
+        cleanColour,
+        qty,
+        qty,
+        billDateStr,
+        note,
+        userId,
+        prod?.manufacturing_brand_id || null,
+      ]
+    );
+
+    await syncStockFromBatches(tx, shopId, productId);
+  }
+};
+
+const backfillPurchaseBillsStock = async () => {
+  try {
+    const unbatchedBills = await allRecords(`
+      SELECT pb.* 
+      FROM purchase_bills pb
+      WHERE pb.status != 'cancelled'
+        AND NOT EXISTS (
+          SELECT 1 FROM inventory_batches ib WHERE ib.purchase_bill_id = pb.id
+        )
+      ORDER BY pb.id ASC
+    `);
+
+    if (!unbatchedBills || unbatchedBills.length === 0) return;
+    console.log(`[Backfill] Found ${unbatchedBills.length} purchase bill(s) without stock batches. Auto-adding stock...`);
+
+    for (const bill of unbatchedBills) {
+      await runTransaction(async (tx) => {
+        const items = await tx.allRecords(
+          'SELECT * FROM purchase_bill_items WHERE bill_id = ?',
+          [bill.id]
+        );
+        if (items && items.length > 0) {
+          await applyPurchaseBillStock(tx, bill, items, { id: bill.created_by || 1 });
+        }
+      });
+      console.log(`[Backfill] Synchronized stock for purchase bill ${bill.bill_number} (#${bill.id})`);
+    }
+    invalidateCache('reference-data');
+  } catch (err) {
+    console.warn('[Backfill] Purchase bill stock backfill notice:', err?.message || err);
+  }
+};
 
 app.get('/api/purchase-bills', authenticateToken, requireShopStaff, async (req, res) => {
   try {
@@ -8295,10 +8506,20 @@ app.post('/api/purchase-bills', authenticateToken, requireShopStaff, async (req,
         );
       }
 
+      await applyPurchaseBillStock(tx, {
+        id: billId,
+        shop_id: shopId,
+        supplier_id: supplier_id || null,
+        bill_number: billNumber,
+        bill_date: billDateStr,
+        created_by: req.user.id
+      }, validItems, req.user);
+
       await postPurchaseBillJournal(tx, billId, shopId, supplier_id, totalAmount, billDateStr, req.user.id);
       return { id: billId, bill_number: billNumber, total_amount: totalAmount, pending_amount: totalAmount };
     });
 
+    invalidateCache('reference-data');
     await audit(req, 'Created purchase bill', 'purchase_bill', result.id, `${result.bill_number}, total ${result.total_amount}`);
     res.status(201).json({ success: true, ...result });
   } catch (error) {
@@ -8456,6 +8677,14 @@ app.put('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async (r
         ]
       );
 
+      // Find old batches for this bill to re-sync later
+      const oldBatches = await tx.allRecords(
+        'SELECT DISTINCT product_id, shop_id FROM inventory_batches WHERE purchase_bill_id = ?',
+        [billId]
+      );
+      // Remove previous batches for this bill
+      await tx.runQuery('DELETE FROM inventory_batches WHERE purchase_bill_id = ?', [billId]);
+
       // Replace items
       await tx.runQuery('DELETE FROM purchase_bill_items WHERE bill_id = ?', [billId]);
       for (const vi of validItems) {
@@ -8466,6 +8695,21 @@ app.put('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async (r
         );
       }
 
+      // Inward updated items into inventory batches and re-sync stock
+      await applyPurchaseBillStock(tx, {
+        id: billId,
+        shop_id: targetShopId,
+        supplier_id: supplier_id || null,
+        bill_number: existingBill.bill_number,
+        bill_date: billDateStr,
+        created_by: req.user.id
+      }, validItems, req.user);
+
+      // Re-sync stock for any previously batched products
+      for (const ob of oldBatches) {
+        await syncStockFromBatches(tx, ob.shop_id, ob.product_id);
+      }
+
       // Reverse existing purchase bill journal and post updated
       await reverseJournal(tx, 'purchase_bill', billId, existingBill.shop_id, billDateStr, req.user.id);
       await postPurchaseBillJournal(tx, billId, targetShopId, supplier_id, totalAmount, billDateStr, req.user.id);
@@ -8473,6 +8717,7 @@ app.put('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async (r
       return { id: billId, bill_number: existingBill.bill_number, total_amount: totalAmount, pending_amount: pendingAmount, status: newStatus };
     });
 
+    invalidateCache('reference-data');
     await audit(req, 'Updated purchase bill', 'purchase_bill', result.id, `${result.bill_number}, new total ${result.total_amount}`);
     res.json({ success: true, ...result });
   } catch (error) {
@@ -8501,16 +8746,29 @@ app.delete('/api/purchase-bills/:id', authenticateToken, requireShopStaff, async
       // Check shop access
       requireScopedShopId(req, bill.shop_id);
 
+      // Find affected batches
+      const affectedBatches = await tx.allRecords(
+        'SELECT DISTINCT product_id, shop_id FROM inventory_batches WHERE purchase_bill_id = ?',
+        [billId]
+      );
+
       // Reverse journals
       await reverseJournal(tx, 'purchase_bill', billId, bill.shop_id, today(), req.user.id);
 
-      // Delete items and bill
+      // Delete batches, items, and bill
+      await tx.runQuery('DELETE FROM inventory_batches WHERE purchase_bill_id = ?', [billId]);
       await tx.runQuery('DELETE FROM purchase_bill_items WHERE bill_id = ?', [billId]);
       await tx.runQuery('DELETE FROM purchase_bills WHERE id = ?', [billId]);
+
+      // Re-sync stock
+      for (const b of affectedBatches) {
+        await syncStockFromBatches(tx, b.shop_id, b.product_id);
+      }
 
       return { id: billId, bill_number: bill.bill_number };
     });
 
+    invalidateCache('reference-data');
     await audit(req, 'Deleted purchase bill', 'purchase_bill', result.id, `Deleted ${result.bill_number}`);
     res.json({ success: true, message: `Purchase bill ${result.bill_number} deleted successfully.` });
   } catch (error) {

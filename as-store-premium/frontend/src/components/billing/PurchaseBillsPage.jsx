@@ -306,8 +306,8 @@ export default function PurchaseBillsPage({
                           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8 }}>
                             <thead>
                               <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
-                                {['Product', 'Qty', 'Unit Price', 'Discount', 'Total'].map(h => (
-                                  <th key={h} style={{ padding: '6px 10px', textAlign: 'left', fontWeight: 700, color: '#64748b', fontSize: 11 }}>{h}</th>
+                                {['Product', 'Colour', 'Qty', 'Unit Price', 'Discount', 'Total'].map(h => (
+                                  <th key={h} style={{ padding: '6px 10px', textAlign: ['Qty', 'Unit Price', 'Discount', 'Total'].includes(h) ? 'right' : 'left', fontWeight: 700, color: '#64748b', fontSize: 11 }}>{h}</th>
                                 ))}
                               </tr>
                             </thead>
@@ -315,10 +315,19 @@ export default function PurchaseBillsPage({
                               {expandedItems.map((item, idx) => (
                                 <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
                                   <td style={{ padding: '7px 10px', color: '#0f172a', fontWeight: 600 }}>{item.product_name || item.custom_product_name || '—'}</td>
-                                  <td style={{ padding: '7px 10px', color: '#475569' }}>{item.quantity}</td>
-                                  <td style={{ padding: '7px 10px', color: '#475569' }}>{currency(item.unit_price)}</td>
-                                  <td style={{ padding: '7px 10px', color: '#475569' }}>{money(item.discount_amount) > 0 ? currency(item.discount_amount) : '—'}</td>
-                                  <td style={{ padding: '7px 10px', fontWeight: 700, color: '#0f172a' }}>{currency(item.total_price)}</td>
+                                  <td style={{ padding: '7px 10px', color: '#475569' }}>
+                                    {item.colour ? (
+                                      <span style={{ display: 'inline-flex', alignItems: 'center', background: '#f1f5f9', padding: '2px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600, color: '#1e293b' }}>
+                                        {item.colour}
+                                      </span>
+                                    ) : (
+                                      <span style={{ color: '#94a3b8' }}>—</span>
+                                    )}
+                                  </td>
+                                  <td style={{ padding: '7px 10px', color: '#475569', textAlign: 'right' }}>{item.quantity}</td>
+                                  <td style={{ padding: '7px 10px', color: '#475569', textAlign: 'right' }}>{currency(item.unit_price)}</td>
+                                  <td style={{ padding: '7px 10px', color: '#475569', textAlign: 'right' }}>{money(item.discount_amount) > 0 ? currency(item.discount_amount) : '—'}</td>
+                                  <td style={{ padding: '7px 10px', fontWeight: 700, color: '#0f172a', textAlign: 'right' }}>{currency(item.total_price)}</td>
                                 </tr>
                               ))}
                             </tbody>

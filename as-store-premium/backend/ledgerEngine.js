@@ -483,7 +483,11 @@ export async function getVendorLedger(supplierId, shopId, { from, to } = {}) {
   const toDate   = isoDate(to);
 
   const supplier = await getRecord(
-    'SELECT id, name FROM suppliers WHERE id = ?',
+    `SELECT id, name, 
+            COALESCE(opening_balance, 0) AS opening_balance,
+            COALESCE(opening_balance_date, created_at::date, CURRENT_DATE) AS opening_balance_date,
+            mobile, gstin, address
+     FROM suppliers WHERE id = ?`,
     [supplierId]
   );
   if (!supplier) throw Object.assign(new Error('Supplier not found.'), { status: 404 });
@@ -493,6 +497,18 @@ export async function getVendorLedger(supplierId, shopId, { from, to } = {}) {
 
   const sqlQuery = `
     WITH ledger_rows AS (
+      SELECT
+        COALESCE(s.opening_balance_date, s.created_at::date, CURRENT_DATE) AS entry_date,
+        'OB-' || LPAD(s.id::text, 6, '0')                                 AS ref_no,
+        'opening_balance'                                                  AS entry_type,
+        'Opening Balance'                                                  AS description,
+        COALESCE(s.opening_balance, 0)::numeric                            AS debit_amount,
+        0.00::numeric                                                      AS credit_amount
+      FROM suppliers s
+      WHERE s.id = ? AND COALESCE(s.opening_balance, 0) > 0
+
+      UNION ALL
+
       SELECT
         pb.bill_date              AS entry_date,
         pb.bill_number            AS ref_no,
@@ -527,15 +543,7 @@ export async function getVendorLedger(supplierId, shopId, { from, to } = {}) {
       FROM debit_notes dn
       WHERE dn.supplier_id = ? ${shopCondDn}
     ),
-    filtered AS (
-      SELECT * FROM ledger_rows
-      WHERE (
-        ${fromDate ? 'entry_date >= ?::date AND' : ''}
-        ${toDate   ? 'entry_date <= ?::date AND' : ''}
-        TRUE
-      )
-    ),
-    with_balance AS (
+    ordered AS (
       SELECT
         entry_date, ref_no, entry_type, description,
         ROUND(debit_amount::numeric, 2)  AS debit,
@@ -547,20 +555,19 @@ export async function getVendorLedger(supplierId, shopId, { from, to } = {}) {
           )::numeric,
           2
         )                                AS running_balance
-      FROM filtered
+      FROM ledger_rows
     )
-    SELECT * FROM with_balance ORDER BY entry_date ASC, ref_no ASC
+    SELECT * FROM ordered ORDER BY entry_date ASC, ref_no ASC
   `;
 
   const params = [];
+  params.push(supplierId);                                   // opening_balance
   params.push(supplierId); if (shopId) params.push(shopId);  // purchase_bills
   params.push(supplierId); if (shopId) params.push(shopId);  // bill_payments
   params.push(supplierId); if (shopId) params.push(shopId);  // debit_notes
-  if (fromDate) params.push(fromDate);
-  if (toDate)   params.push(toDate);
 
-  const rows = (await allRecords(sqlQuery, params)).map(r => ({
-    entry_date:      r.entry_date,
+  const allRows = (await allRecords(sqlQuery, params)).map(r => ({
+    entry_date:      toDateKey(r.entry_date),
     ref_no:          r.ref_no,
     entry_type:      r.entry_type,
     description:     r.description,
@@ -569,8 +576,49 @@ export async function getVendorLedger(supplierId, shopId, { from, to } = {}) {
     running_balance: money(r.running_balance),
   }));
 
-  const closingBalance = rows.length ? money(rows[rows.length - 1].running_balance) : 0;
-  return { supplier, rows, closing_balance: closingBalance };
+  // Handle date filters: if fromDate or toDate specified
+  let displayRows = allRows;
+  if (fromDate || toDate) {
+    let preBalance = 0;
+    const filtered = [];
+
+    for (const row of allRows) {
+      const d = toDateKey(row.entry_date);
+      if (fromDate && d < fromDate) {
+        preBalance = row.running_balance;
+      } else if (toDate && d > toDate) {
+        // Excluded after toDate
+      } else {
+        filtered.push(row);
+      }
+    }
+
+    if (fromDate && preBalance !== 0) {
+      displayRows = [
+        {
+          id: 'b-fwd',
+          entry_date: fromDate,
+          ref_no: 'BAL-FWD',
+          entry_type: 'opening_balance',
+          description: `Balance Brought Forward as of ${fromDate}`,
+          debit: preBalance > 0 ? preBalance : 0.00,
+          credit: preBalance < 0 ? Math.abs(preBalance) : 0.00,
+          running_balance: preBalance,
+        },
+        ...filtered,
+      ];
+    } else {
+      displayRows = filtered;
+    }
+  }
+
+  const closingBalance = allRows.length ? money(allRows[allRows.length - 1].running_balance) : money(supplier.opening_balance);
+  return {
+    supplier,
+    opening_balance: money(supplier.opening_balance),
+    rows: displayRows,
+    closing_balance: closingBalance
+  };
 }
 
 // ─── AR Aging Report ──────────────────────────────────────────────────────────

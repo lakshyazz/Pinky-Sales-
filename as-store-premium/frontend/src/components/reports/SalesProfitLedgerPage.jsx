@@ -14,6 +14,7 @@ import {
   IndianRupee,
   Receipt,
   Eye,
+  EyeOff,
   Percent,
   Boxes,
   ArrowUpRight,
@@ -102,6 +103,38 @@ export default function SalesProfitLedgerPage({
   const [reportData, setReportData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [expandedInvoices, setExpandedInvoices] = useState(new Set());
+  const [hideDetails, setHideDetails] = useState(() => {
+    try {
+      return localStorage.getItem('as_store_hide_sales_profit_details') === 'true';
+    } catch (_) {
+      return false;
+    }
+  });
+
+  // Card value privacy mask state (persisted)
+  const [hiddenCardValues, setHiddenCardValues] = useState(() => {
+    try {
+      const saved = localStorage.getItem('as_store_hidden_sales_card_values');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch (_) {
+      return new Set();
+    }
+  });
+
+  const toggleCardValue = (cardKey) => {
+    setHiddenCardValues((prev) => {
+      const next = new Set(prev);
+      if (next.has(cardKey)) {
+        next.delete(cardKey);
+      } else {
+        next.add(cardKey);
+      }
+      try {
+        localStorage.setItem('as_store_hidden_sales_card_values', JSON.stringify(Array.from(next)));
+      } catch (_) {}
+      return next;
+    });
+  };
 
   // COGS Recalculation Modal State
   const [cogsModalOpen, setCogsModalOpen] = useState(false);
@@ -135,7 +168,7 @@ export default function SalesProfitLedgerPage({
     }
   };
 
-  // Fetch Report Data from API
+  // Fetch Report Data from API (loads full dataset for selected date/branch/status)
   const fetchReport = useCallback(async () => {
     if (!api) return;
     setLoading(true);
@@ -144,7 +177,6 @@ export default function SalesProfitLedgerPage({
       if (dateFrom) params.append('from', dateFrom);
       if (dateTo) params.append('to', dateTo);
       if (selectedShopId && selectedShopId !== 'all') params.append('shopId', selectedShopId);
-      if (searchQuery.trim()) params.append('search', searchQuery.trim());
       if (statusFilter !== 'all') params.append('status', statusFilter);
 
       const res = await api(`/reports/sales-profit?${params.toString()}`);
@@ -157,7 +189,7 @@ export default function SalesProfitLedgerPage({
     } finally {
       setLoading(false);
     }
-  }, [api, dateFrom, dateTo, selectedShopId, searchQuery, statusFilter, setGlobalToast]);
+  }, [api, dateFrom, dateTo, selectedShopId, statusFilter, setGlobalToast]);
 
   // COGS Bulk Scan & Recalculate Handlers
   const handleScanCogs = async () => {
@@ -347,21 +379,113 @@ export default function SalesProfitLedgerPage({
     document.body.removeChild(link);
   };
 
-  const summary = reportData?.summary || {
-    total_sales: 0,
-    total_paid: 0,
-    total_pending: 0,
-    total_cost: 0,
-    total_expenses: 0,
-    gross_profit: 0,
-    margin_pct: 0,
-    invoices_count: 0,
-    total_pcs_sold: 0,
-    previous_period_sales: 0,
-    sales_change_pct: null,
+  const toggleHideDetails = () => {
+    setHideDetails((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('as_store_hide_sales_profit_details', String(next));
+      } catch (_) {}
+      return next;
+    });
   };
 
-  const invoices = reportData?.invoices || [];
+  const handleCardView = (type) => {
+    if (hideDetails) {
+      setHideDetails(false);
+      try {
+        localStorage.setItem('as_store_hide_sales_profit_details', 'false');
+      } catch (_) {}
+    }
+    if (type === 'paid') {
+      setStatusFilter('paid');
+    } else if (type === 'pending' || type === 'due') {
+      setStatusFilter('open');
+    } else if (type === 'cogs' || type === 'profit' || type === 'margin') {
+      expandAll();
+    }
+    setTimeout(() => {
+      const el = document.getElementById('sales-profit-ledger-table');
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 60);
+  };
+
+  // ─── Instant In-Memory Search (0ms Latency, searches invoice #, customer name, mobile, address, and line-item products/models) ───
+  const displayedInvoices = useMemo(() => {
+    const list = reportData?.invoices || [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return list;
+
+    return list.filter((inv) => {
+      if (inv.invoice_number && String(inv.invoice_number).toLowerCase().includes(q)) return true;
+      if (inv.customer_name && String(inv.customer_name).toLowerCase().includes(q)) return true;
+      if (inv.customer_mobile && String(inv.customer_mobile).includes(q)) return true;
+      if (inv.customer_address && String(inv.customer_address).toLowerCase().includes(q)) return true;
+      if (inv.status && String(inv.status).toLowerCase().includes(q)) return true;
+      if (inv.shop_name && String(inv.shop_name).toLowerCase().includes(q)) return true;
+      if (inv.items && Array.isArray(inv.items)) {
+        return inv.items.some((it) => {
+          return (
+            (it.product_name && String(it.product_name).toLowerCase().includes(q)) ||
+            (it.model && String(it.model).toLowerCase().includes(q)) ||
+            (it.quality && String(it.quality).toLowerCase().includes(q)) ||
+            (it.colour && String(it.colour).toLowerCase().includes(q)) ||
+            (it.mfg_brand && String(it.mfg_brand).toLowerCase().includes(q)) ||
+            (it.product_brand && String(it.product_brand).toLowerCase().includes(q))
+          );
+        });
+      }
+      return false;
+    });
+  }, [reportData?.invoices, searchQuery]);
+
+  // ─── Dynamic Summary (Updates in Real-Time to Match Search Results) ───
+  const displayedSummary = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return (
+        reportData?.summary || {
+          total_sales: 0,
+          total_paid: 0,
+          total_pending: 0,
+          total_cost: 0,
+          total_expenses: 0,
+          gross_profit: 0,
+          margin_pct: 0,
+          invoices_count: 0,
+          total_pcs_sold: 0,
+          previous_period_sales: 0,
+          sales_change_pct: null,
+        }
+      );
+    }
+
+    const totalSales = displayedInvoices.reduce((sum, inv) => sum + (Number(inv.billed_amount) || Number(inv.total_amount) || 0), 0);
+    const totalPaid = displayedInvoices.reduce((sum, inv) => sum + (Number(inv.paid_amount) || 0), 0);
+    const totalPending = displayedInvoices.reduce((sum, inv) => sum + (Number(inv.pending_amount) || 0), 0);
+    const totalCost = displayedInvoices.reduce((sum, inv) => sum + (Number(inv.total_cost) || 0), 0);
+    const totalExpenses = displayedInvoices.reduce((sum, inv) => sum + (Number(inv.extra_expenses_total) || 0), 0);
+    const grossProfit = totalSales - totalCost - totalExpenses;
+    const marginPct = totalSales > 0 ? Number(((grossProfit / totalSales) * 100).toFixed(2)) : 0;
+    const totalPcs = displayedInvoices.reduce((sum, inv) => sum + (Number(inv.total_quantity) || 0), 0);
+
+    return {
+      total_sales: totalSales,
+      total_paid: totalPaid,
+      total_pending: totalPending,
+      total_cost: totalCost,
+      total_expenses: totalExpenses,
+      gross_profit: grossProfit,
+      margin_pct: marginPct,
+      invoices_count: displayedInvoices.length,
+      total_pcs_sold: totalPcs,
+      previous_period_sales: 0,
+      sales_change_pct: null,
+    };
+  }, [reportData?.summary, displayedInvoices, searchQuery]);
+
+  const summary = displayedSummary;
+  const invoices = displayedInvoices;
 
   return (
     <div className="space-y-5 w-full">
@@ -394,6 +518,20 @@ export default function SalesProfitLedgerPage({
           >
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
             <span>Refresh</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={toggleHideDetails}
+            className={`px-3.5 py-2 text-xs font-bold rounded-xl transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs ${
+              hideDetails
+                ? 'text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-300'
+                : 'text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200'
+            }`}
+            title={hideDetails ? 'Show Invoices & Margin Details' : 'Hide Invoices & Margin Details'}
+          >
+            {hideDetails ? <Eye size={13} className="text-teal-600" /> : <EyeOff size={13} className="text-slate-500" />}
+            <span>{hideDetails ? 'Show Details' : 'Hide Details'}</span>
           </button>
 
           <button
@@ -492,16 +630,26 @@ export default function SalesProfitLedgerPage({
 
         {/* Row 2: Search, Branch, Status Filters */}
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1 border-t border-slate-100">
-          {/* Search Box */}
+          {/* Search Box with instant filtering & Clear Button */}
           <div className="sm:col-span-6 relative">
             <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by customer name, mobile, address, or INV-xxxxxx..."
-              className="w-full h-10 pl-9 pr-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none placeholder:text-slate-400 font-medium"
+              placeholder="Search by customer name, mobile, address, product, or INV-xxxxxx..."
+              className="w-full h-10 pl-9 pr-9 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-500 focus:outline-none placeholder:text-slate-400 font-medium transition-colors"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 p-1 rounded-full cursor-pointer hover:bg-slate-200/70 transition-colors"
+                title="Clear search"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           {/* Branch / Workspace Selector */}
@@ -542,12 +690,53 @@ export default function SalesProfitLedgerPage({
         <div className="bg-gradient-to-br from-white to-slate-50/70 border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-2 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Total Sales</span>
-            <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
-              <Receipt size={16} />
+            <div className="flex items-center gap-1.5">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={() => toggleCardValue('sales')}
+                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shadow-2xs ${
+                  hiddenCardValues.has('sales')
+                    ? 'text-slate-600 bg-slate-100 hover:bg-slate-200/80 border border-slate-300'
+                    : 'text-blue-700 bg-blue-50/90 hover:bg-blue-100 border border-blue-200/80'
+                }`}
+                title={hiddenCardValues.has('sales') ? 'Reveal Total Sales' : 'Hide Total Sales'}
+              >
+                {hiddenCardValues.has('sales') ? <Eye size={12} className="text-slate-600" /> : <EyeOff size={12} />}
+                <span>{hiddenCardValues.has('sales') ? 'View' : 'Hide'}</span>
+              </motion.button>
+              <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+                <Receipt size={16} />
+              </div>
             </div>
           </div>
-          <div className="text-xl font-black text-slate-900 tracking-tight">
-            {currency(summary.total_sales)}
+          <div className="min-h-[28px] flex items-center overflow-hidden">
+            <AnimatePresence mode="wait" initial={false}>
+              {hiddenCardValues.has('sales') ? (
+                <motion.div
+                  key="sales-masked"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="text-xl font-black text-slate-400 tracking-widest font-mono select-none"
+                >
+                  ••••••••
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="sales-visible"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="text-xl font-black text-slate-900 tracking-tight"
+                >
+                  {currency(summary.total_sales)}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           <div className="flex items-center gap-2 text-[11px] font-bold">
             {summary.sales_change_pct !== null ? (
@@ -568,11 +757,61 @@ export default function SalesProfitLedgerPage({
           <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] font-semibold">
             <span className="text-emerald-700 flex items-center gap-1" title="Amount received for these sales">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-              Paid: <strong className="font-extrabold">{currency(summary.total_paid || 0)}</strong>
+              Paid:{' '}
+              <AnimatePresence mode="wait" initial={false}>
+                {hiddenCardValues.has('sales') ? (
+                  <motion.span
+                    key="paid-hidden"
+                    initial={{ opacity: 0, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, filter: 'blur(4px)' }}
+                    transition={{ duration: 0.2 }}
+                    className="font-mono text-slate-400 font-bold"
+                  >
+                    ••••••
+                  </motion.span>
+                ) : (
+                  <motion.strong
+                    key="paid-visible"
+                    initial={{ opacity: 0, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, filter: 'blur(4px)' }}
+                    transition={{ duration: 0.2 }}
+                    className="font-extrabold"
+                  >
+                    {currency(summary.total_paid || 0)}
+                  </motion.strong>
+                )}
+              </AnimatePresence>
             </span>
             <span className="text-rose-700 flex items-center gap-1" title="Amount pending/credit on these sales">
               <span className="w-1.5 h-1.5 rounded-full bg-rose-500 inline-block" />
-              Due: <strong className="font-extrabold">{currency(summary.total_pending || 0)}</strong>
+              Due:{' '}
+              <AnimatePresence mode="wait" initial={false}>
+                {hiddenCardValues.has('sales') ? (
+                  <motion.span
+                    key="due-hidden"
+                    initial={{ opacity: 0, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, filter: 'blur(4px)' }}
+                    transition={{ duration: 0.2 }}
+                    className="font-mono text-slate-400 font-bold"
+                  >
+                    ••••••
+                  </motion.span>
+                ) : (
+                  <motion.strong
+                    key="due-visible"
+                    initial={{ opacity: 0, filter: 'blur(4px)' }}
+                    animate={{ opacity: 1, filter: 'blur(0px)' }}
+                    exit={{ opacity: 0, filter: 'blur(4px)' }}
+                    transition={{ duration: 0.2 }}
+                    className="font-extrabold"
+                  >
+                    {currency(summary.total_pending || 0)}
+                  </motion.strong>
+                )}
+              </AnimatePresence>
             </span>
           </div>
         </div>
@@ -581,12 +820,53 @@ export default function SalesProfitLedgerPage({
         <div className="bg-gradient-to-br from-white to-slate-50/70 border border-slate-200/80 rounded-2xl p-4 shadow-xs space-y-2 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-xs font-extrabold text-slate-500 uppercase tracking-wider">Total Cost (COGS)</span>
-            <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
-              <Boxes size={16} />
+            <div className="flex items-center gap-1.5">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={() => toggleCardValue('cogs')}
+                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shadow-2xs ${
+                  hiddenCardValues.has('cogs')
+                    ? 'text-slate-600 bg-slate-100 hover:bg-slate-200/80 border border-slate-300'
+                    : 'text-indigo-700 bg-indigo-50/90 hover:bg-indigo-100 border border-indigo-200/80'
+                }`}
+                title={hiddenCardValues.has('cogs') ? 'Reveal Total Cost' : 'Hide Total Cost'}
+              >
+                {hiddenCardValues.has('cogs') ? <Eye size={12} className="text-slate-600" /> : <EyeOff size={12} />}
+                <span>{hiddenCardValues.has('cogs') ? 'View' : 'Hide'}</span>
+              </motion.button>
+              <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold">
+                <Boxes size={16} />
+              </div>
             </div>
           </div>
-          <div className="text-xl font-black text-slate-900 tracking-tight">
-            {currency(summary.total_cost)}
+          <div className="min-h-[28px] flex items-center overflow-hidden">
+            <AnimatePresence mode="wait" initial={false}>
+              {hiddenCardValues.has('cogs') ? (
+                <motion.div
+                  key="cogs-masked"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="text-xl font-black text-slate-400 tracking-widest font-mono select-none"
+                >
+                  ••••••••
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="cogs-visible"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="text-xl font-black text-slate-900 tracking-tight"
+                >
+                  {currency(summary.total_cost)}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           <div className="flex items-center justify-between text-[11px] text-slate-500 font-medium">
             <span>Purchase value of sold items</span>
@@ -598,17 +878,62 @@ export default function SalesProfitLedgerPage({
         <div className="bg-gradient-to-br from-white to-emerald-50/40 border border-emerald-200/80 rounded-2xl p-4 shadow-xs space-y-2 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-xs font-extrabold text-emerald-800 uppercase tracking-wider">Gross Profit</span>
-            <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-md shadow-emerald-600/20">
-              <IndianRupee size={16} />
+            <div className="flex items-center gap-1.5">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={() => toggleCardValue('profit')}
+                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shadow-2xs ${
+                  hiddenCardValues.has('profit')
+                    ? 'text-slate-600 bg-slate-100 hover:bg-slate-200/80 border border-slate-300'
+                    : 'text-emerald-800 bg-emerald-100/80 hover:bg-emerald-200/80 border border-emerald-300'
+                }`}
+                title={hiddenCardValues.has('profit') ? 'Reveal Gross Profit' : 'Hide Gross Profit'}
+              >
+                {hiddenCardValues.has('profit') ? <Eye size={12} className="text-slate-600" /> : <EyeOff size={12} />}
+                <span>{hiddenCardValues.has('profit') ? 'View' : 'Hide'}</span>
+              </motion.button>
+              <div className="w-8 h-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-md shadow-emerald-600/20">
+                <IndianRupee size={16} />
+              </div>
             </div>
           </div>
-          <div className={`text-xl font-black tracking-tight ${summary.gross_profit >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-            {summary.gross_profit >= 0 ? `+${currency(summary.gross_profit)}` : currency(summary.gross_profit)}
+          <div className="min-h-[28px] flex items-center overflow-hidden">
+            <AnimatePresence mode="wait" initial={false}>
+              {hiddenCardValues.has('profit') ? (
+                <motion.div
+                  key="profit-masked"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="text-xl font-black text-slate-400 tracking-widest font-mono select-none"
+                >
+                  ••••••••
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="profit-visible"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className={`text-xl font-black tracking-tight ${
+                    summary.gross_profit >= 0 ? 'text-emerald-700' : 'text-rose-700'
+                  }`}
+                >
+                  {summary.gross_profit >= 0 ? `+${currency(summary.gross_profit)}` : currency(summary.gross_profit)}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
           <div className="flex items-center justify-between text-[11px] font-medium text-emerald-900/80">
             <span>Sales minus COGS &amp; expenses</span>
             {summary.total_expenses > 0 && (
-              <span className="text-[10px] text-slate-500 font-bold">(-{currency(summary.total_expenses)} exp)</span>
+              <span className="text-[10px] text-slate-500 font-bold">
+                {hiddenCardValues.has('profit') ? '(-•••• exp)' : `(-${currency(summary.total_expenses)} exp)`}
+              </span>
             )}
           </div>
         </div>
@@ -617,85 +942,207 @@ export default function SalesProfitLedgerPage({
         <div className="bg-gradient-to-br from-white to-teal-50/40 border border-teal-200/80 rounded-2xl p-4 shadow-xs space-y-2 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-xs font-extrabold text-teal-800 uppercase tracking-wider">Profit Margin</span>
-            <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center font-bold">
-              <Percent size={16} />
+            <div className="flex items-center gap-1.5">
+              <motion.button
+                type="button"
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.94 }}
+                onClick={() => toggleCardValue('margin')}
+                className={`px-2 py-1 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer shadow-2xs ${
+                  hiddenCardValues.has('margin')
+                    ? 'text-slate-600 bg-slate-100 hover:bg-slate-200/80 border border-slate-300'
+                    : 'text-teal-800 bg-teal-100/80 hover:bg-teal-200/80 border border-teal-300'
+                }`}
+                title={hiddenCardValues.has('margin') ? 'Reveal Profit Margin' : 'Hide Profit Margin'}
+              >
+                {hiddenCardValues.has('margin') ? <Eye size={12} className="text-slate-600" /> : <EyeOff size={12} />}
+                <span>{hiddenCardValues.has('margin') ? 'View' : 'Hide'}</span>
+              </motion.button>
+              <div className="w-8 h-8 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center font-bold">
+                <Percent size={16} />
+              </div>
             </div>
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className={`text-xl font-black tracking-tight ${summary.margin_pct >= 15 ? 'text-teal-800' : summary.margin_pct > 0 ? 'text-amber-700' : 'text-rose-700'}`}>
-              {summary.margin_pct}%
-            </span>
-            <span
-              className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
-                summary.margin_pct >= 20
-                  ? 'bg-emerald-100 text-emerald-800'
-                  : summary.margin_pct >= 10
-                  ? 'bg-teal-100 text-teal-800'
-                  : 'bg-amber-100 text-amber-800'
-              }`}
-            >
-              {summary.margin_pct >= 20 ? 'High Margin' : summary.margin_pct >= 10 ? 'Healthy' : 'Low Margin'}
-            </span>
+          <div className="min-h-[28px] flex items-center overflow-hidden">
+            <AnimatePresence mode="wait" initial={false}>
+              {hiddenCardValues.has('margin') ? (
+                <motion.div
+                  key="margin-masked"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="text-xl font-black text-slate-400 tracking-widest font-mono select-none"
+                >
+                  ••••%
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="margin-visible"
+                  initial={{ opacity: 0, filter: 'blur(6px)', y: 2 }}
+                  animate={{ opacity: 1, filter: 'blur(0px)', y: 0 }}
+                  exit={{ opacity: 0, filter: 'blur(6px)', y: -2 }}
+                  transition={{ duration: 0.22, ease: 'easeInOut' }}
+                  className="flex items-baseline gap-2"
+                >
+                  <span
+                    className={`text-xl font-black tracking-tight ${
+                      summary.margin_pct >= 15 ? 'text-teal-800' : summary.margin_pct > 0 ? 'text-amber-700' : 'text-rose-700'
+                    }`}
+                  >
+                    {summary.margin_pct}%
+                  </span>
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.2 rounded ${
+                      summary.margin_pct >= 20
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : summary.margin_pct >= 10
+                        ? 'bg-teal-100 text-teal-800'
+                        : 'bg-amber-100 text-amber-800'
+                    }`}
+                  >
+                    {summary.margin_pct >= 20 ? 'High Margin' : summary.margin_pct >= 10 ? 'Healthy' : 'Low Margin'}
+                  </span>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
           {/* Progress gauge bar */}
           <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
+            <motion.div
+              className={`h-full rounded-full ${
                 summary.margin_pct >= 20 ? 'bg-emerald-500' : summary.margin_pct >= 10 ? 'bg-teal-500' : 'bg-amber-500'
               }`}
-              style={{ width: `${Math.min(Math.max(summary.margin_pct, 0), 100)}%` }}
+              initial={false}
+              animate={{
+                width: hiddenCardValues.has('margin') ? '0%' : `${Math.min(Math.max(summary.margin_pct, 0), 100)}%`,
+              }}
+              transition={{ duration: 0.45, ease: 'easeInOut' }}
             />
           </div>
         </div>
       </div>
 
       {/* ─── Detailed Invoices & Sales Table ─── */}
-      <div className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden">
-        {/* Table Header Bar with count and Expand/Collapse All */}
+      <div id="sales-profit-ledger-table" className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden scroll-mt-6">
+        {/* Table Header Bar with count, Hide Details toggle, and Expand/Collapse All */}
         <div className="px-5 py-3.5 border-b border-slate-100 bg-slate-50/60 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
               <FileText size={14} className="text-teal-600" />
               Invoices &amp; Margin Ledger
             </span>
-            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-200/70 text-slate-700">
+            <span
+              className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                searchQuery.trim()
+                  ? 'bg-teal-100 text-teal-800 border border-teal-200'
+                  : 'bg-slate-200/70 text-slate-700'
+              }`}
+            >
               {invoices.length} {invoices.length === 1 ? 'order' : 'orders'}
+              {searchQuery.trim() ? ' matched' : ''}
             </span>
+            {searchQuery.trim() && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="text-[11px] font-bold text-rose-600 hover:underline cursor-pointer flex items-center gap-0.5 ml-1"
+                title="Clear search filter"
+              >
+                <X size={11} /> Clear
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={expandAll}
-              className="text-[11px] font-bold text-teal-700 hover:text-teal-800 hover:underline cursor-pointer"
+              onClick={toggleHideDetails}
+              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
+                hideDetails
+                  ? 'text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200'
+                  : 'text-slate-600 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80'
+              }`}
             >
-              Expand All
+              {hideDetails ? <Eye size={12} /> : <EyeOff size={12} />}
+              <span>{hideDetails ? 'Show Details' : 'Hide Details'}</span>
             </button>
-            <span className="text-slate-300">•</span>
-            <button
-              type="button"
-              onClick={collapseAll}
-              className="text-[11px] font-bold text-slate-500 hover:text-slate-700 hover:underline cursor-pointer"
-            >
-              Collapse All
-            </button>
+            {!hideDetails && (
+              <>
+                <span className="text-slate-300">•</span>
+                <button
+                  type="button"
+                  onClick={expandAll}
+                  className="text-[11px] font-bold text-teal-700 hover:text-teal-800 hover:underline cursor-pointer"
+                >
+                  Expand All
+                </button>
+                <span className="text-slate-300">•</span>
+                <button
+                  type="button"
+                  onClick={collapseAll}
+                  className="text-[11px] font-bold text-slate-500 hover:text-slate-700 hover:underline cursor-pointer"
+                >
+                  Collapse All
+                </button>
+              </>
+            )}
           </div>
         </div>
 
-        {/* Invoices List / Table */}
-        {loading ? (
+        {/* Invoices List / Table / Hidden Placeholder */}
+        {hideDetails && !searchQuery.trim() ? (
+          <div className="py-14 px-6 text-center space-y-3 bg-gradient-to-b from-white to-slate-50/50">
+            <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center">
+              <EyeOff size={22} />
+            </div>
+            <div className="space-y-1">
+              <p className="text-sm font-extrabold text-slate-700">Invoice details are hidden</p>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                Summary metrics above are active. Click below or use the "View" button on any metric card to reveal the complete invoice ledger.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={toggleHideDetails}
+              className="px-4 py-2 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all inline-flex items-center gap-1.5 cursor-pointer shadow-2xs hover:scale-[1.02] active:scale-95"
+            >
+              <Eye size={13} />
+              <span>Show Details ({invoices.length} {invoices.length === 1 ? 'order' : 'orders'})</span>
+            </button>
+          </div>
+        ) : loading ? (
           <div className="py-20 text-center space-y-2">
             <RefreshCw size={28} className="mx-auto text-teal-600 animate-spin" />
             <p className="text-xs font-bold text-slate-600">Calculating purchase costs and margins...</p>
           </div>
         ) : invoices.length === 0 ? (
-          <div className="py-20 text-center space-y-2">
-            <Package size={36} className="mx-auto text-slate-300" />
-            <p className="text-sm font-bold text-slate-700">No sales invoices found</p>
-            <p className="text-xs text-slate-400">
-              No sales recorded for the selected date range and branch filters.
-            </p>
+          <div className="py-20 text-center space-y-3">
+            {searchQuery.trim() ? (
+              <>
+                <Search size={36} className="mx-auto text-slate-300" />
+                <p className="text-sm font-bold text-slate-700">No matching orders found</p>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                  No sales invoices match <span className="font-semibold text-slate-700">"{searchQuery.trim()}"</span> in the selected date range.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="px-3.5 py-1.5 text-xs font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-xl transition-all cursor-pointer shadow-2xs"
+                >
+                  Clear Search Filter
+                </button>
+              </>
+            ) : (
+              <>
+                <Package size={36} className="mx-auto text-slate-300" />
+                <p className="text-sm font-bold text-slate-700">No sales invoices found</p>
+                <p className="text-xs text-slate-400">
+                  No sales recorded for the selected date range and branch filters.
+                </p>
+              </>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">

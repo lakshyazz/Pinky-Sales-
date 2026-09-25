@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Edit2, Trash2, X, Tags, Search, AlertCircle, Check, Loader2, ToggleLeft, ToggleRight, Download } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Tags, Search, AlertCircle, Check, Loader2, ToggleLeft, ToggleRight, Download, BookOpen, Phone, MapPin } from 'lucide-react';
 import { exportSuppliersExcel } from '../../utils/excelExport';
 
 export default function SuppliersPage({
@@ -19,13 +19,28 @@ export default function SuppliersPage({
 
   // Add/Edit Supplier Modal state
   const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
-  const [editingSupplier, setEditingSupplier] = useState(null); // { id, name }
+  const [editingSupplier, setEditingSupplier] = useState(null); // supplier object
   const [supplierFormName, setSupplierFormName] = useState('');
+  const [supplierFormOpeningBalance, setSupplierFormOpeningBalance] = useState('');
+  const [supplierFormMobile, setSupplierFormMobile] = useState('');
+  const [supplierFormGstin, setSupplierFormGstin] = useState('');
+  const [supplierFormAddress, setSupplierFormAddress] = useState('');
   const [supplierFormActive, setSupplierFormActive] = useState(true);
   const [deletingSupplier, setDeletingSupplier] = useState(null); // { id, name }
   const [actionSaving, setActionSaving] = useState(false);
   const [modalError, setModalError] = useState(null);
   const [supplierFormError, setSupplierFormError] = useState(null);
+
+  const resetForm = () => {
+    setEditingSupplier(null);
+    setSupplierFormName('');
+    setSupplierFormOpeningBalance('');
+    setSupplierFormMobile('');
+    setSupplierFormGstin('');
+    setSupplierFormAddress('');
+    setSupplierFormActive(true);
+    setSupplierFormError(null);
+  };
 
   const searchVal = internalSearch;
   const isSuperAdmin = session?.role === 'superadmin' || session?.role === 'owner';
@@ -59,8 +74,12 @@ export default function SuppliersPage({
           id: s.id,
           rawName: s.name,
           name: s.name,
-          phone: s.phone || s.mobile || '',
+          phone: s.mobile || s.phone || '',
+          mobile: s.mobile || s.phone || '',
           email: s.email || '',
+          address: s.address || '',
+          gstin: s.gstin || '',
+          opening_balance: Number(s.opening_balance || 0),
           contact_person: s.contact_person || '',
           linked_products_count: metrics.count,
           totalStock: metrics.stock,
@@ -82,23 +101,31 @@ export default function SuppliersPage({
     setActionSaving(true);
     setSupplierFormError(null);
     try {
+      const payload = {
+        name: cleanName,
+        is_active: supplierFormActive,
+        opening_balance: supplierFormOpeningBalance !== '' ? parseFloat(supplierFormOpeningBalance) : 0,
+        mobile: supplierFormMobile.trim() || null,
+        gstin: supplierFormGstin.trim() || null,
+        address: supplierFormAddress.trim() || null,
+      };
+
       if (editingSupplier) {
         const supplierId = editingSupplier.id;
         await api(`/reference-data/suppliers/${encodeURIComponent(supplierId)}`, {
           method: 'PUT',
-          body: JSON.stringify({ name: cleanName, is_active: supplierFormActive }),
+          body: JSON.stringify(payload),
         });
-        if (setGlobalToast) setGlobalToast(`Supplier renamed to "${cleanName}"`, 'success');
+        if (setGlobalToast) setGlobalToast(`Supplier "${cleanName}" updated successfully`, 'success');
       } else {
         await api('/reference-data/suppliers', {
           method: 'POST',
-          body: JSON.stringify({ name: cleanName }),
+          body: JSON.stringify(payload),
         });
         if (setGlobalToast) setGlobalToast(`Supplier "${cleanName}" created successfully`, 'success');
       }
       setShowAddSupplierModal(false);
-      setEditingSupplier(null);
-      setSupplierFormName('');
+      resetForm();
       if (onBrandChange) await onBrandChange();
     } catch (err) {
       setSupplierFormError(err.message || 'Unable to save supplier');
@@ -192,10 +219,7 @@ export default function SuppliersPage({
             <button
               type="button"
               onClick={() => {
-                setEditingSupplier(null);
-                setSupplierFormName('');
-                setSupplierFormActive(true);
-                setSupplierFormError(null);
+                resetForm();
                 setShowAddSupplierModal(true);
               }}
               className="px-5 py-3 rounded-2xl bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-teal-600/25 transition-all active:scale-95 cursor-pointer"
@@ -272,11 +296,15 @@ export default function SuppliersPage({
                     <>
                       <button
                         type="button"
-                        title={`Rename supplier ${item.name}`}
+                        title={`Edit supplier ${item.name}`}
                         onClick={(e) => {
                           e.stopPropagation();
                           setEditingSupplier(item);
-                          setSupplierFormName(item.rawName || item.name);
+                          setSupplierFormName(item.rawName || item.name || '');
+                          setSupplierFormOpeningBalance(item.opening_balance != null && item.opening_balance !== 0 ? String(item.opening_balance) : '');
+                          setSupplierFormMobile(item.mobile || item.phone || '');
+                          setSupplierFormGstin(item.gstin || '');
+                          setSupplierFormAddress(item.address || '');
                           setSupplierFormActive(item.is_active);
                           setSupplierFormError(null);
                           setShowAddSupplierModal(true);
@@ -310,6 +338,42 @@ export default function SuppliersPage({
                   </span>
                 )}
               </div>
+
+              {/* Opening Balance Badge */}
+              {Number(item.opening_balance || 0) > 0 && (
+                <div className="mt-3 flex items-center justify-between px-3 py-2 rounded-xl bg-amber-50/90 border border-amber-200/80 text-amber-900 shadow-xs">
+                  <div className="flex items-center gap-1.5 text-xs font-bold">
+                    <BookOpen className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>Opening Bal:</span>
+                  </div>
+                  <span className="text-xs font-black text-amber-950 font-mono">
+                    ₹{Number(item.opening_balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
+
+              {/* Contact info if available */}
+              {(item.mobile || item.address || item.gstin) && (
+                <div className="mt-2.5 space-y-1 text-xs text-slate-500 font-medium">
+                  {item.mobile && (
+                    <div className="flex items-center gap-1.5">
+                      <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span>{item.mobile}</span>
+                    </div>
+                  )}
+                  {item.gstin && (
+                    <div className="text-[11px] text-slate-400 font-mono">
+                      GSTIN: {item.gstin}
+                    </div>
+                  )}
+                  {item.address && (
+                    <div className="flex items-center gap-1.5 truncate">
+                      <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                      <span className="truncate text-[11px]">{item.address}</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </motion.div>
         ))}
@@ -332,7 +396,7 @@ export default function SuppliersPage({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
               transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-              className="w-full max-w-md bg-white rounded-3xl shadow-2xl border border-slate-200/90 overflow-hidden"
+              className="w-full max-w-lg bg-white rounded-3xl shadow-2xl border border-slate-200/90 overflow-hidden"
             >
               <div className="p-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
                 <div className="flex items-center gap-3">
@@ -344,7 +408,7 @@ export default function SuppliersPage({
                       {editingSupplier ? 'Edit Supplier' : 'Add Supplier'}
                     </h3>
                     <p className="text-xs text-slate-500 font-medium">
-                      {editingSupplier ? 'Rename or adjust settings for this supplier.' : 'Register a new spares parts supplier.'}
+                      {editingSupplier ? 'Update details and opening balance for this supplier.' : 'Register a new supplier profile with opening balance.'}
                     </p>
                   </div>
                 </div>
@@ -352,8 +416,7 @@ export default function SuppliersPage({
                   type="button"
                   onClick={() => {
                     setShowAddSupplierModal(false);
-                    setEditingSupplier(null);
-                    setSupplierFormName('');
+                    resetForm();
                   }}
                   className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
                 >
@@ -368,32 +431,98 @@ export default function SuppliersPage({
                     <span>{supplierFormError}</span>
                   </div>
                 )}
+                
+                {/* Supplier Name */}
                 <div>
-                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-2">
-                    Supplier Name
+                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Supplier Name <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     autoFocus
-                    placeholder="e.g. Chinese Supplier ABC, Delhi Wholesale..."
+                    placeholder="e.g. Navkar Enterprises, Prime Spares, Delhi Wholesale..."
                     value={supplierFormName}
                     onChange={(e) => setSupplierFormName(e.target.value)}
-                    className="w-full px-4 py-3 rounded-2xl border-2 border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 text-sm font-bold text-slate-900 outline-none transition-all"
+                    className="w-full px-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 text-sm font-bold text-slate-900 outline-none transition-all"
                   />
-                  <p className="text-[11px] text-slate-400 font-medium mt-1.5">
-                    This will appear in the stock updating panel to tag supplier source.
+                  <p className="text-[11px] text-slate-400 font-medium mt-1">
+                    Appears on purchase bills, debit notes, and inventory batches.
                   </p>
                 </div>
 
+                {/* Opening Balance */}
+                <div>
+                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Opening Balance (₹ - Optional)
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400 text-sm">₹</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="0.00"
+                      value={supplierFormOpeningBalance}
+                      onChange={(e) => setSupplierFormOpeningBalance(e.target.value)}
+                      className="w-full pl-8 pr-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 text-sm font-bold text-slate-900 outline-none transition-all font-mono"
+                    />
+                  </div>
+                  <p className="text-[11px] text-slate-400 font-medium mt-1">
+                    Initial balance payable to this supplier before recording purchase bills.
+                  </p>
+                </div>
+
+                {/* Mobile and GSTIN */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
+                      Mobile / Phone (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 9876543210"
+                      value={supplierFormMobile}
+                      onChange={(e) => setSupplierFormMobile(e.target.value)}
+                      className="w-full px-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 text-sm font-bold text-slate-900 outline-none transition-all"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
+                      GSTIN (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="24AAAAA0000A1Z5"
+                      value={supplierFormGstin}
+                      onChange={(e) => setSupplierFormGstin(e.target.value.toUpperCase())}
+                      className="w-full px-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 text-sm font-bold text-slate-900 outline-none transition-all font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* Address */}
+                <div>
+                  <label className="block text-xs font-extrabold uppercase tracking-wider text-slate-600 mb-1.5">
+                    Address / City (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Shop 12, Spares Market, Delhi"
+                    value={supplierFormAddress}
+                    onChange={(e) => setSupplierFormAddress(e.target.value)}
+                    className="w-full px-4 py-2.5 rounded-2xl border-2 border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 text-sm font-bold text-slate-900 outline-none transition-all"
+                  />
+                </div>
+
                 {editingSupplier && (
-                  <div className="flex items-center gap-3 py-2">
+                  <div className="flex items-center gap-3 py-1">
                     <input
                       type="checkbox"
                       id="supplier-active-chk"
                       checked={supplierFormActive}
                       onChange={(e) => setSupplierFormActive(e.target.checked)}
-                      className="w-4 h-4 rounded text-teal-600 border-slate-300 focus:ring-teal-500"
+                      className="w-4 h-4 rounded text-teal-600 border-slate-300 focus:ring-teal-500 cursor-pointer"
                     />
                     <label htmlFor="supplier-active-chk" className="text-xs font-bold text-slate-700 cursor-pointer">
                       Mark as Active Supplier
@@ -401,13 +530,12 @@ export default function SuppliersPage({
                   </div>
                 )}
 
-                <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
+                <div className="pt-3 flex items-center justify-end gap-3 border-t border-slate-100">
                   <button
                     type="button"
                     onClick={() => {
                       setShowAddSupplierModal(false);
-                      setEditingSupplier(null);
-                      setSupplierFormName('');
+                      resetForm();
                     }}
                     className="px-5 py-2.5 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
                   >

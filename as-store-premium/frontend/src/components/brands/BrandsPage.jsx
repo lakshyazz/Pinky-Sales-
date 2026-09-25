@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, Layers, Coins, Activity, Clock, SlidersHorizontal, Inbox, ChevronRight, Download } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Tags, Search, ArrowRight, Smartphone, AlertCircle, Check, Loader2, Layers, Coins, Activity, Clock, SlidersHorizontal, Inbox, ChevronRight, Download, Eye, EyeOff } from 'lucide-react';
 import { exportBrandProductsInventoryExcel } from '../../utils/excelExport';
 
 const formatCurrency = (value) => `₹${Number(value || 0).toLocaleString('en-IN')}`;
@@ -54,6 +54,13 @@ export default function BrandsPage({
   const [brandFormName, setBrandFormName] = useState('');
   const [deletingBrand, setDeletingBrand] = useState(null); // { id, name, rawName }
   const [actionSaving, setActionSaving] = useState(false);
+  const [hideBrands, setHideBrands] = useState(() => {
+    try {
+      return localStorage.getItem('as_store_hide_brands') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   const searchVal = propSearch !== undefined && onSearchChange ? propSearch : internalSearch;
   const activeBrandName = propSelectedBrand || selectedBrandState;
@@ -360,6 +367,27 @@ export default function BrandsPage({
           <button
             type="button"
             onClick={() => {
+              const next = !hideBrands;
+              setHideBrands(next);
+              try {
+                localStorage.setItem('as_store_hide_brands', String(next));
+              } catch {
+                // ignore
+              }
+            }}
+            className={`px-4 py-3 rounded-2xl border font-bold text-xs flex items-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer ${
+              hideBrands
+                ? 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200'
+                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:border-teal-300 hover:text-teal-700'
+            }`}
+            title={hideBrands ? 'Show brand catalog cards' : 'Hide brand catalog cards to simplify workspace'}
+          >
+            {hideBrands ? <Eye className="w-4 h-4 text-teal-600" /> : <EyeOff className="w-4 h-4 text-slate-500" />}
+            <span>{hideBrands ? 'Show Brands' : 'Hide Brands'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
               if (!brandList.length && !allProducts.length) {
                 if (setGlobalToast) setGlobalToast('No brands or products found to export', 'error');
                 return;
@@ -433,88 +461,112 @@ export default function BrandsPage({
         )}
       </div>
 
-      {/* Brand Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        {brandList.map((item) => (
-          <motion.div
-            key={item.name}
-            whileHover={{ y: -4, scale: 1.015 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
-            className="p-5 rounded-3xl bg-white/95 border border-slate-200/90 shadow-xl shadow-slate-200/40 backdrop-blur-xl flex flex-col justify-between cursor-pointer group hover:border-teal-300 transition-all relative overflow-hidden"
-            onClick={() => handleSelectBrand(item.rawName)}
-          >
-            <div>
-              <div className="flex items-center justify-between mb-4">
-                <div className="p-3 rounded-2xl bg-teal-50 border border-teal-100 text-teal-700 group-hover:bg-teal-600 group-hover:text-white transition-all">
-                  <Tags className="w-5 h-5" />
-                </div>
-                
-                {/* Brand Action Buttons: Edit and Delete */}
-                <div className="flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
-                  <button
-                    type="button"
-                    title={`Rename brand ${item.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingBrand(item);
-                      setBrandFormName(item.rawName || item.name);
-                      setShowAddBrandModal(true);
-                    }}
-                    className="p-2 rounded-xl bg-slate-100/80 hover:bg-teal-50 text-slate-500 hover:text-teal-600 border border-slate-200/60 hover:border-teal-200 transition-all cursor-pointer"
-                  >
-                    <Edit2 className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    title={`Delete brand ${item.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeletingBrand(item);
-                    }}
-                    className="p-2 rounded-xl bg-slate-100/80 hover:bg-rose-50 text-slate-500 hover:text-rose-600 border border-slate-200/60 hover:border-rose-200 transition-all cursor-pointer"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              <h3 className="text-lg font-black text-slate-900 group-hover:text-teal-700 transition-all">{item.name}</h3>
-
-              <div className="mt-4 space-y-1.5 text-xs font-medium text-slate-500">
-                <div className="flex justify-between items-center">
-                  <span>Product Models:</span>
-                  <span className="font-extrabold text-slate-800">
-                    {item.productCount !== undefined ? item.productCount : item.products.length} models
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span>Stock Available:</span>
-                  <span className="font-extrabold text-emerald-600">{item.totalStock} units</span>
-                </div>
-                {item.stockValue > 0 && (
-                  <div className="flex justify-between items-center">
-                    <span>Valuation:</span>
-                    <span className="font-extrabold text-slate-700">{currency(item.stockValue)}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-teal-600 group-hover:text-teal-700">
-              <span>View Brand Products</span>
-              <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-all" />
-            </div>
-          </motion.div>
-        ))}
-
-        {brandList.length === 0 && (
-          <div className="col-span-full p-12 text-center bg-white/80 border border-slate-200/80 rounded-3xl">
-            <Tags className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-            <p className="text-sm font-bold text-slate-600">No brands found</p>
-            <p className="text-xs text-slate-400 mt-1">Click "+ Add Brand" above to register a new brand manufacturer.</p>
+      {/* Hidden State or Brand Cards Grid */}
+      {hideBrands && !searchVal.trim() ? (
+        <div className="p-12 text-center bg-white/90 border border-slate-200/80 rounded-3xl shadow-xl shadow-slate-200/40 backdrop-blur-xl flex flex-col items-center justify-center">
+          <div className="w-16 h-16 rounded-2xl bg-teal-50 border border-teal-100 flex items-center justify-center text-teal-600 mb-4 shadow-sm">
+            <EyeOff className="w-8 h-8" />
           </div>
-        )}
-      </div>
+          <h3 className="text-lg font-black text-slate-900 mb-1">Brand Catalog is Hidden</h3>
+          <p className="text-xs text-slate-500 font-medium max-w-md mb-5">
+            Brands are currently hidden to keep your workspace minimal. Search by name above or click below to reveal all {brandList.length} brands.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setHideBrands(false);
+              try {
+                localStorage.setItem('as_store_hide_brands', 'false');
+              } catch {}
+            }}
+            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white font-bold text-xs flex items-center gap-2 shadow-md shadow-teal-600/20 transition-all active:scale-95 cursor-pointer"
+          >
+            <Eye className="w-4 h-4" /> Show Brands ({brandList.length})
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          {brandList.map((item) => (
+            <motion.div
+              key={item.name}
+              whileHover={{ y: -4, scale: 1.015 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+              className="p-5 rounded-3xl bg-white/95 border border-slate-200/90 shadow-xl shadow-slate-200/40 backdrop-blur-xl flex flex-col justify-between cursor-pointer group hover:border-teal-300 transition-all relative overflow-hidden"
+              onClick={() => handleSelectBrand(item.rawName)}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <div className="p-3 rounded-2xl bg-teal-50 border border-teal-100 text-teal-700 group-hover:bg-teal-600 group-hover:text-white transition-all">
+                    <Tags className="w-5 h-5" />
+                  </div>
+                  
+                  {/* Brand Action Buttons: Edit and Delete */}
+                  <div className="flex items-center gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
+                    <button
+                      type="button"
+                      title={`Rename brand ${item.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingBrand(item);
+                        setBrandFormName(item.rawName || item.name);
+                        setShowAddBrandModal(true);
+                      }}
+                      className="p-2 rounded-xl bg-slate-100/80 hover:bg-teal-50 text-slate-500 hover:text-teal-600 border border-slate-200/60 hover:border-teal-200 transition-all cursor-pointer"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      title={`Delete brand ${item.name}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeletingBrand(item);
+                      }}
+                      className="p-2 rounded-xl bg-slate-100/80 hover:bg-rose-50 text-slate-500 hover:text-rose-600 border border-slate-200/60 hover:border-rose-200 transition-all cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <h3 className="text-lg font-black text-slate-900 group-hover:text-teal-700 transition-all">{item.name}</h3>
+
+                <div className="mt-4 space-y-1.5 text-xs font-medium text-slate-500">
+                  <div className="flex justify-between items-center">
+                    <span>Product Models:</span>
+                    <span className="font-extrabold text-slate-800">
+                      {item.productCount !== undefined ? item.productCount : item.products.length} models
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span>Stock Available:</span>
+                    <span className="font-extrabold text-emerald-600">{item.totalStock} units</span>
+                  </div>
+                  {item.stockValue > 0 && (
+                    <div className="flex justify-between items-center">
+                      <span>Valuation:</span>
+                      <span className="font-extrabold text-slate-700">{currency(item.stockValue)}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-teal-600 group-hover:text-teal-700">
+                <span>View Brand Products</span>
+                <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-all" />
+              </div>
+            </motion.div>
+          ))}
+
+          {brandList.length === 0 && (
+            <div className="col-span-full p-12 text-center bg-white/80 border border-slate-200/80 rounded-3xl">
+              <Tags className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+              <p className="text-sm font-bold text-slate-600">No brands found</p>
+              <p className="text-xs text-slate-400 mt-1">Click "+ Add Brand" above to register a new brand manufacturer.</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add / Edit Brand Modal */}
       <AnimatePresence>

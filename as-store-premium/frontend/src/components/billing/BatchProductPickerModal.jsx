@@ -150,20 +150,69 @@ export default function BatchProductPickerModal({
   }, [filteredProducts, visibleLimit]);
 
   const getProductColors = (product) => {
-    let list = [];
-    const raw = product.colours || product.available_colours;
-    if (Array.isArray(raw)) {
-      list = raw.map(c => String(c).trim()).filter(Boolean);
-    } else if (typeof raw === 'string' && raw.trim()) {
+    if (!product) return [];
+    const colorSet = new Set();
+    const addColor = (c) => {
+      if (!c) return;
+      const str = String(c).replace(/[{}"']/g, '').trim();
+      if (
+        !str ||
+        str.toLowerCase() === 'undefined' ||
+        str.toLowerCase() === 'null' ||
+        str.toLowerCase() === 'standard' ||
+        str.toLowerCase() === 'default'
+      )
+        return;
+      colorSet.add(str);
+    };
+
+    const rawAvail = product.available_colours || product.available_colors;
+    if (Array.isArray(rawAvail)) {
+      rawAvail.forEach(addColor);
+    } else if (typeof rawAvail === 'string' && rawAvail.trim()) {
       try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) list = parsed.map(c => String(c).trim()).filter(Boolean);
-        else list = raw.split(',').map(c => c.trim()).filter(Boolean);
+        const parsed = JSON.parse(rawAvail);
+        if (Array.isArray(parsed)) parsed.forEach(addColor);
+        else rawAvail.replace(/[{}]/g, '').split(',').forEach(addColor);
       } catch {
-        list = raw.split(',').map(c => c.trim()).filter(Boolean);
+        rawAvail.replace(/[{}]/g, '').split(',').forEach(addColor);
       }
     }
-    return list;
+
+    const rawColours = product.colours || product.colors;
+    if (Array.isArray(rawColours)) {
+      rawColours.forEach(addColor);
+    } else if (typeof rawColours === 'string' && rawColours.trim()) {
+      try {
+        const parsed = JSON.parse(rawColours);
+        if (Array.isArray(parsed)) parsed.forEach(addColor);
+        else rawColours.replace(/[{}]/g, '').split(',').forEach(addColor);
+      } catch {
+        rawColours.replace(/[{}]/g, '').split(',').forEach(addColor);
+      }
+    }
+
+    if (product.colour_stock && typeof product.colour_stock === 'object') {
+      Object.keys(product.colour_stock).forEach(addColor);
+    } else if (typeof product.colour_stock === 'string' && product.colour_stock.trim()) {
+      try {
+        const parsed = JSON.parse(product.colour_stock);
+        if (typeof parsed === 'object' && parsed !== null) {
+          Object.keys(parsed).forEach(addColor);
+        }
+      } catch { /* ignore */ }
+    }
+
+    if (Array.isArray(product.supplier_batches)) {
+      product.supplier_batches.forEach((b) => {
+        if (b?.colour) addColor(b.colour);
+      });
+    }
+
+    if (product.color) addColor(product.color);
+    if (product.colour) addColor(product.colour);
+
+    return Array.from(colorSet);
   };
 
   const getRowState = (product) => {

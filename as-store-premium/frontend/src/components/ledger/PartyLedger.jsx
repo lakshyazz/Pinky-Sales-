@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   BookOpen, ChevronDown, ChevronUp, Download, X, Calendar,
   TrendingUp, TrendingDown, Minus, RefreshCw, User, FileText,
-  AlertCircle, ArrowUpRight, ArrowDownRight, ChevronsRight
+  AlertCircle, ArrowUpRight, ArrowDownRight, ChevronsRight, Search
 } from 'lucide-react';
 import InvoiceDetailDrawer from './InvoiceDetailDrawer';
 
@@ -62,6 +62,220 @@ function renderBreakdownText(breakdownStr, onSelectInvoice) {
     }
     return <span key={idx}>{part}</span>;
   });
+}
+
+function PartySearchInput({ mode, partyList = [], selectedId, onSelect }) {
+  const [query, setQuery] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [highlightIndex, setHighlightIndex] = useState(0);
+  const containerRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Currently selected party
+  const selectedParty = useMemo(() => {
+    return partyList.find(p => String(p.id) === String(selectedId)) || null;
+  }, [partyList, selectedId]);
+
+  // Synchronize input text with selected party
+  useEffect(() => {
+    if (selectedParty) {
+      setQuery(selectedParty.name || '');
+    } else {
+      setQuery('');
+    }
+  }, [selectedParty]);
+
+  // Filter party list
+  const filteredList = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q || (selectedParty && query === selectedParty.name)) {
+      return partyList.slice(0, 100);
+    }
+    return partyList.filter(p => {
+      const name = (p.name || '').toLowerCase();
+      const mobile = (p.mobile || '').toLowerCase();
+      const address = (p.address || '').toLowerCase();
+      const gstin = (p.gstin || '').toLowerCase();
+      return name.includes(q) || mobile.includes(q) || address.includes(q) || gstin.includes(q);
+    }).slice(0, 100);
+  }, [partyList, query, selectedParty]);
+
+  // Close when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setIsOpen(false);
+        if (selectedParty) {
+          setQuery(selectedParty.name || '');
+        } else {
+          setQuery('');
+        }
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [selectedParty]);
+
+  const handleSelect = (party) => {
+    onSelect(party ? String(party.id) : '');
+    setQuery(party ? party.name : '');
+    setIsOpen(false);
+  };
+
+  const handleClear = (e) => {
+    e.stopPropagation();
+    onSelect('');
+    setQuery('');
+    setIsOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const handleKeyDown = (e) => {
+    if (!isOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        setIsOpen(true);
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightIndex(prev => (prev + 1) % Math.max(1, filteredList.length));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightIndex(prev => (prev - 1 + filteredList.length) % Math.max(1, filteredList.length));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredList[highlightIndex]) {
+        handleSelect(filteredList[highlightIndex]);
+      }
+    } else if (e.key === 'Escape') {
+      setIsOpen(false);
+    }
+  };
+
+  return (
+    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
+      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <Search size={15} style={{ position: 'absolute', left: 12, color: '#94a3b8', pointerEvents: 'none' }} />
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setIsOpen(true);
+            setHighlightIndex(0);
+          }}
+          onFocus={() => {
+            setIsOpen(true);
+            inputRef.current?.select();
+          }}
+          onKeyDown={handleKeyDown}
+          placeholder={`Type to search ${mode === 'customer' ? 'customer' : 'vendor'} (name, mobile, city)...`}
+          style={{
+            width: '100%',
+            padding: '9px 36px 9px 34px',
+            borderRadius: 10,
+            border: isOpen ? '1.5px solid #6366f1' : '1.5px solid #e2e8f0',
+            fontSize: 13,
+            fontWeight: selectedParty && query === selectedParty.name ? 700 : 500,
+            background: '#fff',
+            color: '#0f172a',
+            outline: 'none',
+            boxShadow: isOpen ? '0 0 0 3px rgba(99,102,241,0.15)' : 'none',
+            transition: 'all 0.15s ease',
+            boxSizing: 'border-box'
+          }}
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={handleClear}
+            style={{
+              position: 'absolute',
+              right: 10,
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#94a3b8',
+              display: 'flex',
+              alignItems: 'center',
+              padding: 2
+            }}
+            title="Clear search"
+          >
+            <X size={15} />
+          </button>
+        )}
+      </div>
+
+      {/* Floating Dropdown Results */}
+      {isOpen && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 4px)',
+          left: 0,
+          right: 0,
+          maxHeight: 280,
+          overflowY: 'auto',
+          background: '#fff',
+          borderRadius: 12,
+          border: '1px solid #e2e8f0',
+          boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
+          zIndex: 9999,
+          padding: '4px'
+        }}>
+          {filteredList.length === 0 ? (
+            <div style={{ padding: '14px', fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
+              No {mode === 'customer' ? 'customers' : 'vendors'} match "{query}"
+            </div>
+          ) : (
+            filteredList.map((p, idx) => {
+              const isSelected = selectedParty && String(selectedParty.id) === String(p.id);
+              const isHighlighted = idx === highlightIndex;
+              const mobileInfo = p.mobile ? `📞 ${p.mobile}` : '';
+              const addressInfo = p.address ? p.address : '';
+              const gstinInfo = p.gstin ? `GST: ${p.gstin}` : '';
+              const subtitle = [mobileInfo, gstinInfo, addressInfo].filter(Boolean).join(' • ');
+
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => handleSelect(p)}
+                  onMouseEnter={() => setHighlightIndex(idx)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    background: isSelected ? '#eef2ff' : (isHighlighted ? '#f8fafc' : 'transparent'),
+                    border: isSelected ? '1px solid #c7d2fe' : '1px solid transparent',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                    transition: 'background 0.1s'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 13, fontWeight: isSelected ? 800 : 700, color: isSelected ? '#4338ca' : '#0f172a' }}>
+                      {p.name}
+                    </span>
+                    {isSelected && (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: '#6366f1' }}>Selected ✓</span>
+                    )}
+                  </div>
+                  {subtitle && (
+                    <span style={{ fontSize: 11, color: '#64748b' }}>
+                      {subtitle}
+                    </span>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function PartyLedger({ session, api, setGlobalToast, customers = [], suppliers = [] }) {
@@ -174,19 +388,20 @@ export default function PartyLedger({ session, api, setGlobalToast, customers = 
             </div>
           </div>
 
-          {/* Party selector */}
-          <div style={{ flex: '1 1 200px', minWidth: 180 }}>
+          {/* Party Search Input */}
+          <div style={{ flex: '1 1 280px', minWidth: 240 }}>
             <label style={{ fontSize: 11, fontWeight: 700, color: '#64748b', display: 'block', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
               {mode === 'customer' ? 'Customer' : 'Vendor'}
             </label>
-            <select value={selectedId} onChange={e => setSelectedId(e.target.value)}
-              style={{
-                width: '100%', padding: '9px 12px', borderRadius: 10, border: '1.5px solid #e2e8f0',
-                fontSize: 13, fontWeight: 600, background: '#f8fafc', cursor: 'pointer', color: '#0f172a'
-              }}>
-              <option value="">— Select {mode === 'customer' ? 'customer' : 'vendor'} —</option>
-              {partyList.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <PartySearchInput
+              mode={mode}
+              partyList={partyList}
+              selectedId={selectedId}
+              onSelect={(id) => {
+                setSelectedId(id || '');
+                if (!id) setLedger(null);
+              }}
+            />
           </div>
 
           {/* Date range */}

@@ -12,11 +12,28 @@ import {
   Sparkles,
   Layers,
   Tag,
+  Palette,
 } from 'lucide-react';
 
 const formatCurrency = (val) => {
   const num = Number(val || 0);
   return num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+export const getColorDot = (colourName) => {
+  if (!colourName) return 'bg-zinc-400';
+  const c = String(colourName).toLowerCase().trim();
+  if (c.includes('black')) return 'bg-zinc-900 border border-zinc-700';
+  if (c.includes('white')) return 'bg-white border border-zinc-300';
+  if (c.includes('blue') || c.includes('cyan') || c.includes('sky')) return 'bg-sky-500';
+  if (c.includes('gold') || c.includes('yellow')) return 'bg-amber-400';
+  if (c.includes('green') || c.includes('mint') || c.includes('forest')) return 'bg-emerald-500';
+  if (c.includes('red') || c.includes('crimson')) return 'bg-rose-500';
+  if (c.includes('purple') || c.includes('violet')) return 'bg-violet-500';
+  if (c.includes('pink') || c.includes('rose')) return 'bg-pink-400';
+  if (c.includes('silver') || c.includes('grey') || c.includes('gray')) return 'bg-slate-400';
+  if (c.includes('orange') || c.includes('bronze')) return 'bg-orange-500';
+  return 'bg-violet-400';
 };
 
 /**
@@ -35,6 +52,7 @@ export default function ProductSearchDialog({
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [selectedColors, setSelectedColors] = useState({});
 
   const searchInputRef = useRef(null);
   const listRef = useRef(null);
@@ -74,6 +92,7 @@ export default function ProductSearchDialog({
           p.category,
           p.sku,
           p.sublabel,
+          Array.isArray(p.colors) ? p.colors.join(' ') : '',
         ]
           .filter(Boolean)
           .join(' ')
@@ -96,6 +115,7 @@ export default function ProductSearchDialog({
     if (isOpen) {
       setSearch('');
       setHighlightedIndex(0);
+      setSelectedColors({});
       const timer = setTimeout(() => {
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -132,13 +152,33 @@ export default function ProductSearchDialog({
       setHighlightedIndex((prev) =>
         prev > 0 ? prev - 1 : filteredProducts.length - 1
       );
+    } else if (e.key === 'ArrowRight') {
+      const target = filteredProducts[highlightedIndex];
+      if (target && target.colors && target.colors.length > 1) {
+        e.preventDefault();
+        const curCol = selectedColors[target.id] || target.colors[0];
+        const curIdx = target.colors.indexOf(curCol);
+        const nextIdx = curIdx < target.colors.length - 1 ? curIdx + 1 : 0;
+        setSelectedColors((prev) => ({ ...prev, [target.id]: target.colors[nextIdx] }));
+      }
+    } else if (e.key === 'ArrowLeft') {
+      const target = filteredProducts[highlightedIndex];
+      if (target && target.colors && target.colors.length > 1) {
+        e.preventDefault();
+        const curCol = selectedColors[target.id] || target.colors[0];
+        const curIdx = target.colors.indexOf(curCol);
+        const prevIdx = curIdx > 0 ? curIdx - 1 : target.colors.length - 1;
+        setSelectedColors((prev) => ({ ...prev, [target.id]: target.colors[prevIdx] }));
+      }
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const target = filteredProducts[highlightedIndex];
       if (target) {
         // Shift + Enter triggers "Add & Select Next" (Batch Mode)
         const isBatch = Boolean(e.shiftKey);
-        onSelect && onSelect(target, isBatch);
+        const colors = target.colors || [];
+        const chosenColor = selectedColors[target.id] || (colors.length > 0 ? colors[0] : '');
+        handleSelectProduct(target, isBatch, chosenColor);
         if (isBatch) {
           setSearch('');
           setHighlightedIndex(0);
@@ -150,9 +190,13 @@ export default function ProductSearchDialog({
     }
   };
 
-  const handleSelectProduct = (product, isBatch = false) => {
+  const handleSelectProduct = (product, isBatch = false, chosenColor = null) => {
     if (!product) return;
-    onSelect && onSelect(product, isBatch);
+    const colors = product.colors || [];
+    const finalColor = chosenColor !== null && chosenColor !== undefined
+      ? chosenColor
+      : (selectedColors[product.id] || (colors.length > 0 ? colors[0] : ''));
+    onSelect && onSelect(product, isBatch, finalColor);
     if (isBatch) {
       setSearch('');
       setHighlightedIndex(0);
@@ -300,12 +344,15 @@ export default function ProductSearchDialog({
                 const isInStock = stockNum > 5;
                 const isLowStock = stockNum > 0 && stockNum <= 5;
 
+                const colors = p.colors || [];
+                const activeColor = selectedColors[p.id] || (colors.length > 0 ? colors[0] : '');
+
                 return (
                   <div
                     key={p.id || idx}
                     role="button"
                     tabIndex={-1}
-                    onClick={() => handleSelectProduct(p, false)}
+                    onClick={() => handleSelectProduct(p, false, activeColor)}
                     onMouseEnter={() => setHighlightedIndex(idx)}
                     className={`grid grid-cols-12 items-center px-4 py-3 cursor-pointer transition-all duration-100 border-l-[3.5px] select-none ${
                       isHighlighted
@@ -338,6 +385,42 @@ export default function ProductSearchDialog({
                           </span>
                         )}
                       </div>
+
+                      {/* Colour Options Display & Selection */}
+                      {colors.length > 0 && (
+                        <div
+                          className="flex items-center gap-1.5 mt-2 flex-wrap"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <span className="text-[10px] uppercase font-bold tracking-wider text-zinc-400 dark:text-zinc-500 flex items-center gap-1 shrink-0">
+                            <Palette className="w-3 h-3 text-violet-500 dark:text-violet-400" />
+                            <span>Colours:</span>
+                          </span>
+                          {colors.map((c) => {
+                            const isColActive = activeColor === c;
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                onClick={(e) => {
+                                  const isBatch = Boolean(e.shiftKey);
+                                  setSelectedColors((prev) => ({ ...prev, [p.id]: c }));
+                                  handleSelectProduct(p, isBatch, c);
+                                }}
+                                title={`Click to select ${c} (Shift+Click to Add & Next)`}
+                                className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] font-semibold transition-all cursor-pointer shadow-2xs border ${
+                                  isColActive
+                                    ? 'bg-violet-600 text-white border-violet-600 shadow-xs ring-2 ring-violet-500/30'
+                                    : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-violet-50 hover:text-violet-700 dark:hover:bg-violet-950/50 dark:hover:text-violet-300 border-zinc-200 dark:border-zinc-700'
+                                }`}
+                              >
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${getColorDot(c)}`} />
+                                <span>{c}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
 
                     {/* Pricing: Cost vs Sell */}
@@ -387,12 +470,18 @@ export default function ProductSearchDialog({
 
           {/* ─── Footer: Shortcuts & Batch Add Capability ─── */}
           <div className="p-3 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/90 dark:bg-zinc-900 flex items-center justify-between shrink-0 flex-wrap gap-2">
-            <div className="flex items-center gap-3 text-[10.5px] text-zinc-500 dark:text-zinc-400">
+            <div className="flex items-center gap-3 text-[10.5px] text-zinc-500 dark:text-zinc-400 flex-wrap">
               <span className="flex items-center gap-1">
                 <kbd className="px-1.5 py-0.5 bg-zinc-200 dark:bg-zinc-800 rounded font-mono text-[9.5px]">
                   ↑↓
                 </kbd>
                 Navigate
+              </span>
+              <span className="flex items-center gap-1">
+                <kbd className="px-1.5 py-0.5 bg-zinc-200 dark:bg-zinc-800 rounded font-mono text-[9.5px]">
+                  ←→
+                </kbd>
+                Colour
               </span>
               <span className="flex items-center gap-1">
                 <kbd className="px-1.5 py-0.5 bg-zinc-200 dark:bg-zinc-800 rounded font-mono text-[9.5px]">
@@ -420,7 +509,11 @@ export default function ProductSearchDialog({
                 type="button"
                 onClick={() => {
                   const target = filteredProducts[highlightedIndex];
-                  if (target) handleSelectProduct(target, true);
+                  if (target) {
+                    const colors = target.colors || [];
+                    const chosenColor = selectedColors[target.id] || (colors.length > 0 ? colors[0] : '');
+                    handleSelectProduct(target, true, chosenColor);
+                  }
                 }}
                 disabled={filteredProducts.length === 0}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold text-violet-700 dark:text-violet-300 bg-violet-100/80 hover:bg-violet-200/80 dark:bg-violet-950/60 dark:hover:bg-violet-900/60 border border-violet-200 dark:border-violet-800 flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
@@ -434,7 +527,11 @@ export default function ProductSearchDialog({
                 type="button"
                 onClick={() => {
                   const target = filteredProducts[highlightedIndex];
-                  if (target) handleSelectProduct(target, false);
+                  if (target) {
+                    const colors = target.colors || [];
+                    const chosenColor = selectedColors[target.id] || (colors.length > 0 ? colors[0] : '');
+                    handleSelectProduct(target, false, chosenColor);
+                  }
                 }}
                 disabled={filteredProducts.length === 0}
                 className="px-4 py-1.5 rounded-lg text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"

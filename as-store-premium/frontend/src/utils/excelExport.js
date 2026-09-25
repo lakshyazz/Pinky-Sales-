@@ -718,6 +718,12 @@ export async function exportSuppliersExcel(items = [], filename = null) {
       }
     },
     {
+      header: 'Opening Balance (₹)',
+      key: 'opening_balance',
+      minWidth: 20,
+      formatter: (_val, row) => Number(row.opening_balance || 0)
+    },
+    {
       header: 'Outstanding Balance / Valuation',
       key: 'valuation',
       minWidth: 28,
