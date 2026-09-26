@@ -565,35 +565,21 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
     });
   }
 
-  const rightRowsHeight = rightRows.length * 6;
-  const signatureHeight = 22;
-  const minSummaryHeight = Math.max(rightRowsHeight + signatureHeight + 10, 55);
-  const summaryEndY = Math.min(startY + minSummaryHeight, 287);
+  const leftX = 13;
+  const maxLeftWidth = splitX - leftX - 4; // 116.4 - 13 - 4 = 99.4 mm (safe buffer before splitX vertical line)
 
-  // Vertical divider between Left (56%) and Right (44%)
-  doc.setDrawColor(153, 153, 153);
-  doc.setLineWidth(0.25);
-  doc.line(splitX, startY, splitX, summaryEndY);
-
-  // Left Content: Notes & Terms
+  // Pre-calculate wrapped lines for left content to compute accurate layout height
+  const wordsStr = `Indian Rupee ${toWords(finalBillAmount)} Only`;
   doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(17, 17, 17);
-  doc.text(`Items in Total ${totalQuantity}`, 13, startY + 6);
-  
-  doc.text('Total In Words', 13, startY + 12);
   doc.setFont('helvetica', 'bolditalic');
-  doc.text(`Indian Rupee ${toWords(finalBillAmount)} Only`, 13, startY + 16);
+  const wordsLines = doc.splitTextToSize(wordsStr, maxLeftWidth);
 
   doc.setFont('helvetica', 'normal');
-  doc.text('Notes', 13, startY + 23);
-  doc.setTextColor(71, 85, 105);
-  doc.text(String(sale?.notes || 'Thanks for your business.'), 13, startY + 27);
+  const notesText = String(sale?.notes || (isConsolidated ? 'This statement includes all selected purchases made by this customer at this branch.' : 'Thanks for your business.'));
+  const notesLines = doc.splitTextToSize(notesText, maxLeftWidth);
 
-  doc.setTextColor(17, 17, 17);
-  doc.text('Terms & Conditions', 13, startY + 34);
-  doc.setTextColor(71, 85, 105);
-  doc.text('ORIGINAL LCD GOODS THREE MONTHS WARRANTY ONLY', 13, startY + 38);
+  const termsText = 'ORIGINAL LCD GOODS THREE MONTHS WARRANTY ONLY';
+  const termsLines = doc.splitTextToSize(termsText, maxLeftWidth);
 
   // Optional Footer Note for Single Tax Invoice: Total Account Outstanding
   const customerAccountOutstanding = Number(
@@ -603,20 +589,83 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
     getCustomerTotalOutstanding(customer, Array.isArray(customer?.items) ? customer.items : [], customer?.payments || []) ??
     0
   );
-  let noteOffset = 44;
+  let outLines = [];
   if (!isConsolidated && customerAccountOutstanding > 0) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.setTextColor(180, 83, 9);
-    doc.text(`Total Account Outstanding: Rs. ${formatMoney(customerAccountOutstanding)}`, 13, startY + noteOffset);
-    noteOffset += 5.5;
+    outLines = doc.splitTextToSize(`Total Account Outstanding: Rs. ${formatMoney(customerAccountOutstanding)}`, maxLeftWidth);
   }
 
+  let creditLines = [];
   if (remainingCredit > 0) {
+    creditLines = doc.splitTextToSize(`Available Store Credit / Advance: Rs. ${formatMoney(remainingCredit)} Cr`, maxLeftWidth);
+  }
+
+  // Calculate required left content height
+  let leftContentHeight = 6 // Items in Total
+    + 6 + (wordsLines.length * 4) // Total In Words
+    + 6 + (notesLines.length * 4) // Notes
+    + 6 + (termsLines.length * 4); // Terms
+  if (outLines.length > 0) leftContentHeight += 4 + (outLines.length * 4);
+  if (creditLines.length > 0) leftContentHeight += 4 + (creditLines.length * 4);
+
+  const rightRowsHeight = (rightRows.length * 5.5) + 6;
+  const signatureHeight = 22;
+  const minSummaryHeight = Math.max(rightRowsHeight + signatureHeight, leftContentHeight + 8, 55);
+  const summaryEndY = Math.min(startY + minSummaryHeight, 287);
+
+  // Vertical divider between Left (56%) and Right (44%)
+  doc.setDrawColor(153, 153, 153);
+  doc.setLineWidth(0.25);
+  doc.line(splitX, startY, splitX, summaryEndY);
+
+  // Draw Left Content dynamically using curLeftY
+  let curLeftY = startY + 5.5;
+
+  // 1. Items in Total
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(17, 17, 17);
+  doc.text(`Items in Total ${totalQuantity}`, leftX, curLeftY);
+  curLeftY += 6;
+
+  // 2. Total In Words
+  doc.text('Total In Words', leftX, curLeftY);
+  curLeftY += 4;
+  doc.setFont('helvetica', 'bolditalic');
+  doc.setTextColor(17, 17, 17);
+  doc.text(wordsLines, leftX, curLeftY);
+  curLeftY += (wordsLines.length * 4) + 2.5;
+
+  // 3. Notes
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(17, 17, 17);
+  doc.text('Notes', leftX, curLeftY);
+  curLeftY += 4;
+  doc.setTextColor(71, 85, 105);
+  doc.text(notesLines, leftX, curLeftY);
+  curLeftY += (notesLines.length * 4) + 2.5;
+
+  // 4. Terms & Conditions
+  doc.setTextColor(17, 17, 17);
+  doc.text('Terms & Conditions', leftX, curLeftY);
+  curLeftY += 4;
+  doc.setTextColor(71, 85, 105);
+  doc.text(termsLines, leftX, curLeftY);
+  curLeftY += (termsLines.length * 4) + 2.5;
+
+  // 5. Total Account Outstanding
+  if (outLines.length > 0) {
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
+    doc.setTextColor(180, 83, 9);
+    doc.text(outLines, leftX, curLeftY);
+    curLeftY += (outLines.length * 4) + 2;
+  }
+
+  // 6. Available Store Credit
+  if (creditLines.length > 0) {
+    doc.setFont('helvetica', 'bold');
     doc.setTextColor(15, 118, 110);
-    doc.text(`Available Store Credit / Advance: Rs. ${formatMoney(remainingCredit)} Cr`, 13, startY + noteOffset);
+    doc.text(creditLines, leftX, curLeftY);
+    curLeftY += (creditLines.length * 4) + 2;
   }
 
   // Right Content: Totals Table
