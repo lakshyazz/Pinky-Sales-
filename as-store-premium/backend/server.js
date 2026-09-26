@@ -4535,6 +4535,60 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
   }
 });
 
+app.get('/api/diagnostic/customer/:id', async (req, res) => {
+  try {
+    const customerId = Number(req.params.id);
+    const customer = await getRecord('SELECT * FROM customers WHERE id = ?', [customerId]);
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
+
+    const sales = await allRecords(
+      'SELECT id, sale_date, invoice_date, total_amount, paid_amount, pending_amount, previous_balance, status FROM sales WHERE customer_id = ? ORDER BY id ASC',
+      [customerId]
+    );
+
+    const payments = await allRecords(
+      'SELECT id, payment_number, amount, payment_date, payment_mode, notes, unallocated_amount, reversed_at FROM payments WHERE customer_id = ? ORDER BY id ASC',
+      [customerId]
+    );
+
+    const allocations = await allRecords(
+      'SELECT id, payment_id, sale_id, allocation_type, amount_applied, notes, reversed_at, created_at FROM payment_allocations WHERE customer_id = ? ORDER BY id ASC',
+      [customerId]
+    );
+
+    const ledgerEntries = await allRecords(
+      'SELECT id, ref_no, entry_type, entry_date, debit, credit, description FROM ledger_entries WHERE customer_id = ? ORDER BY id ASC',
+      [customerId]
+    );
+
+    const bal = await getCustomerTotalOutstanding(customerId);
+    const ledger = await getCustomerLedger(customerId);
+
+    const totalSales = sales.reduce((sum, s) => sum + Number(s.total_amount || 0), 0);
+    const totalPayments = payments.filter(p => !p.reversed_at).reduce((sum, p) => sum + Number(p.amount || 0), 0);
+    const openingBal = Number(customer.opening_balance || 0);
+
+    res.json({
+      customer,
+      summary: {
+        opening_balance_in_db: openingBal,
+        total_invoiced_in_db: totalSales,
+        total_payments_in_db: totalPayments,
+        dynamic_outstanding_calculated: bal.total_outstanding,
+        ledger_closing_balance: ledger.closing_balance,
+        formula: `${openingBal} (OB) + ${totalSales} (Invoiced) - ${totalPayments} (Paid) = ${openingBal + totalSales - totalPayments}`,
+      },
+      sales,
+      payments,
+      allocations,
+      ledgerEntries,
+      bal,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
 app.get('/api/customer-invoice', authenticateToken, requireShopStaff, async (req, res) => {
   try {
     const customerId = Number(req.query.customerId);

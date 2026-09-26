@@ -39,6 +39,12 @@ BEGIN
   END IF;
 END $$;
 
+-- Remove erroneous duplicate 19,250 payments (PAY-000017 UPI and PAY-000023 Cash)
+DELETE FROM payment_allocations WHERE payment_id IN (
+  SELECT id FROM payments WHERE customer_id = 21 AND (payment_number IN ('PAY-000017', 'PAY-000023') OR amount = 19250.00)
+);
+DELETE FROM payments WHERE customer_id = 21 AND (payment_number IN ('PAY-000017', 'PAY-000023') OR amount = 19250.00);
+
 -- Update or insert OPENING_BALANCE in ledger_entries for Customer 21
 DELETE FROM ledger_entries WHERE customer_id = 21 AND entry_type = 'OPENING_BALANCE';
 INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_at)
