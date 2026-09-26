@@ -880,16 +880,16 @@ export default function ShareInvoiceModal({
 
               {/* Financial summary breakdown matching invoice preview */}
               <div className="pt-2.5 border-t border-slate-200 space-y-1 text-xs text-slate-700">
-                {Number(activeInvoice.previous_balance || 0) > 0 && (
+                {Number(activeInvoice.previous_balance || activeInvoice.old_balance || 0) > 0 && (
                   <div className="flex justify-between text-amber-700 font-semibold">
-                    <span>+ Previous Balance</span>
-                    <span>{currency(activeInvoice.previous_balance)}</span>
+                    <span>+ Old Balance</span>
+                    <span>{currency(activeInvoice.previous_balance || activeInvoice.old_balance)}</span>
                   </div>
                 )}
-                {Number(activeInvoice.previous_balance || 0) < 0 && (
+                {Number(activeInvoice.previous_balance || activeInvoice.old_balance || 0) < 0 && (
                   <div className="flex justify-between text-teal-700 font-semibold">
                     <span>- Previous Advance</span>
-                    <span>-{currency(Math.abs(activeInvoice.previous_balance))}</span>
+                    <span>-{currency(Math.abs(activeInvoice.previous_balance || activeInvoice.old_balance))}</span>
                   </div>
                 )}
                 {Number(activeInvoice.applied_credit_amount || 0) > 0 && (

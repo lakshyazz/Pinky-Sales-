@@ -388,16 +388,16 @@ export default function PublicInvoiceViewPage() {
                   <span className="font-mono font-medium">{formatCurrency(invoice.extra_expenses_total)}</span>
                 </div>
               )}
-              {Number(invoice.previous_balance || 0) > 0 && (
+              {Number(invoice.previous_balance || invoice.old_balance || 0) > 0 && (
                 <div className="flex justify-between text-amber-700 font-semibold">
-                  <span>+ Previous Balance</span>
-                  <span className="font-mono font-medium">{formatCurrency(invoice.previous_balance)}</span>
+                  <span>+ Old Balance</span>
+                  <span className="font-mono font-medium">{formatCurrency(invoice.previous_balance || invoice.old_balance)}</span>
                 </div>
               )}
-              {Number(invoice.previous_balance || 0) < 0 && (
+              {Number(invoice.previous_balance || invoice.old_balance || 0) < 0 && (
                 <div className="flex justify-between text-teal-700 font-semibold">
                   <span>- Previous Advance</span>
-                  <span className="font-mono font-medium">-{formatCurrency(Math.abs(invoice.previous_balance))}</span>
+                  <span className="font-mono font-medium">-{formatCurrency(Math.abs(invoice.previous_balance || invoice.old_balance))}</span>
                 </div>
               )}
               {Number(invoice.applied_credit_amount || 0) > 0 && (

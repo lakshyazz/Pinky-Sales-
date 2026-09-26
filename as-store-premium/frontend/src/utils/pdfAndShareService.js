@@ -454,23 +454,39 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
 
   if (!isConsolidated) {
     // Option A: Standard B2B Single Tax Invoice (Self-contained single invoice)
-    const prevBalance = Number(sale?.previous_balance ?? 0);
-    if (prevBalance > 0) {
-      rightRows.push({ label: '+ PREVIOUS BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
-    } else if (prevBalance < 0) {
-      rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
+    let prevBalance = Number(sale?.previous_balance ?? sale?.old_balance ?? 0);
+    const customerAccountOutstanding = Number(
+      customer?.total_outstanding ??
+      customer?.pending_amount ??
+      customer?.pending ??
+      sale?.customer_pending_amount ??
+      0
+    );
+    const currentBillNet = Math.max(0, (productsSubtotal + courier) - appliedCredit - advanceApplied);
+    const currentInvoiceDue = Math.max(0, currentBillNet - paidAmount);
+    if (!prevBalance && customerAccountOutstanding > currentInvoiceDue) {
+      prevBalance = customerAccountOutstanding - currentInvoiceDue;
     }
+
     if (appliedCredit > 0) {
       rightRows.push({ label: '- CREDIT NOTE', amount: `-${formatMoney(appliedCredit)}`, bold: false, color: [15, 118, 110] });
     }
     if (advanceApplied > 0) {
       rightRows.push({ label: '- STORE CREDIT / ADVANCE', amount: `-${formatMoney(advanceApplied)}`, bold: false, color: [15, 118, 110] });
     }
+    if (prevBalance !== 0) {
+      rightRows.push({ label: 'Invoice Total', amount: formatMoney(currentBillNet), bold: false });
+    }
+    if (prevBalance > 0) {
+      rightRows.push({ label: '+ OLD BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
+    } else if (prevBalance < 0) {
+      rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
+    }
 
-    finalBillAmount = sale?.net_payable_amount !== undefined && sale?.net_payable_amount !== null
+    finalBillAmount = sale?.net_payable_amount !== undefined && sale?.net_payable_amount !== null && Number(sale.net_payable_amount) >= (currentBillNet + prevBalance)
       ? Number(sale.net_payable_amount)
-      : Math.max(0, (productsSubtotal + courier + prevBalance) - appliedCredit - advanceApplied);
-    balanceDue = sale?.closing_balance !== undefined && sale?.closing_balance !== null
+      : Math.max(0, currentBillNet + prevBalance);
+    balanceDue = sale?.closing_balance !== undefined && sale?.closing_balance !== null && Number(sale.closing_balance) >= prevBalance
       ? Number(sale.closing_balance)
       : Math.max(0, finalBillAmount - paidAmount);
 
@@ -514,7 +530,7 @@ export const generateInvoicePDFDoc = async (sale, customer = {}, shop = {}) => {
     }
 
     if (prevBalance > 0) {
-      rightRows.push({ label: '+ PREVIOUS BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
+      rightRows.push({ label: '+ OLD BALANCE', amount: formatMoney(prevBalance), bold: false, color: [180, 83, 9] });
     } else if (prevBalance < 0) {
       rightRows.push({ label: '- PREVIOUS ADVANCE', amount: `-${formatMoney(Math.abs(prevBalance))}`, bold: false, color: [15, 118, 110] });
     }

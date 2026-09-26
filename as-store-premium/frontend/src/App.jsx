@@ -6254,10 +6254,10 @@ function App() {
                   <span>+₹${Number(expensesTotal).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               ` : ''}
-              ${Number(sale.previous_balance || 0) > 0 ? `
+              ${Number(sale.previous_balance || sale.old_balance || 0) > 0 ? `
                 <div class="summary-row" style="color: #b45309; font-weight: 600;">
-                  <span>+ PREVIOUS BALANCE</span>
-                  <span>+₹${Number(sale.previous_balance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                  <span>+ OLD BALANCE</span>
+                  <span>+₹${Number(sale.previous_balance || sale.old_balance).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                 </div>
               ` : ''}
               ${Number(sale.applied_credit_amount || 0) > 0 ? `
@@ -6564,15 +6564,36 @@ function App() {
       0
     );
 
+    const currentInvoiceTotal = Math.max(0, (productsSubtotal + courier) - appliedCredit - Number(sale.advance_applied || 0));
+
+    // If prevBalance is not explicitly present on the sale record, but customer has prior outstanding balance
+    if (!prevBalance && customerAccountOutstanding > 0) {
+      const currentInvoiceDue = Math.max(0, currentInvoiceTotal - paidAmount);
+      if (customerAccountOutstanding > currentInvoiceDue) {
+        prevBalance = customerAccountOutstanding - currentInvoiceDue;
+      }
+    }
+
     if (!isConsolidated) {
-      // Option A: Standard B2B Single Tax Invoice
-      finalBillAmount = Math.max(0, (productsSubtotal + courier) - appliedCredit - Number(sale.advance_applied || 0));
-      balanceDue = Math.max(0, finalBillAmount - paidAmount);
+      if (prevBalance > 0) {
+        finalBillAmount = sale.net_payable_amount !== undefined && sale.net_payable_amount !== null && Number(sale.net_payable_amount) >= (currentInvoiceTotal + prevBalance)
+          ? Number(sale.net_payable_amount)
+          : (currentInvoiceTotal + prevBalance);
+        balanceDue = sale.closing_balance !== undefined && sale.closing_balance !== null && Number(sale.closing_balance) >= prevBalance
+          ? Number(sale.closing_balance)
+          : Math.max(0, finalBillAmount - paidAmount);
+      } else if (prevBalance < 0) {
+        finalBillAmount = Math.max(0, currentInvoiceTotal + prevBalance);
+        balanceDue = Math.max(0, finalBillAmount - paidAmount);
+      } else {
+        finalBillAmount = currentInvoiceTotal;
+        balanceDue = Math.max(0, finalBillAmount - paidAmount);
+      }
     } else {
       // Consolidated Statement / Bill with Prior Balance
       const customerTotalPending = customerAccountOutstanding > 0 ? customerAccountOutstanding : Number(sale.pending_amount || 0);
       if (customerTotalPending > 0) {
-        prevBalance = Math.max(0, customerTotalPending - ((productsSubtotal + courier) - appliedCredit - Number(sale.advance_applied || 0)));
+        prevBalance = Math.max(0, customerTotalPending - currentInvoiceTotal);
         finalBillAmount = customerTotalPending;
         balanceDue = Math.max(0, finalBillAmount - paidAmount);
       } else {
@@ -6659,7 +6680,10 @@ function App() {
             <div class="summary">
               <div class="notes">
                 <div>Items in Total ${quantity}</div>
-                <div class="words">Total In Words<strong>Indian Rupee ${toWords(finalBillAmount)} Only</strong></div>
+                <div class="words">
+                  Total In Words<strong>Indian Rupee ${toWords(finalBillAmount)} Only</strong>
+                  ${prevBalance > 0 ? `<small style="display:block; margin-top:2px; font-weight:normal; color:#475569;">(Invoice Amount: Indian Rupee ${toWords(currentInvoiceTotal)} Only)</small>` : ''}
+                </div>
                 <div class="notes-block">Notes<br/>${safe(isConsolidated ? 'This statement includes all selected purchases made by this customer at this branch.' : sale.notes || 'Thanks for your business.')}</div>
                 <div class="notes-block">Terms &amp; Conditions<br/>ORIGINAL LCD GOODS THREE MONTHS WARRANTY ONLY</div>
                 ${!isConsolidated && customerAccountOutstanding > 0 ? `
@@ -6686,17 +6710,6 @@ function App() {
                     <span>${formatAmount(courier)}</span>
                   </div>
                 ` : '')}
-                ${isConsolidated && prevBalance > 0 ? `
-                  <div class="total-line" style="color: #b45309; font-weight: 600;">
-                    <span>+ PREVIOUS BALANCE</span>
-                    <span>Rs.${formatAmount(prevBalance)}</span>
-                  </div>
-                ` : (isConsolidated && prevBalance < 0 ? `
-                  <div class="total-line" style="color: #0f766e; font-weight: 600;">
-                    <span>- PREVIOUS ADVANCE</span>
-                    <span>-Rs.${formatAmount(Math.abs(prevBalance))}</span>
-                  </div>
-                ` : '')}
                 ${appliedCredit > 0 ? `
                   <div class="total-line" style="color: #0f766e; font-weight: 600;">
                     <span>- CREDIT NOTE</span>
@@ -6709,7 +6722,24 @@ function App() {
                     <span>-Rs.${formatAmount(sale.advance_applied)}</span>
                   </div>
                 ` : ''}
-                <div class="total-line grand"><span>${isConsolidated ? 'Grand Total' : 'Invoice Total'}</span><span>Rs.${formatAmount(finalBillAmount)}</span></div>
+                ${prevBalance !== 0 ? `
+                  <div class="total-line" style="font-weight: 600; border-top: 1px dashed #cbd5e1; margin-top: 2px; padding-top: 2px;">
+                    <span>Invoice Total</span>
+                    <span>Rs.${formatAmount(currentInvoiceTotal)}</span>
+                  </div>
+                ` : ''}
+                ${prevBalance > 0 ? `
+                  <div class="total-line" style="color: #b45309; font-weight: 600;">
+                    <span>+ OLD BALANCE</span>
+                    <span>Rs.${formatAmount(prevBalance)}</span>
+                  </div>
+                ` : (prevBalance < 0 ? `
+                  <div class="total-line" style="color: #0f766e; font-weight: 600;">
+                    <span>- PREVIOUS ADVANCE</span>
+                    <span>-Rs.${formatAmount(Math.abs(prevBalance))}</span>
+                  </div>
+                ` : '')}
+                <div class="total-line grand"><span>${isConsolidated || prevBalance !== 0 ? 'Grand Total' : 'Invoice Total'}</span><span>Rs.${formatAmount(finalBillAmount)}</span></div>
                 <div class="total-line grand"><span>Amount Paid</span><span>Rs.${formatAmount(paidAmount)}</span></div>
                 ${balanceDue <= 0 ? `
                   <div class="total-line grand" style="color: #047857;"><span>Payment Status</span><span>✓ PAID IN FULL</span></div>
@@ -6720,7 +6750,7 @@ function App() {
                     </div>
                   ` : ''}
                 ` : `
-                  <div class="total-line grand" style="color: #b91c1c;"><span>${isConsolidated ? 'Balance Due' : 'Balance Due for this Invoice'}</span><span>Rs.${formatAmount(balanceDue)}</span></div>
+                  <div class="total-line grand" style="color: #b91c1c;"><span>${isConsolidated || prevBalance !== 0 ? 'Total Balance Due' : 'Balance Due for this Invoice'}</span><span>Rs.${formatAmount(balanceDue)}</span></div>
                 `}
                 ${remainingCredit > 0 ? `
                   <div class="total-line grand" style="color: #0f766e; border-top: 1px dashed #0f766e; margin-top: 3px; padding-top: 3px;">
