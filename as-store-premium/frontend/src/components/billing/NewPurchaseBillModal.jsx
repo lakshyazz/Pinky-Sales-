@@ -171,11 +171,15 @@ export default function NewPurchaseBillModal({
   }, [billToEdit, initialShopId, session?.shop_id, warehouse?.id, shops]);
 
   useEffect(() => {
-    setSuppliersList(initialSuppliers);
+    if (initialSuppliers && initialSuppliers.length > 0) {
+      setSuppliersList(initialSuppliers);
+    }
   }, [initialSuppliers]);
 
   useEffect(() => {
-    setProductsList(initialProducts);
+    if (initialProducts && initialProducts.length > 0) {
+      setProductsList(initialProducts);
+    }
   }, [initialProducts]);
 
   // Load full product catalog (5000 limit) so all brands and models are accessible
@@ -184,10 +188,7 @@ export default function NewPurchaseBillModal({
     let isMounted = true;
     (async () => {
       try {
-        const queryParams = new URLSearchParams({ limit: '5000' });
-        const targetShopId = selectedShopId || initialShopId;
-        if (targetShopId) queryParams.set('shop_id', String(targetShopId));
-        const res = await api(`/products?${queryParams.toString()}`);
+        const res = await api('/products?limit=5000');
         const items = Array.isArray(res) ? res : (res?.data || []);
         if (isMounted && Array.isArray(items) && items.length > 0) {
           setProductsList(items);
@@ -197,7 +198,25 @@ export default function NewPurchaseBillModal({
       }
     })();
     return () => { isMounted = false; };
-  }, [isOpen, api, selectedShopId, initialShopId]);
+  }, [isOpen, api]);
+
+  // Load suppliers from reference data to ensure vendor list is always populated
+  useEffect(() => {
+    if (!isOpen || !api) return;
+    let isMounted = true;
+    (async () => {
+      try {
+        const refRes = await api('/reference-data');
+        const list = refRes?.suppliers || [];
+        if (isMounted && Array.isArray(list) && list.length > 0) {
+          setSuppliersList(list);
+        }
+      } catch (err) {
+        console.warn('[NewPurchaseBillModal] Failed to load suppliers list:', err);
+      }
+    })();
+    return () => { isMounted = false; };
+  }, [isOpen, api]);
 
   // Form fields
   const [supplierId, setSupplierId] = useState('');
@@ -319,11 +338,15 @@ export default function NewPurchaseBillModal({
 
   // Format supplier options for combobox
   const supplierOptions = useMemo(() => {
-    return suppliersList.map((s) => [
-      s.id,
-      `${s.name}${s.mobile ? ` (${s.mobile})` : ''}`,
-      { brand: s.gstin ? `GST: ${s.gstin}` : '', category: s.address || '' },
-    ]);
+    return (suppliersList || []).map((s) => ({
+      id: s.id,
+      name: s.name || `Vendor #${s.id}`,
+      mobile: s.mobile || '',
+      gstin: s.gstin || '',
+      address: s.address || '',
+      isVendor: true,
+      keywords: [s.name, s.mobile, s.gstin, s.address].filter(Boolean).join(' '),
+    }));
   }, [suppliersList]);
 
   // Format product options for combobox
@@ -497,8 +520,10 @@ export default function NewPurchaseBillModal({
 
   // When a new vendor is created via QuickAddVendorModal
   const handleVendorCreated = (newVendor) => {
-    setSuppliersList((prev) => [newVendor, ...prev]);
-    setSupplierId(newVendor.id);
+    if (newVendor) {
+      setSuppliersList((prev) => [newVendor, ...prev.filter((v) => String(v.id) !== String(newVendor.id))]);
+      setSupplierId(String(newVendor.id));
+    }
   };
 
   // When a new product is created via QuickAddProductModal

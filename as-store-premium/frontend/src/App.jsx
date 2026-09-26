@@ -3784,6 +3784,16 @@ function App() {
       }
       if (tab === 'reports') await loadReportsPage({ currentShop });
       if (tab === 'catalog') set('catalog', await api(`/catalog?${new URLSearchParams(catalogFilters).toString()}`));
+      if (tab === 'purchase-bills') {
+        if (!data.reference?.suppliers?.length) {
+          try {
+            const refData = await authedFetch('/reference-data');
+            setData((prev) => ({ ...prev, reference: cleanReferenceData(refData) }));
+          } catch (e) {
+            console.warn('Failed to load reference data for purchase-bills:', e);
+          }
+        }
+      }
       if (tab === 'ledger') {
         // Load all customers (unpaginated) so the Party Ledger dropdown is populated
         const ledgerParams = scopedParams(currentShop);
