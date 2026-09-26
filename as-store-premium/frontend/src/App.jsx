@@ -3027,6 +3027,11 @@ function App() {
             total_amount: res.summary?.total_amount ?? prev.total_amount,
             paid_amount: res.summary?.paid_amount ?? prev.paid_amount,
             pending_amount: res.summary?.pending_amount ?? prev.pending_amount,
+            opening_balance: res.summary?.opening_balance ?? prev.opening_balance,
+            settled_opening_balance: res.summary?.settled_opening_balance ?? prev.settled_opening_balance,
+            remaining_opening_balance: res.summary?.remaining_opening_balance ?? prev.remaining_opening_balance,
+            advance_balance: res.summary?.advance_balance ?? prev.advance_balance,
+            current_balance: res.summary?.current_balance ?? prev.current_balance,
           };
         });
       }
@@ -9922,6 +9927,11 @@ function App() {
                         <strong className="text-amber-300 font-bold">
                           {hidePendingValues ? '••••••' : currency(selectedPaymentCustomer.opening_balance || 0)}
                         </strong>
+                        {Number(selectedPaymentCustomer.settled_opening_balance || 0) > 0 && (
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Settled: <span className="text-emerald-400 font-medium">{currency(selectedPaymentCustomer.settled_opening_balance)}</span> · Rem: <span className="text-amber-200 font-medium">{currency(selectedPaymentCustomer.remaining_opening_balance)}</span>
+                          </div>
+                        )}
                       </div>
                       {!editingOpeningBalance ? (
                         <button

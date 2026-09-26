@@ -611,6 +611,25 @@ async function runTests() {
       console.log(`   [Customer 26 Verified]: Total Outstanding = ₹${c26Outstanding.total_outstanding}, Ledger Closing = ₹${c26Ledger.closing_balance}`);
     }
 
+    // Verify Customer 21 (JAYSANKAR MOBILE VIKASHBHAI) if present in database
+    const cust21 = await getRecord('SELECT id FROM customers WHERE id = 21');
+    if (cust21) {
+      const c21Outstanding = await getCustomerTotalOutstanding(21);
+      const c21Ledger = await getCustomerLedger(21);
+      assert.strictEqual(
+        Number(c21Outstanding.total_outstanding),
+        215448.00,
+        'Customer 21 total outstanding must strictly equal ₹215,448.00'
+      );
+      assert.strictEqual(
+        Number(c21Ledger.closing_balance),
+        215448.00,
+        'Customer 21 ledger closing balance must strictly equal ₹215,448.00'
+      );
+      await assertCustomerLedgerAndBalanceReconcile(21);
+      console.log(`   [Customer 21 Verified]: Total Outstanding = ₹${c21Outstanding.total_outstanding}, Ledger Closing = ₹${c21Ledger.closing_balance}`);
+    }
+
     console.log('✔ Test 12 Passed: Customer Total Outstanding reconciles 100% with Party Ledger and Invariant across all scenarios.');
 
     console.log('\n================================================================');

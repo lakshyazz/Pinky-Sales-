@@ -3729,14 +3729,19 @@ app.put(['/api/customers/:id', '/customers/:id'], authenticateToken, requireShop
       );
     }
 
+    const bal = await getCustomerTotalOutstanding(customerId);
+    await runQuery('UPDATE customers SET current_balance = ? WHERE id = ?', [bal.current_balance, customerId]);
+
     const updated = await getRecord(`
-      SELECT c.*, sh.name AS shop_name, (COALESCE(SUM(s.pending_amount), 0) + COALESCE(c.opening_balance, 0)) AS pending
+      SELECT c.*, sh.name AS shop_name, 
+             ?::numeric AS pending, 
+             ?::numeric AS pending_amount,
+             ?::numeric AS advance_balance,
+             ?::numeric AS current_balance
       FROM customers c
-      LEFT JOIN sales s ON s.customer_id = c.id AND s.pending_amount > 0
       LEFT JOIN shops sh ON sh.id = c.shop_id
       WHERE c.id = ?
-      GROUP BY c.id, sh.id
-    `, [customerId]);
+    `, [bal.total_outstanding, bal.total_outstanding, bal.advance_balance, bal.current_balance, customerId]);
 
     await audit(req, 'Updated customer', 'customer', customerId, `${cleanName} (Opening Balance: ${cleanOpeningBalance})`);
     res.json(updated || { id: customerId, name: cleanName, mobile: cleanMobile, address: cleanAddress, notes: cleanNotes, opening_balance: cleanOpeningBalance });
@@ -4515,11 +4520,13 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
     const openingBalance = money(customer.opening_balance || 0);
     const summary = {
       total_amount: invoices.reduce((sum, inv) => sum + money(inv.total_amount), 0),
-      paid_amount: invoices.reduce((sum, inv) => sum + money(inv.paid_amount), 0),
+      paid_amount: bal.total_paid,
+      invoices_paid_amount: invoices.reduce((sum, inv) => sum + money(inv.paid_amount), 0),
       pending_amount: bal.total_outstanding,
       current_balance: bal.current_balance,
       advance_balance: bal.advance_balance,
       opening_balance: openingBalance,
+      settled_opening_balance: bal.settled_opening_balance,
       remaining_opening_balance: bal.remaining_opening_balance,
     };
     res.json({ customer, invoices, sales: invoices, summary });

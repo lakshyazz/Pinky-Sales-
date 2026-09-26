@@ -179,8 +179,7 @@ export const initDatabase = async () => {
         console.log(`[Migration] Applied ${file}`);
       } catch (error) {
         await client.query('ROLLBACK');
-        console.warn(`[Migration] Warning on ${file}: ${error.message}`);
-        await pool.query('INSERT INTO schema_migrations (name) VALUES ($1) ON CONFLICT DO NOTHING', [file]);
+        console.warn(`[Migration] Failed on ${file}: ${error.message}`);
       } finally {
         client.release();
       }
