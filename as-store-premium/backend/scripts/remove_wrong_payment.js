@@ -29,10 +29,16 @@ async function removeBothWrong19250Payments() {
         console.log(`  - [ID: ${p.id}] ${p.payment_number}: ₹${Number(p.amount).toLocaleString('en-IN')} via ${p.payment_mode} on ${p.payment_date}`);
         await runQuery(`DELETE FROM payment_allocations WHERE payment_id = ?`, [p.id]);
         await runQuery(`DELETE FROM payments WHERE id = ?`, [p.id]);
-        console.log(`    ✔ Removed payment ${p.payment_number} and all its allocations.`);
+        console.log(`    ✔ Removed payment ${p.payment_number} and its allocations.`);
       }
       console.log('\n✔ Erroneous payments removed successfully.\n');
     }
+
+    // Also clean up any lingering allocations for customer 21 with amount 19250
+    await runQuery(`DELETE FROM payment_allocations WHERE customer_id = 21 AND amount_applied = 19250.00`);
+
+    // Reset INV-000033 amounts to clean state
+    await runQuery(`UPDATE sales SET paid_amount = 0.00, pending_amount = total_amount, status = 'open' WHERE customer_id = 21 AND (id = 33 OR invoice_number = 'INV-000033')`);
 
     // 2. Ensure customer opening_balance is 201,098.00
     await runQuery(`UPDATE customers SET opening_balance = 201098.00 WHERE id = 21`);
@@ -41,7 +47,7 @@ async function removeBothWrong19250Payments() {
     await runQuery(`DELETE FROM ledger_entries WHERE customer_id = 21 AND entry_type = 'OPENING_BALANCE'`);
     await runQuery(
       `INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_at)
-       VALUES (2, 21, 'OPENING_BALANCE', 'OB-000021', '2026-08-01', 201098.00, 0.00, 'Opening Balance for JAYSANKAR MOBILE VIKASHBHAI', '2026-08-01 00:00:00')`
+       VALUES (2, 21, 'OPENING_BALANCE', 'OB-000021', '2026-08-29', 201098.00, 0.00, 'Opening Balance for JAYSANKAR MOBILE VIKASHBHAI', '2026-08-29 00:00:00')`
     );
 
     // 3. Re-sync current_balance for Customer 21

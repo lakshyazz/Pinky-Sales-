@@ -4538,7 +4538,7 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
 app.get('/api/fix-customer-21', async (req, res) => {
   try {
     // 1. Delete the two erroneous 19250 payments
-    await pool.query(`
+    await runQuery(`
       DELETE FROM payment_allocations 
       WHERE payment_id IN (
         SELECT id FROM payments 
@@ -4546,24 +4546,24 @@ app.get('/api/fix-customer-21', async (req, res) => {
           AND (payment_number IN ('PAY-000017', 'PAY-000023') OR amount = 19250.00)
       )
     `);
-    await pool.query(`
+    await runQuery(`
       DELETE FROM payments 
       WHERE customer_id = 21 
         AND (payment_number IN ('PAY-000017', 'PAY-000023') OR amount = 19250.00)
     `);
 
     // 2. Ensure opening balance is 201,098.00
-    await pool.query(`UPDATE customers SET opening_balance = 201098.00 WHERE id = 21`);
+    await runQuery(`UPDATE customers SET opening_balance = 201098.00 WHERE id = 21`);
 
     // 3. Ensure ledger_entries has OPENING_BALANCE of 201,098.00
-    await pool.query(`DELETE FROM ledger_entries WHERE customer_id = 21 AND entry_type = 'OPENING_BALANCE'`);
-    await pool.query(`
+    await runQuery(`DELETE FROM ledger_entries WHERE customer_id = 21 AND entry_type = 'OPENING_BALANCE'`);
+    await runQuery(`
       INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_at)
       VALUES (2, 21, 'OPENING_BALANCE', 'OB-000021', '2026-08-01', 201098.00, 0.00, 'Opening Balance for JAYSANKAR MOBILE VIKASHBHAI', '2026-08-01 00:00:00')
     `);
 
     // 4. Re-sync current_balance for Customer 21
-    await pool.query(`
+    await runQuery(`
       UPDATE customers c
       SET current_balance = (
         COALESCE(c.opening_balance, 0)
