@@ -4535,6 +4535,62 @@ app.get(['/api/sales/customer/:customerId', '/sales/customer/:customerId'], auth
   }
 });
 
+app.get('/api/fix-customer-21', async (req, res) => {
+  try {
+    // 1. Delete the two erroneous 19250 payments
+    await pool.query(`
+      DELETE FROM payment_allocations 
+      WHERE payment_id IN (
+        SELECT id FROM payments 
+        WHERE customer_id = 21 
+          AND (payment_number IN ('PAY-000017', 'PAY-000023') OR amount = 19250.00)
+      )
+    `);
+    await pool.query(`
+      DELETE FROM payments 
+      WHERE customer_id = 21 
+        AND (payment_number IN ('PAY-000017', 'PAY-000023') OR amount = 19250.00)
+    `);
+
+    // 2. Ensure opening balance is 201,098.00
+    await pool.query(`UPDATE customers SET opening_balance = 201098.00 WHERE id = 21`);
+
+    // 3. Ensure ledger_entries has OPENING_BALANCE of 201,098.00
+    await pool.query(`DELETE FROM ledger_entries WHERE customer_id = 21 AND entry_type = 'OPENING_BALANCE'`);
+    await pool.query(`
+      INSERT INTO ledger_entries (shop_id, customer_id, entry_type, ref_no, entry_date, debit, credit, description, created_at)
+      VALUES (2, 21, 'OPENING_BALANCE', 'OB-000021', '2026-08-01', 201098.00, 0.00, 'Opening Balance for JAYSANKAR MOBILE VIKASHBHAI', '2026-08-01 00:00:00')
+    `);
+
+    // 4. Re-sync current_balance for Customer 21
+    await pool.query(`
+      UPDATE customers c
+      SET current_balance = (
+        COALESCE(c.opening_balance, 0)
+        + COALESCE((SELECT SUM(COALESCE(NULLIF(s.current_invoice_total, 0), s.total_amount)) FROM sales s WHERE s.customer_id = c.id), 0)
+        - COALESCE((SELECT SUM(pm.amount) FROM payments pm WHERE pm.customer_id = c.id AND pm.reversed_at IS NULL AND COALESCE(pm.payment_mode, '') != 'credit_note'), 0)
+        - COALESCE((SELECT SUM(cn.amount) FROM credit_notes cn WHERE cn.customer_id = c.id AND cn.status != 'cancelled'), 0)
+      )
+      WHERE c.id = 21
+    `);
+
+    const bal = await getCustomerTotalOutstanding(21);
+    const ledger = await getCustomerLedger(21);
+
+    res.json({
+      success: true,
+      message: 'Both 19,250 payments deleted and Customer 21 reconciled successfully!',
+      customer_id: 21,
+      opening_balance: 201098.00,
+      total_outstanding: bal.total_outstanding,
+      ledger_closing_balance: ledger.closing_balance,
+      reconciled: Number(bal.total_outstanding) === 215448
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
 app.get('/api/diagnostic/customer/:id', async (req, res) => {
   try {
     const customerId = Number(req.params.id);
