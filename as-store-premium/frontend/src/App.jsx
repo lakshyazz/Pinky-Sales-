@@ -109,6 +109,7 @@ import {
   exportProductCatalogExcel, 
   getExportDateStr 
 } from './utils/excelExport';
+import { initRealtimeSubscription } from './services/realtime';
 
 const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
@@ -2519,6 +2520,7 @@ function App() {
   const [session, setSession] = useState(readStoredSession);
   const [authReady, setAuthReady] = useState(() => !session);
   const [active, setActive] = useState(() => initialPageForSession(session));
+  const [realtimeStatus, setRealtimeStatus] = useState('connecting');
   const [open, setOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [toast, setToast] = useState(null);
@@ -4105,6 +4107,73 @@ function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
+
+  // Realtime Live Sync ref callback & effect
+  const realtimeRefreshRef = useRef();
+  realtimeRefreshRef.current = (change) => {
+    const table = change?.table;
+    // Always refresh active tab
+    loadTab(active, shopId);
+
+    // Refresh specific pagers / views based on table that changed
+    if (['sales', 'payments', 'payment_allocations'].includes(table)) {
+      if (active === 'sales') loadSalesPage({ page: salesPager.page, filters: deferredSalesFilters });
+      if (active === 'payments') loadPendingPage({ page: pendingPager.page, filters: deferredPendingFilters });
+      if (active === 'customers') loadCustomersPage({ page: customerPager.page, filters: deferredCustomerFilters });
+
+      // If Customer Drawer is currently open, live-refresh customer sales and balances
+      if (selectedPaymentCustomer) {
+        const custId = selectedPaymentCustomer.customer_id || selectedPaymentCustomer.id;
+        if (custId) {
+          authedFetch(`/sales/customer/${custId}`).then((res) => {
+            if (res && res.sales) {
+              setSelectedPaymentCustomer((prev) => {
+                if (!prev || (Number(prev.customer_id || prev.id) !== Number(custId))) return prev;
+                return {
+                  ...prev,
+                  items: res.sales,
+                  total_amount: res.summary?.total_amount ?? prev.total_amount,
+                  paid_amount: res.summary?.paid_amount ?? prev.paid_amount,
+                  pending_amount: res.summary?.pending_amount ?? prev.pending_amount,
+                  opening_balance: res.summary?.opening_balance ?? prev.opening_balance,
+                  settled_opening_balance: res.summary?.settled_opening_balance ?? prev.settled_opening_balance,
+                  remaining_opening_balance: res.summary?.remaining_opening_balance ?? prev.remaining_opening_balance,
+                  advance_balance: res.summary?.advance_balance ?? prev.advance_balance,
+                  current_balance: res.summary?.current_balance ?? prev.current_balance,
+                };
+              });
+            }
+          }).catch(() => {});
+        }
+      }
+    }
+
+    if (['stock', 'inventory_batches', 'products'].includes(table)) {
+      if (active === 'stock') {
+        loadStockPage({ page: stockPager.page, limit: stockPager.limit, filters: deferredStockFilters, currentShop: shopId });
+      }
+    }
+
+    if (table === 'customers') {
+      if (active === 'customers') loadCustomersPage({ page: customerPager.page, filters: deferredCustomerFilters });
+      if (active === 'payments') loadPendingPage({ page: pendingPager.page, filters: deferredPendingFilters });
+    }
+  };
+
+  useEffect(() => {
+    if (!session || !authReady) return;
+    const cleanup = initRealtimeSubscription(
+      (change) => {
+        if (realtimeRefreshRef.current) realtimeRefreshRef.current(change);
+      },
+      (status) => {
+        setRealtimeStatus(status);
+      }
+    );
+    return () => {
+      if (cleanup) cleanup();
+    };
+  }, [session?.token, authReady]);
 
   const login = (nextSession) => {
     const normalizedSession = normalizeSession(nextSession);
@@ -7448,6 +7517,37 @@ function App() {
                 <AlertTriangle size={16} />
                 <span>{lowStockAlerts.length}</span>
               </button>
+            )}
+            {role !== 'customer' && (
+              <div
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border transition-all ${
+                  realtimeStatus === 'connected'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 shadow-2xs'
+                    : realtimeStatus === 'connecting'
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : 'bg-slate-100 text-slate-500 border-slate-200'
+                }`}
+                title={
+                  realtimeStatus === 'connected'
+                    ? '⚡ Realtime Live Sync: Connected to Supabase'
+                    : realtimeStatus === 'connecting'
+                    ? 'Connecting to Supabase Realtime...'
+                    : 'Realtime Sync: Standby'
+                }
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    realtimeStatus === 'connected'
+                      ? 'bg-emerald-500 animate-pulse'
+                      : realtimeStatus === 'connecting'
+                      ? 'bg-amber-500 animate-ping'
+                      : 'bg-slate-400'
+                  }`}
+                />
+                <span className="hidden sm:inline">
+                  {realtimeStatus === 'connected' ? 'Live Sync' : realtimeStatus === 'connecting' ? 'Connecting...' : 'Offline'}
+                </span>
+              </div>
             )}
             <div className="user-pill">
               <ShieldCheck size={16} />
